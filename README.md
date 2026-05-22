@@ -1,6 +1,6 @@
-# LCA
+# lca - lua coding absurdity
 
-LCA is a small Lua coding tool for people who want the moving parts to be
+lca is a small Lua coding tool for people who want the moving parts to be
 boring and visible.
 
 It can log in with Codex/OpenAI OAuth or use AWS Bedrock credentials. It runs as
@@ -8,8 +8,8 @@ a terminal REPL or a one-shot `lca run ...` command.
 
 ## Yolo Mode
 
-LCA does **not** prompt for permission before running tools. If the model emits
-tool calls, LCA will read files, edit files, write files, and run shell commands
+lca does **not** prompt for permission before running tools. If the model emits
+tool calls, lca will read files, edit files, write files, and run shell commands
 directly in the current working directory.
 
 Run it only in a repo/worktree where you are comfortable with that behavior.
@@ -29,7 +29,7 @@ eval "$(luarocks --local --lua-dir="$LUA_PREFIX" path --bin)"
 lca
 ```
 
-On first run, choose `Codex / OpenAI OAuth` when prompted. LCA opens the browser
+On first run, choose `Codex / OpenAI OAuth` when prompted. lca opens the browser
 login flow and stores credentials at:
 
 ```text
@@ -65,7 +65,7 @@ luarocks install --local --lua-dir="$LUA_PREFIX" lca
 eval "$(luarocks --local --lua-dir="$LUA_PREFIX" path --bin)"
 ```
 
-LuaRocks installs LCA and its Lua dependencies, including readline-style REPL
+LuaRocks installs lca and its Lua dependencies, including readline-style REPL
 input via `linenoise-luv`.
 
 ### Linux
