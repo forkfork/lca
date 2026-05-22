@@ -61,7 +61,7 @@ local function input_json(messages)
 end
 
 local function request_body(request)
-	return table.concat({
+	local parts = {
 		"{",
 		'"model":' .. json.string(request.model or "gpt-5.4-mini") .. ",",
 		'"store":false,',
@@ -69,9 +69,13 @@ local function request_body(request)
 		'"instructions":' .. json.string(request.system_prompt or "You are a helpful assistant.") .. ",",
 		'"input":' .. input_json(request.messages or {}) .. ",",
 		'"text":{"verbosity":"low"},',
-		'"include":["reasoning.encrypted_content"]',
-		"}",
-	})
+	}
+	if request.reasoning_effort then
+		parts[#parts + 1] = '"reasoning":{"effort":' .. json.string(request.reasoning_effort) .. "},"
+	end
+	parts[#parts + 1] = '"include":["reasoning.encrypted_content"]'
+	parts[#parts + 1] = "}"
+	return table.concat(parts)
 end
 
 --- Detect if a response indicates an auth error (401 / token expired)

@@ -27,10 +27,30 @@ local function resolve_model(options)
 	return options.model or "gpt-5.4-mini"
 end
 
+local VALID_REASONING_EFFORTS = {
+	none = true,
+	low = true,
+	medium = true,
+	high = true,
+	xhigh = true,
+}
+
+local function resolve_reasoning_effort(value)
+	if not value or value == "" then
+		return nil
+	end
+	value = tostring(value):lower()
+	if not VALID_REASONING_EFFORTS[value] then
+		error("invalid reasoning effort: " .. tostring(value))
+	end
+	return value
+end
+
 function session.create(options)
 	return setmetatable({
 		credentials_path = options.credentials_path or config.default_credentials_path(),
 		model = resolve_model(options),
+		reasoning_effort = resolve_reasoning_effort(options.reasoning_effort),
 		cwd = current_dir(),
 		messages = {},
 		compaction_summary = nil,
@@ -73,6 +93,7 @@ function session:serialize()
 	return {
 		credentials_path = self.credentials_path,
 		model = self.model,
+		reasoning_effort = self.reasoning_effort,
 		cwd = self.cwd,
 		messages = self.messages,
 		compaction_summary = self.compaction_summary,
@@ -126,10 +147,14 @@ function session:load(path)
 	if data.credentials_path then
 		self.credentials_path = data.credentials_path
 	end
+	if data.reasoning_effort and data.reasoning_effort ~= require("cjson").null then
+		self.reasoning_effort = resolve_reasoning_effort(data.reasoning_effort)
+	end
 	return true
 end
 
 --- Default session file path
 session.DEFAULT_SESSION_FILE = DEFAULT_SESSION_FILE
+session.resolve_reasoning_effort = resolve_reasoning_effort
 
 return session

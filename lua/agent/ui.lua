@@ -615,6 +615,7 @@ function ui.status(session)
 	io.write(color("dim", box.tl .. hrule(w - 2, "status") .. box.tr) .. "\n")
 	local lines = {
 		"model: " .. session.model,
+		"reasoning: " .. (session.reasoning_effort or "default"),
 		"cwd: " .. session.cwd,
 		"credentials: " .. session.credentials_path,
 		"turns: " .. session:turn_count(),

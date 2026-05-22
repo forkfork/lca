@@ -8,7 +8,7 @@ pcall(require, "luarocks.loader")
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/agent.lua [prompt] [--credentials path] [--model model]
+  lua bin/agent.lua [prompt] [--credentials path] [--model model] [--reasoning effort]
 
 Example:
   lua bin/agent.lua "List the files in this directory conceptually; do not run tools yet."
@@ -26,6 +26,7 @@ end
 local options = {
 	credentials_path = config.default_credentials_path(),
 	model = "gpt-5.4-mini",
+	reasoning_effort = nil,
 }
 
 local index = 2
@@ -35,6 +36,9 @@ while index <= #arg do
 		index = index + 2
 	elseif arg[index] == "--model" then
 		options.model = arg[index + 1]
+		index = index + 2
+	elseif arg[index] == "--reasoning" then
+		options.reasoning_effort = arg[index + 1]
 		index = index + 2
 	else
 		usage()

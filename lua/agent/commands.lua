@@ -4,6 +4,7 @@ local HELP = [[
 /help                 show commands
 /status               show cwd, model, credentials, and turn count
 /model <id>           change model
+/reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
 /save [path]          save session to file (default: .pi-lua-session.json)
@@ -33,6 +34,21 @@ function commands.dispatch(line, session, ui)
 		else
 			session.model = rest
 			ui.muted("model: " .. session.model)
+		end
+	elseif name == "reasoning" then
+		if rest == "" then
+			session.reasoning_effort = nil
+			ui.muted("reasoning: default")
+		else
+			local ok, value = pcall(function()
+				return require("agent.session").resolve_reasoning_effort(rest)
+			end)
+			if not ok then
+				ui.error(tostring(value))
+			else
+				session.reasoning_effort = value
+				ui.muted("reasoning: " .. session.reasoning_effort)
+			end
 		end
 	elseif name == "credentials" then
 		if rest == "" then
@@ -86,4 +102,3 @@ function commands.dispatch(line, session, ui)
 end
 
 return commands
-

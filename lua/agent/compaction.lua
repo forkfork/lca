@@ -153,6 +153,7 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 	local response = provider.complete({
 		credentials_path = session.credentials_path,
 		model = session.model,
+		reasoning_effort = session.reasoning_effort,
 		system_prompt = SUMMARIZATION_SYSTEM_PROMPT,
 		messages = {
 			{ role = "user", text = prompt_text },

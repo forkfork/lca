@@ -10,13 +10,14 @@ local config = require("agent.config")
 local options = {
 	credentials_path = config.default_credentials_path(),
 	model = "gpt-5.4-mini",
+	reasoning_effort = nil,
 	mcp_config = "mcp_servers.json",
 }
 
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--credentials path] [--model model] [--transcript path]
+  lua bin/repl.lua [--credentials path] [--model model] [--reasoning effort] [--transcript path]
 ]])
 	os.exit(2)
 end
@@ -28,6 +29,9 @@ while index <= #arg do
 		index = index + 2
 	elseif arg[index] == "--model" then
 		options.model = arg[index + 1]
+		index = index + 2
+	elseif arg[index] == "--reasoning" then
+		options.reasoning_effort = arg[index + 1]
 		index = index + 2
 	elseif arg[index] == "--transcript" then
 		options.transcript = arg[index + 1]

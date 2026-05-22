@@ -124,6 +124,7 @@ That installs the `lca` wrapper:
 lca
 lca repl --model gpt-5.4-mini
 lca run "Explain what files this project should inspect first."
+lca run "Explain this code" --model gpt-5.5 --reasoning low
 ```
 
 ## Login
@@ -203,6 +204,7 @@ Slash commands for when you need to steer:
 /status
 /explain [path]
 /model <id>
+/reasoning <effort>
 /credentials <path>
 /clear
 /exit

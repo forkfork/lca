@@ -48,6 +48,7 @@ function core.run_once(prompt, options)
 	local response = provider.complete({
 		credentials_path = options.credentials_path,
 		model = options.model,
+		reasoning_effort = options.reasoning_effort,
 		system_prompt = options.system_prompt or system_prompt.build({ cwd = options.cwd or "." }),
 		messages = {
 			{
@@ -90,6 +91,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		local response = provider.complete({
 			credentials_path = session.credentials_path,
 			model = session.model,
+			reasoning_effort = session.reasoning_effort,
 			system_prompt = system_prompt.build({ cwd = session.cwd }),
 			messages = session.messages,
 		}, on_token)
@@ -207,6 +209,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	local response = provider.complete({
 		credentials_path = session.credentials_path,
 		model = session.model,
+		reasoning_effort = session.reasoning_effort,
 		system_prompt = system_prompt.build({ cwd = session.cwd }),
 		messages = session.messages,
 	}, on_token)
@@ -222,4 +225,3 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 end
 
 return core
-
