@@ -1,0 +1,70 @@
+#!/usr/bin/env lua
+
+local function shell_quote(value)
+	return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+
+local function usage()
+	io.stderr:write([[
+Usage:
+  lca [repl options]
+  lca repl [repl options]
+  lca run <prompt> [--credentials path] [--model model]
+  lca login <openai|bedrock> [login options]
+  lca auth <login|refresh> [auth options]
+
+Examples:
+  lca
+  lca repl --model gpt-5.4-mini
+  lca run "Explain this project"
+  lca login openai --out credentials.json
+]])
+	os.exit(2)
+end
+
+local script_dir = arg[0]:match("^(.*)/[^/]+$") or "."
+local commands = {
+	repl = { installed = "lca-repl", local_path = script_dir .. "/repl.lua" },
+	run = { installed = "lca-agent", local_path = script_dir .. "/agent.lua" },
+	login = { installed = "lca-login", local_path = script_dir .. "/../scripts/login.lua" },
+	auth = { installed = "lca-auth", local_path = script_dir .. "/../scripts/auth.lua" },
+}
+
+local subcommand = arg[1]
+local start_index = 2
+if subcommand == "--help" or subcommand == "help" then
+	usage()
+elseif not subcommand or subcommand:sub(1, 2) == "--" then
+	subcommand = "repl"
+	start_index = 1
+end
+
+local target = commands[subcommand]
+if not target then
+	usage()
+end
+
+local executable = target.installed
+local local_file = io.open(target.local_path, "r")
+if local_file then
+	local_file:close()
+	executable = "lua " .. shell_quote(target.local_path)
+end
+
+local parts = { executable }
+for index = start_index, #arg do
+	parts[#parts + 1] = shell_quote(arg[index])
+end
+
+local ok, reason, code = os.execute(table.concat(parts, " "))
+if ok == true or ok == 0 then
+	os.exit(0)
+end
+if type(ok) == "number" then
+	os.exit(math.floor(ok / 256))
+end
+if type(code) == "number" then
+	os.exit(code)
+end
+io.stderr:write("error: failed to run " .. subcommand .. ": " .. tostring(reason) .. "\n")
+os.exit(1)
