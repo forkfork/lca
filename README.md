@@ -27,10 +27,10 @@ BSD 2-Clause. See `LICENSE`.
 Lua dependencies can be installed through LuaRocks:
 
 ```bash
-luarocks install luasocket
-luarocks install lua-cjson
-luarocks install luv
-luarocks install linenoise-luv # optional REPL line editing
+luarocks --local install luasocket
+luarocks --local install lua-cjson
+luarocks --local install luv
+luarocks --local install linenoise-luv # optional REPL line editing
 ```
 
 ### macOS with Homebrew
@@ -38,23 +38,51 @@ luarocks install linenoise-luv # optional REPL line editing
 ```bash
 brew install lua luarocks curl openssl
 
-luarocks install luasocket
-luarocks install lua-cjson
-luarocks install luv
-luarocks install linenoise-luv # optional REPL line editing
+luarocks --local install luasocket
+luarocks --local install lua-cjson
+luarocks --local install luv
+luarocks --local install linenoise-luv # optional REPL line editing
 ```
 
 Make sure LuaRocks-installed commands are on your shell path:
 
 ```bash
-eval "$(luarocks path --bin)"
+eval "$(luarocks --local path --bin)"
 ```
 
 To persist that for zsh:
 
 ```bash
 cat >> ~/.zprofile <<'EOF'
-eval "$(luarocks path --bin)"
+eval "$(luarocks --local path --bin)"
+EOF
+```
+
+### Linux with bash
+
+Install Lua, LuaRocks, curl, and OpenSSL with your distro package manager. On
+Debian or Ubuntu:
+
+```bash
+sudo apt install lua5.4 luarocks curl openssl
+
+luarocks --lua-version=5.4 --local install luasocket
+luarocks --lua-version=5.4 --local install lua-cjson
+luarocks --lua-version=5.4 --local install luv
+luarocks --lua-version=5.4 --local install linenoise-luv # optional REPL line editing
+```
+
+Make sure LuaRocks-installed commands are on your shell path:
+
+```bash
+eval "$(luarocks --lua-version=5.4 --local path --bin)"
+```
+
+To persist that for bash:
+
+```bash
+cat >> ~/.bashrc <<'EOF'
+eval "$(luarocks --lua-version=5.4 --local path --bin)"
 EOF
 ```
 
@@ -63,8 +91,16 @@ EOF
 From a checkout:
 
 ```bash
-luarocks make lca-dev-1.rockspec
-eval "$(luarocks path --bin)"
+luarocks --local make lca-dev-1.rockspec
+eval "$(luarocks --local path --bin)"
+```
+
+On Linux, if your LuaRocks defaults to Lua 5.1, use the same Lua version flag
+as above:
+
+```bash
+luarocks --lua-version=5.4 --local make lca-dev-1.rockspec
+eval "$(luarocks --lua-version=5.4 --local path --bin)"
 ```
 
 That installs the `lca` wrapper:
