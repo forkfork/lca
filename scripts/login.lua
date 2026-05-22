@@ -117,7 +117,14 @@ local function openai_login(options)
 	local script_dir = arg[0]:match("^(.*)/[^/]+$") or "."
 	local auth_script = script_dir .. "/auth.lua"
 
-	local cmd_parts = { "lua", shell_quote(auth_script), "login" }
+	local auth_file = io.open(auth_script, "r")
+	local cmd_parts
+	if auth_file then
+		auth_file:close()
+		cmd_parts = { "lua", shell_quote(auth_script), "login" }
+	else
+		cmd_parts = { "lca-auth", "login" }
+	end
 	if options.out_path then
 		cmd_parts[#cmd_parts + 1] = "--out"
 		cmd_parts[#cmd_parts + 1] = shell_quote(options.out_path)
