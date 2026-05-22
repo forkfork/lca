@@ -66,7 +66,6 @@ local function request_body(request)
 		'"model":' .. json.string(request.model or "gpt-5.4-mini") .. ",",
 		'"store":false,',
 		'"stream":true,',
-		'"max_output_tokens":16384,',
 		'"instructions":' .. json.string(request.system_prompt or "You are a helpful assistant.") .. ",",
 		'"input":' .. input_json(request.messages or {}) .. ",",
 		'"text":{"verbosity":"low"},',
