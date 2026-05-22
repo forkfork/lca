@@ -88,6 +88,21 @@ EOF
 
 ## Install
 
+From LuaRocks:
+
+```bash
+luarocks --local install lca
+eval "$(luarocks --local path --bin)"
+```
+
+On Linux, if your LuaRocks defaults to Lua 5.1, use the same Lua version flag
+as above:
+
+```bash
+luarocks --lua-version=5.4 --local install lca
+eval "$(luarocks --lua-version=5.4 --local path --bin)"
+```
+
 From a checkout:
 
 ```bash
