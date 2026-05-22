@@ -42,6 +42,14 @@ while index <= #arg do
 	end
 end
 
+local login = require("agent.login")
+
+local login_ok, login_err = login.ensure_credentials(options.credentials_path)
+if not login_ok then
+	io.stderr:write("error: " .. tostring(login_err) .. "\n")
+	os.exit(1)
+end
+
 local core = require("agent.core")
 local registry = require("agent.tool_registry")
 local repl = require("agent.repl")

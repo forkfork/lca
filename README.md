@@ -109,19 +109,22 @@ That installs the `lca` wrapper:
 lca
 lca repl --model gpt-5.4-mini
 lca run "Explain what files this project should inspect first."
-lca login openai
 ```
 
 ## Login
 
-Kick things off:
+On first run, `lca` checks for `~/.lca-credentials.json`. If it is missing,
+it prompts you to choose Codex/OpenAI OAuth or Bedrock/AWS, then writes the
+credentials file there.
+
+You can also run the login flow explicitly:
 
 ```bash
-cd lca
-lua scripts/login.lua openai
+lca login openai
+lca login bedrock
 ```
 
-The script prints the authorize URL, pops it open with `xdg-open` (or your platform equivalent), spins up a tiny listener on `127.0.0.1:1455/auth/callback`, and waits. If the browser redirect doesn't land in time, it falls back to a paste prompt on stdin.
+The Codex/OpenAI flow prints the authorize URL, pops it open with `xdg-open` (or your platform equivalent), spins up a tiny listener on `127.0.0.1:1455/auth/callback`, and waits. If the browser redirect doesn't land in time, it falls back to a paste prompt on stdin.
 
 Tweak the timeout with `PI_OAUTH_CALLBACK_TIMEOUT_SECONDS` (default: `120`).
 

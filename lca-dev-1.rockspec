@@ -33,6 +33,7 @@ build = {
 		["agent.config"] = "lua/agent/config.lua",
 		["agent.core"] = "lua/agent/core.lua",
 		["agent.lint"] = "lua/agent/lint.lua",
+		["agent.login"] = "lua/agent/login.lua",
 		["agent.mcp"] = "lua/agent/mcp.lua",
 		["agent.parallel"] = "lua/agent/parallel.lua",
 		["agent.project_context"] = "lua/agent/project_context.lua",
