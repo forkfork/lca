@@ -73,7 +73,7 @@ That installs the `lca` wrapper:
 lca
 lca repl --model gpt-5.4-mini
 lca run "Explain what files this project should inspect first."
-lca login openai --out credentials.json
+lca login openai
 ```
 
 ## Login
@@ -82,7 +82,7 @@ Kick things off:
 
 ```bash
 cd lca
-lua scripts/auth.lua login --out credentials.json
+lua scripts/login.lua openai
 ```
 
 The script prints the authorize URL, pops it open with `xdg-open` (or your platform equivalent), spins up a tiny listener on `127.0.0.1:1455/auth/callback`, and waits. If the browser redirect doesn't land in time, it falls back to a paste prompt on stdin.
@@ -92,7 +92,7 @@ Tweak the timeout with `PI_OAUTH_CALLBACK_TIMEOUT_SECONDS` (default: `120`).
 ## Refresh
 
 ```bash
-lua scripts/auth.lua refresh '<refresh-token>' --out credentials.json
+lua scripts/auth.lua refresh '<refresh-token>' --out ~/.lca-credentials.json
 ```
 
 Output shape:
@@ -111,13 +111,13 @@ Output shape:
 Prove it works in one shot:
 
 ```bash
-lua examples/simple_request.lua credentials.json "Reply with exactly: oauth works"
+lua examples/simple_request.lua ~/.lca-credentials.json "Reply with exactly: oauth works"
 ```
 
 Swap models on the fly:
 
 ```bash
-lua examples/simple_request.lua credentials.json "Say hi" --model gpt-5.4-mini
+lua examples/simple_request.lua ~/.lca-credentials.json "Say hi" --model gpt-5.4-mini
 ```
 
 ## Coding Absurdity

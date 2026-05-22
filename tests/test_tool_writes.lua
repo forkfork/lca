@@ -22,9 +22,10 @@ local registry = require("agent.tool_registry")
 local session_module = require("agent.session")
 local fs = require("agent.util.fs")
 local shell = require("agent.util.shell")
+local config = require("agent.config")
 
 -- Parse args
-local credentials_path = "credentials.json"
+local credentials_path = config.default_credentials_path()
 local test_filter = nil
 local index = 1
 while index <= #arg do

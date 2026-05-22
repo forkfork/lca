@@ -1,6 +1,7 @@
 local json = require("agent.util.json")
 local fs = require("agent.util.fs")
 local uv = require("luv")
+local config = require("agent.config")
 
 local providers = {}
 
@@ -139,7 +140,7 @@ local function read_credentials(credentials_path)
 end
 
 function providers.credentials_body(credentials_path)
-	return read_credentials(credentials_path or "credentials.json")
+	return read_credentials(credentials_path or config.default_credentials_path())
 end
 
 local function detect_provider(credentials_path)
@@ -152,7 +153,7 @@ local function detect_provider(credentials_path)
 end
 
 function providers.load(credentials_path)
-	credentials_path = credentials_path or "credentials.json"
+	credentials_path = credentials_path or config.default_credentials_path()
 	local name = detect_provider(credentials_path)
 	local mod = require(PROVIDER_MODULES[name])
 	return mod, name

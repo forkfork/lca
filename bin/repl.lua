@@ -5,8 +5,10 @@ local project_dir = script_dir .. "/.."
 package.path = project_dir .. "/lua/?.lua;" .. project_dir .. "/lua/?/init.lua;" .. project_dir .. "/lua/?/?.lua;" .. package.path
 pcall(require, "luarocks.loader")
 
+local config = require("agent.config")
+
 local options = {
-	credentials_path = "credentials.json",
+	credentials_path = config.default_credentials_path(),
 	model = "gpt-5.4-mini",
 	mcp_config = "mcp_servers.json",
 }

@@ -16,13 +16,15 @@ Example:
 	os.exit(2)
 end
 
+local config = require("agent.config")
+
 local prompt = arg[1]
 if not prompt or prompt == "--help" then
 	usage()
 end
 
 local options = {
-	credentials_path = "credentials.json",
+	credentials_path = config.default_credentials_path(),
 	model = "gpt-5.4-mini",
 }
 

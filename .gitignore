@@ -1,5 +1,6 @@
 credentials.json
 credentials.*.json
+.lca-credentials.json
 .env
 .env.*
 .pi-lua-history

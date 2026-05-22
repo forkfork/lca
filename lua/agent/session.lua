@@ -2,6 +2,7 @@ local session = {}
 session.__index = session
 
 local json = require("agent.util.json")
+local config = require("agent.config")
 
 local DEFAULT_SESSION_FILE = ".pi-lua-session.json"
 
@@ -15,7 +16,7 @@ local function resolve_model(options)
 		return options.model
 	end
 	local providers = require("agent.providers")
-	local path = options.credentials_path or "credentials.json"
+	local path = options.credentials_path or config.default_credentials_path()
 	local ok, body = pcall(providers.credentials_body, path)
 	if not ok then return options.model or "gpt-5.4-mini" end
 	local provider = json.field(body, "provider")
@@ -28,7 +29,7 @@ end
 
 function session.create(options)
 	return setmetatable({
-		credentials_path = options.credentials_path or "credentials.json",
+		credentials_path = options.credentials_path or config.default_credentials_path(),
 		model = resolve_model(options),
 		cwd = current_dir(),
 		messages = {},

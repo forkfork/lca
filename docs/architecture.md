@@ -19,7 +19,7 @@ bin/                        CLI entrypoints only
   async.lua                 async utilities
 
   providers/
-    init.lua                auto-detects provider from credentials.json
+    init.lua                auto-detects provider from ~/.lca-credentials.json
     codex.lua               OpenAI Codex Responses API (SSE streaming, OAuth tokens)
     bedrock.lua             AWS Bedrock provider (Claude models)
 

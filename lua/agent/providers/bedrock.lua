@@ -1,5 +1,6 @@
 local json = require("agent.util.json")
 local shell = require("agent.util.shell")
+local config = require("agent.config")
 
 local bedrock = {}
 
@@ -220,7 +221,7 @@ end
 local function do_complete(request, on_token)
 	local uv = require("luv")
 
-	local creds = load_credentials(request.credentials_path or "credentials.json")
+	local creds = load_credentials(request.credentials_path or config.default_credentials_path())
 	local model = (request.model and is_bedrock_model(request.model) and request.model) or creds.model
 	local host = "bedrock-runtime." .. creds.region .. ".amazonaws.com"
 	local uri_path = "/model/" .. model .. "/converse-stream"
@@ -469,4 +470,3 @@ function bedrock.complete(request, on_token)
 end
 
 return bedrock
-

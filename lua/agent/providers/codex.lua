@@ -1,5 +1,6 @@
 local json = require("agent.util.json")
 local shell = require("agent.util.shell")
+local config = require("agent.config")
 
 local codex = {}
 
@@ -100,7 +101,7 @@ end
 local function do_complete(request, on_token)
 	local uv = require("luv")
 
-	local credentials = load_credentials(request.credentials_path or "credentials.json")
+	local credentials = load_credentials(request.credentials_path or config.default_credentials_path())
 
 	local curl_args = {
 		"-sS", "-N",

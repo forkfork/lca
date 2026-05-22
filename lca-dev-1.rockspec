@@ -30,6 +30,7 @@ build = {
 		["agent.async"] = "lua/agent/async.lua",
 		["agent.commands"] = "lua/agent/commands.lua",
 		["agent.compaction"] = "lua/agent/compaction.lua",
+		["agent.config"] = "lua/agent/config.lua",
 		["agent.core"] = "lua/agent/core.lua",
 		["agent.lint"] = "lua/agent/lint.lua",
 		["agent.mcp"] = "lua/agent/mcp.lua",

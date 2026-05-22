@@ -31,15 +31,15 @@ end
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua examples/simple_request.lua [credentials.json] [prompt] [--model model]
+  lua examples/simple_request.lua [~/.lca-credentials.json] [prompt] [--model model]
 
 Example:
-  lua examples/simple_request.lua credentials.json "Reply with exactly: oauth works"
+  lua examples/simple_request.lua ~/.lca-credentials.json "Reply with exactly: oauth works"
 ]])
 	os.exit(2)
 end
 
-local credentials_path = arg[1] or "credentials.json"
+local credentials_path = arg[1] or ((os.getenv("HOME") or ".") .. "/.lca-credentials.json")
 local prompt = arg[2] or "Reply with exactly: oauth works"
 local model = "gpt-5.5"
 

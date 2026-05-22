@@ -17,7 +17,7 @@ Examples:
   lca
   lca repl --model gpt-5.4-mini
   lca run "Explain this project"
-  lca login openai --out credentials.json
+  lca login openai
 ]])
 	os.exit(2)
 end
@@ -42,6 +42,20 @@ end
 local target = commands[subcommand]
 if not target then
 	usage()
+end
+
+if subcommand == "login" then
+	local has_out = false
+	for index = start_index, #arg do
+		if arg[index] == "--out" then
+			has_out = true
+			break
+		end
+	end
+	if not has_out then
+		arg[#arg + 1] = "--out"
+		arg[#arg + 1] = (os.getenv("HOME") or ".") .. "/.lca-credentials.json"
+	end
 end
 
 local executable = target.installed

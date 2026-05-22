@@ -10,6 +10,10 @@ local function trim(value)
 	return (value:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function default_credentials_path()
+	return (os.getenv("HOME") or ".") .. "/.lca-credentials.json"
+end
+
 local function json_string(value)
 	local escaped = tostring(value):gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
 	return '"' .. escaped .. '"'
@@ -141,9 +145,11 @@ Providers:
   openai    Runs the OpenAI OAuth2 PKCE login flow (delegates to auth.lua).
 
 Examples:
-  lua scripts/login.lua bedrock --out credentials.json
+  lua scripts/login.lua bedrock
   lua scripts/login.lua bedrock --region us-east-1 --model us.anthropic.claude-opus-4-6-v1
-  lua scripts/login.lua openai --out credentials.json
+  lua scripts/login.lua openai
+
+Default output: ~/.lca-credentials.json
 ]])
 	os.exit(2)
 end
@@ -189,6 +195,7 @@ if not ok then
 end
 
 if result then
+	options.out_path = options.out_path or default_credentials_path()
 	if options.out_path then
 		write_credentials(options.out_path, result)
 		print("Credentials written to " .. options.out_path)
