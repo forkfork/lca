@@ -8,6 +8,42 @@ This project reimplements the OpenAI Codex subscription OAuth flow in pure Lua, 
 
 Same client ID, authorize URL, token URL, scope, redirect URI, PKCE S256 challenge, localhost callback, token refresh, and `chatgpt_account_id` JWT extraction — no Node, no Python, just Lua and a handful of system utilities.
 
+## Happy Path: macOS + LuaRocks
+
+Assuming you are on macOS with Homebrew:
+
+```bash
+brew install lua luarocks curl openssl
+
+luarocks --local install lca
+eval "$(luarocks --local path --bin)"
+
+lca
+```
+
+On first run, choose `Codex / OpenAI OAuth` when prompted. LCA opens the browser
+login flow and stores credentials at:
+
+```text
+~/.lca-credentials.json
+```
+
+After that:
+
+```bash
+lca run "explain this project"
+lca run "explain this project" --model gpt-5.5 --reasoning low
+lca repl --model gpt-5.5 --reasoning low
+```
+
+To keep `lca` on your path in future terminals:
+
+```bash
+cat >> ~/.zprofile <<'EOF'
+eval "$(luarocks --local path --bin)"
+EOF
+```
+
 ## Requirements
 
 Keep it minimal:
@@ -20,42 +56,25 @@ Keep it minimal:
 - `curl` — HTTP heavy-lifting
 - `openssl` — PKCE code challenge generation
 
-## License
+## Install
 
-BSD 2-Clause. See `LICENSE`.
-
-Lua dependencies can be installed through LuaRocks:
+The normal install path is:
 
 ```bash
-luarocks --local install luasocket
-luarocks --local install lua-cjson
-luarocks --local install luv
-luarocks --local install linenoise-luv # optional REPL line editing
-```
-
-### macOS with Homebrew
-
-```bash
-brew install lua luarocks curl openssl
-
-luarocks --local install luasocket
-luarocks --local install lua-cjson
-luarocks --local install luv
-luarocks --local install linenoise-luv # optional REPL line editing
-```
-
-Make sure LuaRocks-installed commands are on your shell path:
-
-```bash
+luarocks --local install lca
 eval "$(luarocks --local path --bin)"
 ```
 
-To persist that for zsh:
+LuaRocks installs the Lua dependencies automatically:
+
+- LuaSocket
+- `lua-cjson`
+- `luv`
+
+Optional REPL line editing:
 
 ```bash
-cat >> ~/.zprofile <<'EOF'
-eval "$(luarocks --local path --bin)"
-EOF
+luarocks --local install linenoise-luv
 ```
 
 ### Linux with bash
@@ -86,23 +105,6 @@ eval "$(luarocks --lua-version=5.4 --local path --bin)"
 EOF
 ```
 
-## Install
-
-From LuaRocks:
-
-```bash
-luarocks --local install lca
-eval "$(luarocks --local path --bin)"
-```
-
-On Linux, if your LuaRocks defaults to Lua 5.1, use the same Lua version flag
-as above:
-
-```bash
-luarocks --lua-version=5.4 --local install lca
-eval "$(luarocks --lua-version=5.4 --local path --bin)"
-```
-
 From a checkout:
 
 ```bash
@@ -126,6 +128,10 @@ lca repl --model gpt-5.4-mini
 lca run "Explain what files this project should inspect first."
 lca run "Explain this code" --model gpt-5.5 --reasoning low
 ```
+
+## License
+
+BSD 2-Clause. See `LICENSE`.
 
 ## Login
 
