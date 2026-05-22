@@ -4,7 +4,7 @@ session.__index = session
 local json = require("agent.util.json")
 local config = require("agent.config")
 
-local DEFAULT_SESSION_FILE = ".pi-lua-session.json"
+local DEFAULT_SESSION_FILE = ".lca-session.json"
 
 local function current_dir()
 	local uv = require("luv")

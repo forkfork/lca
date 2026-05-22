@@ -3,9 +3,9 @@ credentials.*.json
 .lca-credentials.json
 .env
 .env.*
-.pi-lua-history
-.pi-lua-session.json
-lua/agent/.pi-lua-history
+.lca-history
+.lca-session.json
+lua/agent/.lca-history
 
 __pycache__/
 *.py[cod]

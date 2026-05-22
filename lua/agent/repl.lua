@@ -12,7 +12,7 @@ local logo_ok, logo = pcall(require, "logo")
 if not logo_ok then logo = nil end
 
 local repl = {}
-local history_path = ".pi-lua-history"
+local history_path = ".lca-history"
 
 -- Cancellation state: set by SIGINT handler, checked by core loop
 repl.cancelled = false
@@ -424,4 +424,3 @@ function repl.run(options)
 end
 
 return repl
-

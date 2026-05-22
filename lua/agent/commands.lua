@@ -7,8 +7,8 @@ local HELP = [[
 /reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
-/save [path]          save session to file (default: .pi-lua-session.json)
-/load [path]          load session from file (default: .pi-lua-session.json)
+/save [path]          save session to file (default: .lca-session.json)
+/load [path]          load session from file (default: .lca-session.json)
 /clear                clear transcript and compaction summary
 /exit                 quit
 ]]
