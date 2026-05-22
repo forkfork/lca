@@ -151,11 +151,11 @@ end
 -- ─── Prompt ─────────────────────────────────────────────────────────────────
 
 function ui.prompt()
-	return color("cyan", "\xe2\x9f\xab ")
+	return color("cyan", "☽ ")
 end
 
 function ui.plain_prompt()
-	return "\xe2\x9f\xab "
+	return "☽ "
 end
 
 -- ─── Turn Separator ─────────────────────────────────────────────────────────

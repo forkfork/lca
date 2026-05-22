@@ -1,8 +1,8 @@
 package = "lca"
-version = "0.1.11-1"
+version = "0.1.12-1"
 source = {
-	url = "https://github.com/forkfork/lca/archive/refs/tags/v0.1.11.tar.gz",
-	dir = "lca-0.1.11",
+	url = "https://github.com/forkfork/lca/archive/refs/tags/v0.1.12.tar.gz",
+	dir = "lca-0.1.12",
 }
 description = {
 	summary = "A Lua coding absurdity using OpenAI Codex OAuth credentials",
