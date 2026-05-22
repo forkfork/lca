@@ -8,6 +8,15 @@ This project reimplements the OpenAI Codex subscription OAuth flow in pure Lua, 
 
 Same client ID, authorize URL, token URL, scope, redirect URI, PKCE S256 challenge, localhost callback, token refresh, and `chatgpt_account_id` JWT extraction — no Node, no Python, just Lua and a handful of system utilities.
 
+## Yolo Mode
+
+LCA does **not** prompt for permission before running tools. If the model emits
+tool calls, LCA will read files, edit files, write files, and run shell commands
+directly in the current working directory.
+
+Run it only in a repo/worktree where you are comfortable with that behavior.
+Commit or stash important work first.
+
 ## Happy Path: macOS + LuaRocks
 
 Assuming you are on macOS with Homebrew:
@@ -253,6 +262,9 @@ Shell out when you need to:
 {"command":"lua /tmp/hello.lua"}
 </tool_call>
 ```
+
+Reminder: these tools run in yolo mode. There is no interactive permission
+prompt before `edit`, `write`, or `run` executes.
 
 Project explanation has a happy path — point it at a directory and let the loop figure out what's going on:
 
