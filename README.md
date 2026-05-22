@@ -1,12 +1,10 @@
 # LCA
 
-> A scrappy, from-scratch Lua coding absurdity — because sometimes you want to understand every byte between you and the model.
+LCA is a small Lua coding tool for people who want the moving parts to be
+boring and visible.
 
-This project reimplements the OpenAI Codex subscription OAuth flow in pure Lua, mirroring:
-
-- `packages/ai/src/utils/oauth/openai-codex.ts`
-
-Same client ID, authorize URL, token URL, scope, redirect URI, PKCE S256 challenge, localhost callback, and `chatgpt_account_id` JWT extraction — no Node, no Python, just Lua and a handful of system utilities.
+It can log in with Codex/OpenAI OAuth or use AWS Bedrock credentials. It runs as
+a terminal REPL or a one-shot `lca run ...` command.
 
 ## Yolo Mode
 
