@@ -54,9 +54,12 @@ if not login_ok then
 end
 
 local agent = require("agent.core")
+local session_module = require("agent.session")
 
 local ok, result = pcall(function()
-	return agent.run_once(prompt, options)
+	local session = session_module.create(options)
+	session:add_user(prompt)
+	return agent.run_session(session)
 end)
 
 if not ok then
@@ -64,4 +67,4 @@ if not ok then
 	os.exit(1)
 end
 
-print(result)
+print(result.text or "")
