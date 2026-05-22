@@ -1,8 +1,8 @@
 package = "lca"
-version = "0.1.6-1"
+version = "0.1.10-1"
 source = {
-	url = "https://github.com/forkfork/lca/archive/refs/tags/v0.1.6.tar.gz",
-	dir = "lca-0.1.6",
+	url = "https://github.com/forkfork/lca/archive/refs/tags/v0.1.10.tar.gz",
+	dir = "lca-0.1.10",
 }
 description = {
 	summary = "A Lua coding absurdity using OpenAI Codex OAuth credentials",
@@ -22,6 +22,7 @@ dependencies = {
 	"luasocket",
 	"lua-cjson",
 	"luv",
+	"linenoise-luv",
 }
 build = {
 	type = "builtin",

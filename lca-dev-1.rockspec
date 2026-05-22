@@ -22,6 +22,7 @@ dependencies = {
 	"luasocket",
 	"lua-cjson",
 	"luv",
+	"linenoise-luv",
 }
 build = {
 	type = "builtin",
