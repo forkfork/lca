@@ -133,7 +133,7 @@ That installs the `lca` wrapper:
 
 ```bash
 lca
-lca repl --model gpt-5.4-mini
+lca repl --model gpt-5.5
 lca run "Explain what files this project should inspect first."
 lca run "Explain this code" --model gpt-5.5 --reasoning low
 ```
@@ -187,7 +187,7 @@ lua examples/simple_request.lua ~/.lca-credentials.json "Reply with exactly: oau
 Swap models on the fly:
 
 ```bash
-lua examples/simple_request.lua ~/.lca-credentials.json "Say hi" --model gpt-5.4-mini
+lua examples/simple_request.lua ~/.lca-credentials.json "Say hi" --model gpt-5.5
 ```
 
 ## Coding Absurdity
@@ -195,7 +195,7 @@ lua examples/simple_request.lua ~/.lca-credentials.json "Say hi" --model gpt-5.4
 The beating heart lives under `lua/agent/` — a growing set of modules that wire up tool dispatch, conversation state, and streaming responses. Try the one-shot CLI:
 
 ```bash
-lua bin/agent.lua "Explain what files this project should inspect first." --model gpt-5.4-mini
+lua bin/agent.lua "Explain what files this project should inspect first." --model gpt-5.5
 ```
 
 See `docs/architecture.md` for the intended module layout and where this is all headed.
@@ -205,7 +205,7 @@ See `docs/architecture.md` for the intended module layout and where this is all 
 The interactive mode — where the fun happens:
 
 ```bash
-lua bin/repl.lua --model gpt-5.4-mini
+lua bin/repl.lua --model gpt-5.5
 ```
 
 If `linenoise` is installed via LuaRocks you get readline-style editing, arrow-key history, and persistent history in `.lca-history`. Without it, plain `io.read` keeps things moving.

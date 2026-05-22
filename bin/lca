@@ -15,7 +15,7 @@ Usage:
 
 Examples:
   lca
-  lca repl --model gpt-5.4-mini
+  lca repl --model gpt-5.5
   lca run "Explain this project"
   lca login openai
 ]])

@@ -9,7 +9,7 @@ local config = require("agent.config")
 
 local options = {
 	credentials_path = config.default_credentials_path(),
-	model = "gpt-5.4-mini",
+	model = "gpt-5.5",
 	reasoning_effort = nil,
 	mcp_config = "mcp_servers.json",
 }

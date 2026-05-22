@@ -63,7 +63,7 @@ end
 local function request_body(request)
 	local parts = {
 		"{",
-		'"model":' .. json.string(request.model or "gpt-5.4-mini") .. ",",
+		'"model":' .. json.string(request.model or "gpt-5.5") .. ",",
 		'"store":false,',
 		'"stream":true,',
 		'"instructions":' .. json.string(request.system_prompt or "You are a helpful assistant.") .. ",",

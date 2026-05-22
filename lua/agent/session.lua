@@ -12,19 +12,19 @@ local function current_dir()
 end
 
 local function resolve_model(options)
-	if options.model and options.model ~= "gpt-5.4-mini" then
+	if options.model and options.model ~= "gpt-5.5" then
 		return options.model
 	end
 	local providers = require("agent.providers")
 	local path = options.credentials_path or config.default_credentials_path()
 	local ok, body = pcall(providers.credentials_body, path)
-	if not ok then return options.model or "gpt-5.4-mini" end
+	if not ok then return options.model or "gpt-5.5" end
 	local provider = json.field(body, "provider")
 	if provider == "bedrock" then
 		local model = json.field(body, "model")
 		return model or "us.anthropic.claude-opus-4-6-v1"
 	end
-	return options.model or "gpt-5.4-mini"
+	return options.model or "gpt-5.5"
 end
 
 local VALID_REASONING_EFFORTS = {
