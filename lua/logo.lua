@@ -95,8 +95,8 @@ function M.stop()
   io.flush()
 end
 
--- standalone: run with event loop
-if arg and arg[0] and arg[0]:find("lca") then
+-- Standalone: run with event loop only when this file is executed directly.
+if arg and arg[0] and arg[0]:match("logo%.lua$") then
   local uv = require("luv")
   M.start()
   local quit = uv.new_timer()
