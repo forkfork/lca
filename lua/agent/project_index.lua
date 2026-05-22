@@ -41,8 +41,8 @@ local function build_file_tree(cwd)
 	local cmd
 	if is_git_repo(cwd) then
 		cmd = string.format(
-			"cd %q && { git ls-files; git ls-files --others --exclude-standard; } | sort -u | head -n %d",
-			cwd, TREE_MAX_FILES
+			"cd %q && { git ls-files; git ls-files --others --exclude-standard; } | sort -u",
+			cwd
 		)
 	else
 		cmd = string.format(
@@ -52,8 +52,8 @@ local function build_file_tree(cwd)
 			.. " -not -path '*/__pycache__/*'"
 			.. " -not -path '*/target/*'"
 			.. " -not -path '*/.venv/*'"
-			.. " | sort | head -n %d",
-			cwd, TREE_MAX_DEPTH, TREE_MAX_FILES
+			.. " | sort",
+			cwd, TREE_MAX_DEPTH
 		)
 	end
 
@@ -62,12 +62,18 @@ local function build_file_tree(cwd)
 		return nil, false
 	end
 
-	local line_count = 0
-	for _ in output:gmatch("[^\n]+") do
-		line_count = line_count + 1
+	local lines = {}
+	local truncated = false
+	for line in output:gmatch("[^\n]+") do
+		if #lines < TREE_MAX_FILES then
+			lines[#lines + 1] = line
+		else
+			truncated = true
+			break
+		end
 	end
 
-	return output, (line_count >= TREE_MAX_FILES)
+	return table.concat(lines, "\n"), truncated
 end
 
 local function detect_key_files(cwd)
