@@ -2,6 +2,7 @@ package = "lca"
 version = "0.1.0-1"
 source = {
 	url = "https://github.com/forkfork/lca/archive/refs/tags/v0.1.0.tar.gz",
+	dir = "lca-0.1.0",
 }
 description = {
 	summary = "A Lua coding absurdity using OpenAI Codex OAuth credentials",
