@@ -83,7 +83,7 @@ local command = table.concat({
 	"-X POST",
 	"-H " .. shell_quote("Authorization: Bearer " .. access),
 	"-H " .. shell_quote("chatgpt-account-id: " .. account_id),
-	"-H " .. shell_quote("originator: pi"),
+	"-H " .. shell_quote("originator: lca"),
 	"-H " .. shell_quote("OpenAI-Beta: responses=experimental"),
 	"-H " .. shell_quote("accept: text/event-stream"),
 	"-H " .. shell_quote("content-type: application/json"),

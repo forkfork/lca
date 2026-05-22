@@ -107,7 +107,7 @@ local function initialize(conn)
 	local result, err = rpc_call(conn, "initialize", {
 		protocolVersion = "2024-11-05",
 		capabilities = {},
-		clientInfo = { name = "pi-lua", version = "1.0" },
+			clientInfo = { name = "lca", version = "1.0" },
 	})
 	if not result then
 		return nil, err

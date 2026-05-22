@@ -210,7 +210,7 @@ lua bin/repl.lua --model gpt-5.4-mini
 
 If `linenoise` is installed via LuaRocks you get readline-style editing, arrow-key history, and persistent history in `.lca-history`. Without it, plain `io.read` keeps things moving.
 
-The system prompt mirrors pi's shape: coding guidance, tool descriptions, project context scraped from ancestor `AGENTS.md`/`CLAUDE.md` files, current date, and working directory — all stitched together before the first turn.
+The system prompt includes coding guidance, tool descriptions, project context scraped from ancestor `AGENTS.md`/`CLAUDE.md` files, current date, and working directory — all stitched together before the first turn.
 
 Slash commands for when you need to steer:
 

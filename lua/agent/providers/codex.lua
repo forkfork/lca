@@ -112,7 +112,7 @@ local function do_complete(request, on_token)
 		"-X", "POST",
 		"-H", "Authorization: Bearer " .. credentials.access,
 		"-H", "chatgpt-account-id: " .. credentials.account_id,
-		"-H", "originator: pi",
+		"-H", "originator: lca",
 		"-H", "OpenAI-Beta: responses=experimental",
 		"-H", "accept: text/event-stream",
 		"-H", "content-type: application/json",

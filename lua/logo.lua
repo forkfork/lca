@@ -96,7 +96,7 @@ function M.stop()
 end
 
 -- standalone: run with event loop
-if arg and arg[0] and arg[0]:find("moonclaw") then
+if arg and arg[0] and arg[0]:find("lca") then
   local uv = require("luv")
   M.start()
   local quit = uv.new_timer()

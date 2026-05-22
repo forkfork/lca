@@ -41,12 +41,12 @@ while index <= #arg do
 end
 
 -- Test infrastructure
-local tmp_dir = os.tmpname() .. "_moonclaw_tests"
+local tmp_dir = os.tmpname() .. "_lca_tests"
 os.execute("rm -f " .. tmp_dir)
 os.execute("mkdir -p " .. tmp_dir)
 
 -- Log to a test-specific file
-core.set_transcript("/tmp/moonclaw_test.log")
+core.set_transcript("/tmp/lca_test.log")
 
 local passed = 0
 local failed = 0
@@ -318,7 +318,7 @@ Write it as valid Lua.
 end)
 
 -- Test 9: Write a Lua file with SIGINT/signal handling and escape sequences
--- (Reproduces the exact failure pattern from moonclaw.log where editing repl.lua
+-- (Reproduces the exact failure pattern from lca.log where editing repl.lua
 -- with escape sequences in string literals caused "unfinished string" errors)
 run_test("write lua with signal handling and stream parsing", [==[
 Write "stream_handler.lua" - a Lua module that:

@@ -58,8 +58,8 @@ local core = require("agent.core")
 local registry = require("agent.tool_registry")
 local repl = require("agent.repl")
 
--- Always log to debug file (truncates each session unless MOONCLAW_LOG_APPEND=1)
-local debug_log = options.transcript or os.getenv("MOONCLAW_LOG") or "/tmp/moonclaw.log"
+-- Always log to debug file (truncates each session unless LCA_LOG_APPEND=1)
+local debug_log = options.transcript or os.getenv("LCA_LOG") or "/tmp/lca.log"
 core.set_transcript(debug_log)
 
 -- Initialize MCP servers

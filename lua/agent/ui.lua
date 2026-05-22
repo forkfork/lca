@@ -1,6 +1,6 @@
 local ui = {}
 
-local DEBUG = os.getenv("MOONCLAW_DEBUG") == "1"
+local DEBUG = os.getenv("LCA_DEBUG") == "1"
 
 local colors = {
 	reset = "\27[0m",

@@ -280,7 +280,7 @@ local function login(originator)
 			{ "state", state },
 			{ "id_token_add_organizations", "true" },
 			{ "codex_cli_simplified_flow", "true" },
-			{ "originator", originator or "pi-lua" },
+			{ "originator", originator or "lca" },
 		})
 
 	print("Open this URL:")
@@ -307,7 +307,7 @@ if not command then
 end
 
 local out_path
-local originator = "pi-lua"
+local originator = "lca"
 local positional = {}
 local index = 2
 while index <= #arg do
