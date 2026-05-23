@@ -11,13 +11,14 @@ local options = {
 	credentials_path = config.default_credentials_path(),
 	model = "gpt-5.5",
 	reasoning_effort = nil,
+	service_tier = nil,
 	mcp_config = "mcp_servers.json",
 }
 
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--credentials path] [--model model] [--reasoning effort] [--transcript path]
+  lua bin/repl.lua [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--transcript path]
 ]])
 	os.exit(2)
 end
@@ -32,6 +33,9 @@ while index <= #arg do
 		index = index + 2
 	elseif arg[index] == "--reasoning" then
 		options.reasoning_effort = arg[index + 1]
+		index = index + 2
+	elseif arg[index] == "--service-tier" then
+		options.service_tier = arg[index + 1]
 		index = index + 2
 	elseif arg[index] == "--transcript" then
 		options.transcript = arg[index + 1]

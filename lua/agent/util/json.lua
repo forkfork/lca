@@ -19,13 +19,20 @@ function json.encode(value)
 	return cjson.encode(value)
 end
 
+local STRING_ESCAPES = {
+	['"'] = '\\"',
+	["\\"] = "\\\\",
+	["\b"] = "\\b",
+	["\f"] = "\\f",
+	["\n"] = "\\n",
+	["\r"] = "\\r",
+	["\t"] = "\\t",
+}
+
 function json.string(value)
-	local escaped = tostring(value)
-		:gsub("\\", "\\\\")
-		:gsub('"', '\\"')
-		:gsub("\n", "\\n")
-		:gsub("\r", "\\r")
-		:gsub("\t", "\\t")
+	local escaped = tostring(value):gsub('[%z\1-\31\\"]', function(char)
+		return STRING_ESCAPES[char] or string.format("\\u%04X", string.byte(char))
+	end)
 	return '"' .. escaped .. '"'
 end
 

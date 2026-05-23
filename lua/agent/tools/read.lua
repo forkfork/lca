@@ -21,9 +21,9 @@ end
 local TAG_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
 local function line_tag(line_num, content)
-	-- Simple hash: mix line number with content bytes
+	-- Simple hash: mix line number with all content bytes
 	local h = line_num * 2654435761
-	for i = 1, math.min(#content, 64) do
+	for i = 1, #content do
 		h = ((h ~ content:byte(i)) * 2246822519) & 0xFFFFFFFF
 	end
 	h = ((h ~ (h >> 16)) * 2246822519) & 0xFFFFFFFF

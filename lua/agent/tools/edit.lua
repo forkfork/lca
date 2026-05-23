@@ -51,6 +51,50 @@ local function affected_lines(text)
 	return newline_count + 1
 end
 
+local function lint_line_number(lint_output)
+	if not lint_output then return nil end
+	local line = lint_output:match(":(%d+):")
+		or lint_output:match("line%s+(%d+)")
+	return line and tonumber(line) or nil
+end
+
+local function normalize_lint_output(lint_output, display_path)
+	local text = tostring(lint_output or ""):gsub("%s+$", "")
+	if text == "" then
+		return "syntax checker reported an error"
+	end
+	return text:gsub("/tmp/%S+%.%w+", display_path)
+end
+
+local function numbered_context(lines, center, radius)
+	if #lines == 0 then
+		return "(empty candidate file)"
+	end
+	center = math.max(1, math.min(#lines, center or 1))
+	local first = math.max(1, center - radius)
+	local last = math.min(#lines, center + radius)
+	local out = {}
+	for i = first, last do
+		local marker = i == center and ">" or " "
+		out[#out + 1] = string.format("%s %4d | %s", marker, i, lines[i])
+	end
+	return table.concat(out, "\n")
+end
+
+local function blocked_edit_content(lint_output, args, candidate_lines, fallback_line)
+	local center = lint_line_number(lint_output) or fallback_line or 1
+	local display_path = tostring(args.path or "<unknown>")
+	return table.concat({
+		"BLOCKED: edit would produce syntax errors, file NOT modified.",
+		"",
+		"Requested edit: " .. display_path .. " lines " .. tostring(args.start_line or "?") .. "-" .. tostring(args.end_line or args.start_line or "?"),
+		"",
+		normalize_lint_output(lint_output, display_path),
+		"Candidate context around reported line " .. tostring(center) .. ":",
+		numbered_context(candidate_lines, center, 6),
+	}, "\n")
+end
+
 -- Tag-based edit: replace lines identified by line number + tag
 local function execute_tagged(args, context)
 	local target = path.resolve(args.path, context.cwd)
@@ -131,7 +175,7 @@ local function execute_tagged(args, context)
 	if lint_output then
 		return {
 			is_error = true,
-			content = "BLOCKED: edit would produce syntax errors, file NOT modified.\n\n" .. lint_output,
+			content = blocked_edit_content(lint_output, args, result_lines, start_line),
 			summary = "syntax error — not written",
 		}
 	end
@@ -214,9 +258,15 @@ function edit.execute(args, context)
 	-- Pre-write syntax check
 	local lint_output = lint.check_content(target, next_content)
 	if lint_output then
+		local next_lines = read_tool.split_lines(next_content)
+		local fallback_line = line_number_for_offset(original, start_at)
 		return {
 			is_error = true,
-			content = "BLOCKED: edit would produce syntax errors, file NOT modified.\n\n" .. lint_output,
+			content = blocked_edit_content(lint_output, {
+				path = args.path,
+				start_line = fallback_line,
+				end_line = fallback_line + affected_lines(args.oldText) - 1,
+			}, next_lines, fallback_line),
 			summary = "syntax error — not written",
 		}
 	end

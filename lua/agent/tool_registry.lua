@@ -56,6 +56,35 @@ function registry.mcp_tool_count()
 	return #mcp_tools
 end
 
+function registry.mcp_prompt_section()
+	if #mcp_tools == 0 then return "" end
+
+	local mcp_section = "\nMCP (external) tools:\n"
+	for _, tool in ipairs(mcp_tools) do
+		local full_name = "mcp__" .. tool._server .. "__" .. tool.name
+		local desc = tool.description or ""
+		if #desc > 100 then desc = desc:sub(1, 100) .. "..." end
+		mcp_section = mcp_section .. "- " .. full_name .. ": " .. desc .. "\n"
+
+		if tool.inputSchema and tool.inputSchema.properties then
+			local params = {}
+			for k, _ in pairs(tool.inputSchema.properties) do
+				params[#params + 1] = k
+			end
+			if #params > 0 then
+				mcp_section = mcp_section .. "  Args: " .. table.concat(params, ", ") .. "\n"
+			end
+		end
+	end
+
+	local open = "<" .. "tool_call"
+	local close = "</" .. "tool_call>"
+	mcp_section = mcp_section .. "\nCall MCP tools like any other tool:\n"
+	mcp_section = mcp_section .. open .. ' name="mcp__server__tool_name">' .. "\n"
+	mcp_section = mcp_section .. '{"arg1":"value1"}' .. "\n"
+	mcp_section = mcp_section .. close .. "\n"
+	return mcp_section
+end
 function registry.system_prompt()
 	local base = [[
 You have access to tools. You may include multiple tool calls in a single message — all will be executed in parallel.
@@ -123,13 +152,15 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - For "describe/explain this project": find to see the tree, then read the key files fully. File names tell you a lot.
 - For "how does X work": read the specific file(s). Use grep to locate them if needed.
 - For edits: read the target file, make the change. Don't read unrelated files.
-- Batch related tool calls in one message — they run in parallel.
+- You may batch multiple edits to the same file only when the line ranges are non-overlapping and all edits use tags from a previous read output already visible in this conversation. They are applied bottom-to-top so line numbers stay valid. If edits overlap or depend on earlier edits, make one edit, re-read, then continue.
+- Batch independent tool calls in one message — they run in parallel.
+- Do NOT batch read with edit/write for the same file. Same-message tool results are unavailable to other tool calls, so read first, wait for the result, then edit in the next turn.
 
 ## Rules
 
 1. STOP IMMEDIATELY after your last </tool_call> tag. Do NOT write any text, explanation, thinking, or speculation after tool calls. The system will execute the tools and give you results — only THEN should you respond. A message with tool calls must contain NOTHING else.
 2. PREFER edit over write for modifying existing files. Edit changes specific line ranges — write replaces the entire file.
-3. For edit and write: put the raw file content DIRECTLY after the JSON metadata line. Do NOT put content inside the JSON. Do NOT escape newlines or quotes. Just write the code exactly as it should appear in the file. ONE EXCEPTION: if your content must contain the literal string "</tool_call>", split it in code (e.g. "</" .. "tool_call>") since that string terminates the tag.
+3. For edit and write: put the raw file content DIRECTLY after the JSON metadata line. Do NOT put content inside the JSON. Do NOT escape newlines or quotes. Just write the code exactly as it should appear in the file. ONE EXCEPTION: raw content must not contain literal "<tool_call" or "</tool_call>" markup. If the file needs those strings, split or escape them in the code (e.g. "</" .. "tool_call>").
 4. If write or edit produces syntax errors, use edit to fix the specific broken lines — do NOT rewrite the entire file.
 5. When editing, copy the line tags EXACTLY from the read output. They are 4-char codes like "Q8fA". If a tag doesn't match, the file changed — re-read it.
 6. Do NOT re-read files already visible in a previous tool_result.
@@ -140,29 +171,8 @@ To delete lines, leave the content empty (nothing after the JSON line):
 11. NEVER speculate about or summarize what tools will return. Wait for actual results.
 ]]
 
-	if #mcp_tools > 0 then
-		local mcp_section = "\nMCP (external) tools:\n"
-		for _, tool in ipairs(mcp_tools) do
-			local full_name = "mcp__" .. tool._server .. "__" .. tool.name
-			local desc = tool.description or ""
-			if #desc > 100 then desc = desc:sub(1, 100) .. "..." end
-			mcp_section = mcp_section .. "- " .. full_name .. ": " .. desc .. "\n"
-
-			-- Show input schema params
-			if tool.inputSchema and tool.inputSchema.properties then
-				local params = {}
-				for k, v in pairs(tool.inputSchema.properties) do
-					params[#params + 1] = k
-				end
-				if #params > 0 then
-					mcp_section = mcp_section .. "  Args: " .. table.concat(params, ", ") .. "\n"
-				end
-			end
-		end
-		mcp_section = mcp_section .. "\nCall MCP tools like any other tool:\n"
-		mcp_section = mcp_section .. '<tool_call name="mcp__server__tool_name">\n'
-		mcp_section = mcp_section .. '{"arg1":"value1"}\n'
-		mcp_section = mcp_section .. "</tool_call>\n"
+	local mcp_section = registry.mcp_prompt_section()
+	if mcp_section ~= "" then
 		base = base .. mcp_section
 	end
 

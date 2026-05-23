@@ -1,0 +1,48 @@
+## Goal
+Update `index.html` marketing copy and layout/typography for the lca landing page.
+
+## Constraints & Preferences
+- User wants “tiny dense coding agent” changed to “small coding assistant”.
+- User wants the tagline to mention: “Assumes you know what you are doing.”
+- User wanted the entire quote/interface block removed: “read, write, edit, grep, find, ls, run, shell. That is the interface.”
+- User likes big typography, but current fonts were too big; make overall fonts a bit smaller.
+- Consider screen real estate after removing the right-side quote block.
+
+## Progress
+### Done
+- [x] In `index.html`, changed hero `<h1>` to `small coding assistant`.
+- [x] In `index.html`, changed hero lede to: `Reads files, edits files, runs commands, and prints the tool calls. Assumes you know what you are doing.`
+- [x] Removed `.quote-card` CSS block.
+- [x] Removed the hero quote `<aside class="quote-card" aria-label="lca motto">...</aside>`.
+- [x] Converted `.hero` from two-column grid to narrower single-column layout:
+  - `max-width: 760px;`
+  - `padding: 42px 0 52px;`
+- [x] Reduced typography:
+  - `html` font-size from `19px` to `17px`
+  - `h1` clamp changed to `clamp(2.7rem, 7vw, 5.8rem)`
+  - `.lede` clamp changed to `clamp(1.12rem, 2vw, 1.42rem)`
+  - `h2` clamp changed to `clamp(1.8rem, 3.4vw, 2.8rem)`
+  - `pre` font clamp changed to `clamp(.92rem, 1.8vw, 1.08rem)`
+  - mobile `html` font-size changed to `16px`
+- [x] Updated mobile media query so only `.grid` gets `grid-template-columns: 1fr;` since `.hero` is no longer grid.
+
+### In Progress
+- [ ] Verify final rendered layout visually and ensure no blank gaps or CSS issues remain.
+
+### Blocked
+- None.
+
+## Key Decisions
+- **Hero single-column layout**: Removing the quote block would leave unused space in the old two-column grid, so `.hero` was made narrower and single-column.
+- **Moderate font reduction**: Fonts were reduced but kept relatively large to preserve the user’s preference for big typography.
+
+## Next Steps
+1. Re-read or inspect `index.html` to confirm final state after edits.
+2. Optionally run/preview the page to verify spacing and typography.
+3. If needed, update remaining metadata/title text (`<title>` still showed `lca — terminal coding agent` in earlier read; meta description still says “small terminal coding agent”) to match “small coding assistant”.
+
+## Critical Context
+- File being edited: `index.html`.
+- Earlier failed edit errors were due to stale line tags, e.g. `start_tag mismatch at line 7: expected 4+mb but file has vcgD — re-read the file`; resolved by re-reading and using current tags.
+- Last assistant response to user: “Removed the quote/interface block, converted the hero to a narrower single-column layout, and reduced the overall font sizing.”
+- Current assistant has loaded the handoff context.

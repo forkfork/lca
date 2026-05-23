@@ -8,10 +8,10 @@ pcall(require, "luarocks.loader")
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/agent.lua [prompt] [--credentials path] [--model model] [--reasoning effort]
+  lua bin/agent.lua [prompt] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier]
 
 Example:
-  lua bin/agent.lua "List the files in this directory conceptually; do not run tools yet."
+  lua bin/agent.lua "List the files in this directory conceptually; do not run tools yet." --reasoning low
 ]])
 	os.exit(2)
 end
@@ -27,6 +27,7 @@ local options = {
 	credentials_path = config.default_credentials_path(),
 	model = "gpt-5.5",
 	reasoning_effort = nil,
+	service_tier = nil,
 }
 
 local index = 2
@@ -39,6 +40,9 @@ while index <= #arg do
 		index = index + 2
 	elseif arg[index] == "--reasoning" then
 		options.reasoning_effort = arg[index + 1]
+		index = index + 2
+	elseif arg[index] == "--service-tier" then
+		options.service_tier = arg[index + 1]
 		index = index + 2
 	else
 		usage()

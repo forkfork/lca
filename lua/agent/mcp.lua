@@ -86,14 +86,19 @@ local function rpc_call(conn, method, params, timeout_ms)
 
 	conn.stdin:write(request)
 
+	local repl_ok, repl_mod = pcall(require, "agent.repl")
 	local deadline = uv.now() + (timeout_ms or 10000)
 	while not done and uv.now() < deadline do
 		uv.run("once")
+		if repl_ok and repl_mod.cancelled then
+			conn.pending[id] = nil
+			return nil, "cancelled"
+		end
 	end
 
 	if not done then
 		conn.pending[id] = nil
-		return nil, "timeout"
+		return nil, "timeout after " .. tostring(math.floor((timeout_ms or 10000) / 1000)) .. "s"
 	end
 
 	if result.error then

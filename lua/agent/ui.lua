@@ -151,24 +151,30 @@ end
 -- ─── Prompt ─────────────────────────────────────────────────────────────────
 
 function ui.prompt()
-	return color("cyan", "☽ ")
+	return color("cyan", "> ")
 end
 
 function ui.plain_prompt()
-	return "☽ "
+	-- linenoise-luv counts prompt bytes, not terminal display columns.
+	-- Multibyte Unicode prompts (for example "☽ ") make cursor redraw/backspace
+	-- positions drift, so keep the editable prompt ASCII-only.
+	return "> "
 end
 
 -- ─── Turn Separator ─────────────────────────────────────────────────────────
 
 local turn_number = 0
 
-function ui.turn_separator()
+function ui.turn_separator(session)
 	turn_number = turn_number + 1
 	refresh_term_size()
 	local w = math.min(term_width, 72)
 	local ts = os.date("%H:%M")
-	local label = string.format("turn %d \xc2\xb7 %s", turn_number, ts)
-	io.write(color("dim", hrule(w, label)) .. "\n\n")
+	local label = string.format("turn %d · %s", turn_number, ts)
+	if session and session.token_status then
+		label = label .. " · " .. session:token_status()
+	end
+	io.write("\r\27[K" .. color("dim", hrule(w, label)) .. "\n\n")
 end
 
 -- ─── Thinking / Spinner ─────────────────────────────────────────────────────
@@ -180,8 +186,7 @@ local spinner_frame = 0
 local streaming_text = false
 
 local WAVE_CHARS = { "\xe2\x96\x91", "\xe2\x96\x92", "\xe2\x96\x93", "\xe2\x96\x88", "\xe2\x96\x93", "\xe2\x96\x92", "\xe2\x96\x91" }
-local WAVE_MIN_WIDTH = 28
-local WAVE_MAX_WIDTH = 140
+local WAVE_WIDTH = 42
 local MSG_CAPACITY = 100
 
 -- Gradient stages: blue/green → yellow/orange → red/dark as context fills
@@ -189,7 +194,7 @@ local GRADIENT_COOL = { 17, 18, 19, 20, 21, 27, 26, 32, 33, 39, 38, 44, 43, 49, 
 local GRADIENT_WARM = { 22, 28, 34, 40, 46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 208, 214, 220, 226, 190, 154, 118, 82, 46, 40, 34, 28, 22, 28 }
 local GRADIENT_HOT  = { 52, 88, 124, 160, 196, 202, 208, 214, 220, 226, 220, 214, 208, 202, 196, 160, 124, 88, 52, 88, 124, 160, 196, 202, 196, 160, 124, 88 }
 
-local current_wave_width = WAVE_MIN_WIDTH
+local current_wave_width = WAVE_WIDTH
 local current_context_ratio = 0
 
 local function get_gradient(ratio)
@@ -231,7 +236,7 @@ local function build_wave_positions(width)
 	return positions
 end
 
-local current_wave_positions = build_wave_positions(WAVE_MIN_WIDTH)
+local current_wave_positions = build_wave_positions(WAVE_WIDTH)
 
 local SPINNER_WORDS = {
 	"conjuring", "weaving", "dreaming", "summoning",
@@ -251,11 +256,10 @@ function ui.thinking(message_count)
 	last_token_time = 0
 
 	if message_count then
-		local ratio = math.min(1, message_count / MSG_CAPACITY)
-		current_context_ratio = ratio
-		current_wave_width = math.floor(WAVE_MIN_WIDTH + (WAVE_MAX_WIDTH - WAVE_MIN_WIDTH) * ratio)
-		current_wave_positions = build_wave_positions(current_wave_width)
+		current_context_ratio = math.min(1, message_count / MSG_CAPACITY)
 	end
+	current_wave_width = WAVE_WIDTH
+	current_wave_positions = build_wave_positions(current_wave_width)
 
 	if spinner_timer then
 		if not spinner_timer:is_closing() then
@@ -454,8 +458,16 @@ end
 local function animate_tracer(prefix, snippet)
 	-- Shoot characters across: projectile flies ahead of revealed text
 	local chars = {}
-	for p, c in utf8.codes(snippet) do
-		chars[#chars + 1] = utf8.char(c)
+	local ok = pcall(function()
+		for _, c in utf8.codes(snippet) do
+			chars[#chars + 1] = utf8.char(c)
+		end
+	end)
+	if not ok then
+		local safe = snippet:gsub("[\128-\255]", "?")
+		io.write(prefix .. color("dim", "▸ " .. safe) .. "\n")
+		io.flush()
+		return
 	end
 
 	local total = #chars
@@ -511,12 +523,26 @@ end
 local tool_count = 0
 local tool_names = {}
 
+local function is_deferred_tool_result(event)
+	return event
+		and event.result
+		and event.result.is_error
+		and (event.result.ui_state == "deferred" or event.result.summary == "dependent batch mutation")
+end
+
 function ui.tool(event)
 	if DEBUG then
 		io.write(color("cyan", "\xe2\x97\x8f " .. event.name))
 		local desc = render_description(event)
-		io.write(color("dim", "  " .. desc) .. "\n")
-		if event.result and event.result.is_error then
+		io.write(color("dim", "  " .. desc))
+		if event.phase == "start" then
+			io.write(color("dim", "  \226\134\146 started") .. "\n")
+		else
+			io.write("\n")
+		end
+		if is_deferred_tool_result(event) then
+			io.write(color("dim", "  deferred until read result is available") .. "\n")
+		elseif event.result and event.result.is_error then
 			io.write(color("red", "  error: ") .. event.result.content .. "\n")
 		elseif event.name == "run" and event.result and event.result.content and event.result.content ~= "(no output)" then
 			io.write("\n")
@@ -527,8 +553,10 @@ function ui.tool(event)
 		end
 		io.write("\n")
 	else
-		tool_count = tool_count + 1
-		table.insert(tool_names, event.name)
+		if event.phase ~= "start" then
+			tool_count = tool_count + 1
+			table.insert(tool_names, event.name)
+		end
 
 		local tc = tool_color(event.name)
 		local desc = render_description(event)
@@ -536,23 +564,29 @@ function ui.tool(event)
 
 		io.write("\r\27[K")
 
-		if event.result and event.result.is_error then
+		if is_deferred_tool_result(event) then
+			io.write("  " .. color("dim", box.v) .. " " .. color(tc, "\xe2\x97\x8f " .. event.name) .. color("dim", "  " .. desc .. "  \xe2\x86\x92 deferred until read result") .. "\n")
+		elseif event.result and event.result.is_error then
 			local msg = event.result.content or ""
 			if #msg > 140 then msg = msg:sub(1, 137) .. "..." end
 			io.write("  " .. color("dim", box.v) .. " " .. color("red", "\xe2\x9c\x97 " .. event.name) .. color("dim", "  " .. desc) .. "\n")
 			io.write("  " .. color("dim", box.v) .. "   " .. color("red", msg) .. "\n")
 		else
 			local line = "  " .. color("dim", box.v) .. " " .. color(tc, "\xe2\x97\x8f " .. event.name) .. color("dim", "  " .. desc)
-			if hint then
+			if event.phase == "start" then
+				line = line .. color("dim", "  \226\134\146 started")
+			elseif hint then
 				line = line .. color("dim", "  \xe2\x86\x92 " .. hint)
 			end
 			io.write(line .. "\n")
 
 			-- "Pew pew" tracer: shoot characters across the screen
-			local tracer = render_tracer(event)
-			if tracer then
-				local prefix = "  " .. color("dim", box.v) .. "   "
-				animate_tracer(prefix, tracer)
+			if event.phase ~= "start" then
+				local tracer = render_tracer(event)
+				if tracer then
+					local prefix = "  " .. color("dim", box.v) .. "   "
+					animate_tracer(prefix, tracer)
+				end
 			end
 		end
 		io.flush()
@@ -616,6 +650,7 @@ function ui.status(session)
 	local lines = {
 		"model: " .. session.model,
 		"reasoning: " .. (session.reasoning_effort or "default"),
+		"service tier: " .. (session.service_tier or "default"),
 		"cwd: " .. session.cwd,
 		"credentials: " .. session.credentials_path,
 		"turns: " .. session:turn_count(),

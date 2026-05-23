@@ -33,10 +33,18 @@ local function log(fmt, ...)
 	transcript_file:flush()
 end
 
+function core.debug_log(fmt, ...)
+	log(fmt, ...)
+end
+
 local function log_separator(label)
 	log("\n" .. string.rep("=", 70))
 	log("  %s", label)
 	log(string.rep("=", 70))
+end
+
+local function clean_assistant_text(text)
+	return protocol.strip_tool_results(protocol.strip_tool_calls(text or ""))
 end
 
 function core.run_once(prompt, options)
@@ -49,6 +57,7 @@ function core.run_once(prompt, options)
 		credentials_path = options.credentials_path,
 		model = options.model,
 		reasoning_effort = options.reasoning_effort,
+		service_tier = options.service_tier,
 		system_prompt = options.system_prompt or system_prompt.build({ cwd = options.cwd or "." }),
 		messages = {
 			{
@@ -92,6 +101,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			credentials_path = session.credentials_path,
 			model = session.model,
 			reasoning_effort = session.reasoning_effort,
+			service_tier = session.service_tier,
 			system_prompt = system_prompt.build({ cwd = session.cwd }),
 			messages = session.messages,
 		}, on_token)
@@ -117,8 +127,18 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				tool_calls[#tool_calls + 1] = tc
 			end
 		end
+		local protocol_ok, protocol_err = protocol.validate_tool_calls(tool_calls)
+		if not protocol_ok then
+			local text = "Tool call blocked: " .. protocol_err
+			log_separator("TOOL PROTOCOL VIOLATION")
+			log("%s", text)
+			return {
+				text = text,
+				events = events,
+			}
+		end
 		if #tool_calls == 0 then
-			local text = protocol.strip_tool_calls(response.text)
+			local text = clean_assistant_text(response.text)
 			log_separator("NO TOOL CALL - RETURNING TEXT")
 			return {
 				text = text,
@@ -163,11 +183,20 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		local MUTATING_TOOLS = { edit = true, write = true, run = true }
 
 		local function batch_on_tool(event)
-			if MUTATING_TOOLS[event.name] or (event.result and event.result.is_error) then
+			if event.phase == "start" then
+				log("\n--- TOOL START: %s ---", event.name)
+				if event.args then
+					for k, v in pairs(event.args) do
+						local vs = tostring(v)
+						if #vs > 120 then vs = vs:sub(1, 117) .. "..." end
+						log("      %s = %s", k, vs)
+					end
+				end
+			elseif MUTATING_TOOLS[event.name] or (event.result and event.result.is_error) then
 				log("\n--- TOOL RESULT: %s ---", event.name)
-				log("is_error: %s", tostring(event.result.is_error))
-				log("summary: %s", tostring(event.result.summary))
-				local content_str = event.result.content or ""
+				log("is_error: %s", tostring(event.result and event.result.is_error))
+				log("summary: %s", tostring(event.result and event.result.summary))
+				local content_str = (event.result and event.result.content) or ""
 				if #content_str > 500 then
 					log("content: %s... [%d chars total]", content_str:sub(1, 500), #content_str)
 				else
@@ -210,10 +239,11 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		credentials_path = session.credentials_path,
 		model = session.model,
 		reasoning_effort = session.reasoning_effort,
+		service_tier = session.service_tier,
 		system_prompt = system_prompt.build({ cwd = session.cwd }),
 		messages = session.messages,
 	}, on_token)
-	local text = protocol.strip_tool_calls(response.text)
+	local text = clean_assistant_text(response.text)
 
 	log("\n--- FINAL RESPONSE ---")
 	log("%s", text)

@@ -2,13 +2,49 @@ local json = require("agent.util.json")
 
 local protocol = {}
 
+local function inside_fenced_code(text, pos)
+	local in_fence = false
+	local line_start = 1
+	while line_start < pos do
+		local line_end = text:find("\n", line_start, true) or (#text + 1)
+		if line_start <= pos and text:sub(line_start, line_start + 2) == "```" then
+			in_fence = not in_fence
+		end
+		line_start = line_end + 1
+	end
+	return in_fence
+end
+
+local function find_tool_open(text, search_from)
+	while true do
+		local tag_start, tag_end, name = text:find('<tool_call%s+name="([^"]+)"%s*>', search_from)
+		if not name then
+			return nil
+		end
+		if not inside_fenced_code(text, tag_start) then
+			return tag_start, tag_end, name
+		end
+		search_from = tag_end + 1
+	end
+end
+
+local RAW_CONTENT_TOOLS = {
+	edit = true,
+	write = true,
+}
+
+local function contains_tool_protocol_tag(text)
+	return type(text) == "string"
+		and (text:find("<tool_call", 1, true) or text:find("</tool_call>", 1, true))
+end
+
 -- Find the JSON metadata and optional raw content inside a tool_call tag.
--- Returns: json_body, json_end_pos, raw_content (or nil)
+-- Returns: json_body, json_end_pos, raw_content (or nil), close_tag_pos
 --
 -- Two formats supported:
 -- 1. Legacy: all args in JSON (content field inside {})
 -- 2. Raw: JSON metadata on first line(s), raw content follows until </tool_call>
-local function extract_json_body(text, start_pos)
+local function extract_json_body(text, start_pos, tool_name)
 	local i = text:find("{", start_pos)
 	if not i then return nil, nil, nil end
 
@@ -56,9 +92,15 @@ local function extract_json_body(text, start_pos)
 
 	local json_body = text:sub(i, first_close)
 
+	if not RAW_CONTENT_TOOLS[tool_name] then
+		local close_tag = text:find("</tool_call>", first_close + 1)
+		return json_body, first_close, nil, close_tag
+	end
+
 	-- Find the ACTUAL closing </tool_call> — the LAST one before the next
-	-- <tool_call opens (or end of text). Raw content may contain multiple
-	-- literal </tool_call> strings (e.g. in code that parses XML tags).
+	-- <tool_call opens (or end of text). If raw content contains tool-call
+	-- tags, this intentionally treats the rest as one malformed call so the
+	-- core can reject the response without executing a partial interpretation.
 	local search_from = first_close + 1
 	local next_open = text:find("<tool_call%s+name", search_from)
 	local boundary = next_open or (#text + 1)
@@ -97,16 +139,16 @@ local function extract_json_body(text, start_pos)
 		end
 	end
 
-	return json_body, first_close, raw_content
+	return json_body, first_close, raw_content, close_tag
 end
 
 function protocol.extract_tool_call(text)
-	local tag_start, tag_end, name = text:find('<tool_call%s+name="([^"]+)"%s*>')
+	local tag_start, tag_end, name = find_tool_open(text, 1)
 	if not name then
 		return nil
 	end
 
-	local body, body_end, raw_content = extract_json_body(text, tag_end + 1)
+	local body, body_end, raw_content = extract_json_body(text, tag_end + 1, name)
 	if not body then
 		return nil
 	end
@@ -128,10 +170,10 @@ function protocol.extract_all_tool_calls(text)
 	local search_from = 1
 
 	while true do
-		local tag_start, tag_end, name = text:find('<tool_call%s+name="([^"]+)"%s*>', search_from)
+		local tag_start, tag_end, name = find_tool_open(text, search_from)
 		if not name then break end
 
-		local body, body_end, raw_content = extract_json_body(text, tag_end + 1)
+		local body, body_end, raw_content, close_tag = extract_json_body(text, tag_end + 1, name)
 		if body then
 			local args = json.object_fields(body)
 			if raw_content then
@@ -142,7 +184,7 @@ function protocol.extract_all_tool_calls(text)
 				args = args,
 				raw = body,
 			}
-			search_from = body_end + 1
+			search_from = close_tag and (close_tag + 12) or (body_end + 1)
 		else
 			search_from = tag_end + 1
 		end
@@ -150,10 +192,27 @@ function protocol.extract_all_tool_calls(text)
 	return calls
 end
 
+function protocol.validate_tool_calls(calls)
+	for _, tc in ipairs(calls or {}) do
+		local raw_content = tc.args and tc.args._raw_content
+		if raw_content and not RAW_CONTENT_TOOLS[tc.name] then
+			return false, "tool call " .. tostring(tc.name) .. " contains raw content, but only edit/write support raw content"
+		end
+		if raw_content and contains_tool_protocol_tag(raw_content) then
+			return false, "tool call " .. tostring(tc.name) .. " raw content contains literal <tool_call> markup; split or escape it before editing"
+		end
+	end
+	return true, nil
+end
+
 function protocol.count_tool_calls(text)
 	local count = 0
-	for _ in text:gmatch('<tool_call%s+name="[^"]+"%s*>') do
+	local search_from = 1
+	while true do
+		local tag_start, tag_end = find_tool_open(text, search_from)
+		if not tag_start then break end
 		count = count + 1
+		search_from = tag_end + 1
 	end
 	return count
 end
@@ -176,8 +235,11 @@ end
 function protocol.strip_tool_calls(text)
 	local result = text
 	while true do
-		local tag_start, tag_end = result:find('%s*<tool_call%s+name="[^"]+"%s*>')
+		local tag_start, tag_end = find_tool_open(result, 1)
 		if not tag_start then break end
+		while tag_start > 1 and result:sub(tag_start - 1, tag_start - 1):match("%s") do
+			tag_start = tag_start - 1
+		end
 		local close = find_close_tag(result, tag_end + 1)
 		if close then
 			local end_pos = close + 11
@@ -204,10 +266,10 @@ function protocol.extract_only_tool_calls_text(text)
 	local search_from = 1
 
 	while true do
-		local tag_start, tag_end = text:find('<tool_call%s+name="[^"]+"%s*>', search_from)
+		local tag_start, tag_end, name = find_tool_open(text, search_from)
 		if not tag_start then break end
 
-		local body, body_end = extract_json_body(text, tag_end + 1)
+		local body, body_end = extract_json_body(text, tag_end + 1, name)
 		if body then
 			local close = find_close_tag(text, body_end + 1)
 			if close then

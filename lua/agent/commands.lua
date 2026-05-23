@@ -5,12 +5,14 @@ local HELP = [[
 /status               show cwd, model, credentials, and turn count
 /model <id>           change model
 /reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
+/service-tier <tier>  set service tier: auto, default, flex, priority
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
 /save [path]          save session to file (default: .lca-session.json)
 /load [path]          load session from file (default: .lca-session.json)
+/compact              summarize the current transcript now
 /clear                clear transcript and compaction summary
-/exit                 quit
+/exit                 quit and save session
 ]]
 
 local function trim(value)
@@ -50,6 +52,21 @@ function commands.dispatch(line, session, ui)
 				ui.muted("reasoning: " .. session.reasoning_effort)
 			end
 		end
+	elseif name == "service-tier" or name == "tier" then
+		if rest == "" then
+			session.service_tier = nil
+			ui.muted("service tier: default")
+		else
+			local ok, value = pcall(function()
+				return require("agent.session").resolve_service_tier(rest)
+			end)
+			if not ok then
+				ui.error(tostring(value))
+			else
+				session.service_tier = value
+				ui.muted("service tier: " .. session.service_tier)
+			end
+		end
 	elseif name == "credentials" then
 		if rest == "" then
 			ui.error("usage: /credentials <path>")
@@ -57,7 +74,6 @@ function commands.dispatch(line, session, ui)
 			session.credentials_path = rest
 			ui.muted("credentials: " .. session.credentials_path)
 		end
-	elseif name == "explain" then
 		local target = rest ~= "" and rest or "."
 		session:add_user(table.concat({
 			"Explain the project at " .. target .. ".",
@@ -88,9 +104,22 @@ function commands.dispatch(line, session, ui)
 		local path = rest ~= "" and rest or nil
 		local ok, err = session:load(path)
 		if ok then
-			ui.muted("session loaded from " .. (path or session.DEFAULT_SESSION_FILE) .. " (" .. session:turn_count() .. " turns)")
+			ui.muted(session:load_message(path))
 		else
 			ui.error(err)
+		end
+	elseif name == "compact" then
+		local compaction = require("agent.compaction")
+		ui.muted("compacting transcript...")
+		local ok, compacted, msgs_removed, new_tokens = pcall(function()
+			return compaction.compact(session, { force = true })
+		end)
+		if not ok then
+			ui.error(tostring(compacted))
+		elseif compacted then
+			ui.compaction(msgs_removed, new_tokens)
+		else
+			ui.muted("nothing to compact")
 		end
 	elseif name == "exit" or name == "quit" then
 		return true

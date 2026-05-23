@@ -154,6 +154,7 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 		credentials_path = session.credentials_path,
 		model = session.model,
 		reasoning_effort = session.reasoning_effort,
+		service_tier = session.service_tier,
 		system_prompt = SUMMARIZATION_SYSTEM_PROMPT,
 		messages = {
 			{ role = "user", text = prompt_text },
@@ -163,12 +164,21 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 	return response.text
 end
 
-function compaction.compact(session)
-	if not compaction.should_compact(session.messages) then
+function compaction.compact(session, opts)
+	opts = opts or {}
+	if not opts.force and not compaction.should_compact(session.messages) then
+		return false
+	end
+	if #session.messages == 0 then
 		return false
 	end
 
-	local cut_index = compaction.find_cut_point(session.messages)
+	local cut_index
+	if opts.force then
+		cut_index = #session.messages + 1
+	else
+		cut_index = compaction.find_cut_point(session.messages)
+	end
 
 	-- Nothing worth summarizing
 	if cut_index <= 1 then

@@ -28,6 +28,25 @@ local function context_section(files)
 	return "\n" .. table.concat(parts, "\n")
 end
 
+local function executable_available(name)
+	local command = "command -v " .. name .. " >/dev/null 2>&1"
+	local ok, why, code = os.execute(command)
+	return ok == true or ok == 0 or (why == "exit" and code == 0)
+end
+
+local function brave_search_section()
+	if not executable_available("bx") then
+		return ""
+	end
+
+	return table.concat({
+		"## Brave Search",
+		"- A Brave Search CLI is available as `bx`.",
+		"- Use `bx context \"search topic\" --max-tokens 2048` via the run tool to search the web and retrieve compact context.",
+		"- Only invoke it when web search would materially help answer the user's request.",
+	}, "\n")
+end
+
 function system_prompt.build(options)
 	local cwd = options.cwd or "."
 	local files = project_context.load(cwd)
@@ -56,6 +75,7 @@ function system_prompt.build(options)
 		"- If a tool returns an error, acknowledge it. Do NOT pretend the operation succeeded.",
 		"- GROUNDING RULE: Every file path, line number, function name, and code snippet you cite MUST appear verbatim in a tool_result above. If you cannot find it in a tool_result, do not reference it. Do not cite paths like 'src/foo.lua' unless 'src/foo.lua' literally appeared in a find/ls/read result. When quoting code, copy-paste from the tool_result — never reconstruct from memory.",
 		context_section(files),
+		brave_search_section(),
 		index ~= "" and ("\n" .. index) or "",
 		"Current date: " .. current_date(),
 		"Current working directory: " .. cwd,

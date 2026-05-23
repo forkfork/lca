@@ -37,6 +37,28 @@ local MAX_AUTH_RETRIES = 1
 local MAX_TRANSIENT_RETRIES = 2
 local INITIAL_BACKOFF_SEC = 1
 
+local function cancel_requested()
+	local ok, repl = pcall(require, "agent.repl")
+	return ok and repl.cancelled
+end
+
+local function cancellable_sleep(seconds)
+	local uv = require("luv")
+	local deadline = uv.now() + math.max(0, seconds) * 1000
+	local timer = uv.new_timer()
+	timer:start(100, 100, function() end)
+	while uv.now() < deadline do
+		if cancel_requested() then
+			timer:stop()
+			timer:close()
+			return false
+		end
+		uv.run("once")
+	end
+	timer:stop()
+	timer:close()
+	return true
+end
 local function is_auth_error(response_text)
 	if not response_text then return false end
 	return response_text:find("ExpiredToken") ~= nil
@@ -363,15 +385,14 @@ local function do_complete(request, on_token)
 	local keepalive = uv.new_timer()
 	keepalive:start(100, 100, function() end)
 
+	local cancelled = false
 	while not process_done do
 		uv.run("once")
-		-- Check for cancellation from SIGINT handler
-		local repl_ok, repl_mod = pcall(require, "agent.repl")
-		if repl_ok and repl_mod.cancelled then
+		if cancel_requested() then
+			cancelled = true
 			if handle and not handle:is_closing() then
 				handle:kill("sigterm")
 			end
-			process_done = true
 			break
 		end
 		if socket.gettime() - loop_start > 130 then
@@ -396,6 +417,9 @@ local function do_complete(request, on_token)
 		uv.run("nowait")
 	end
 
+	if cancelled then
+		error("cancelled")
+	end
 	if spawn_err then
 		error("Bedrock stream read error: " .. tostring(spawn_err))
 	end
@@ -453,11 +477,8 @@ function bedrock.complete(request, on_token)
 		-- Retryable transient error — exponential backoff
 		if is_retryable_error(last_error) and attempt < MAX_TRANSIENT_RETRIES then
 			local backoff = INITIAL_BACKOFF_SEC * (2 ^ attempt)
-			local socket_ok, socket = pcall(require, "socket")
-			if socket_ok then
-				socket.sleep(backoff)
-			else
-				os.execute("sleep " .. tostring(backoff))
+			if not cancellable_sleep(backoff) then
+				error("cancelled")
 			end
 			-- Continue to next attempt
 		elseif attempt < MAX_TRANSIENT_RETRIES and not is_retryable_error(last_error) then

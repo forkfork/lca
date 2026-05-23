@@ -117,6 +117,9 @@ local function read_prompt()
 
 	-- Restore terminal to cooked mode so normal output works
 	pcall(function() ln.editstop() end)
+	if result_line ~= nil then
+		io.write("\r\n")
+	end
 	os.execute("stty sane 2>/dev/null")
 	io.flush()
 
@@ -128,6 +131,17 @@ function repl.run(options)
 	local session = session_module.create(options)
 	ui.header(session, { animated_logo = (logo ~= nil) })
 	start_logo_animation()
+
+	local function auto_load()
+		local ok, err = session:load()
+		if ok then
+			ui.muted(session:load_message())
+		elseif err and not err:match("No such file") and not err:match("no such file") then
+			ui.error(err)
+		end
+	end
+
+	auto_load()
 
 	local function auto_save()
 		if #session.messages > 0 then
@@ -187,7 +201,7 @@ function repl.run(options)
 			end
 
 			if line ~= nil and (line ~= "" or session.messages[#session.messages]) then
-				ui.turn_separator()
+				ui.turn_separator(session)
 				ui.thinking(#session.messages)
 
 				local token_count = 0
@@ -198,8 +212,37 @@ function repl.run(options)
 				local in_thinking = false
 				local has_seen_tool_call = false
 				local stream_buf = ""
+				local stream_seen = ""
 				local spinner_active = true
 				local tool_header_shown = false
+
+				local function inside_fenced_code(pos)
+					local in_fence = false
+					local line_start = 1
+					while line_start < pos do
+						local line_end = stream_seen:find("\n", line_start, true) or (#stream_seen + 1)
+						if stream_seen:sub(line_start, line_start + 2) == "```" then
+							in_fence = not in_fence
+						end
+						line_start = line_end + 1
+					end
+					return in_fence
+				end
+
+				local function find_unfenced(pattern)
+					local search_from = 1
+					local buffer_start = #stream_seen - #stream_buf + 1
+					while true do
+						local found = stream_buf:find(pattern, search_from)
+						if not found then
+							return nil
+						end
+						if not inside_fenced_code(buffer_start + found - 1) then
+							return found
+						end
+						search_from = found + 1
+					end
+				end
 
 				local function on_token(text)
 					if spinner_active then
@@ -220,6 +263,7 @@ function repl.run(options)
 
 					-- Filter out <tool_call name="...">, <thinking>, and post-tool-call text.
 					stream_buf = stream_buf .. text
+					stream_seen = stream_seen .. text
 
 					-- Accumulate at least 20 chars before processing to avoid
 					-- splitting tags across flushes. The longest prefix we need
@@ -257,8 +301,8 @@ function repl.run(options)
 							break
 						else
 							-- Match full tag syntax only
-							local tool_open = stream_buf:find('<tool_call%s+name%s*=%s*"')
-							local think_open = stream_buf:find("<thinking>") or stream_buf:find("<thinking ")
+							local tool_open = find_unfenced('<tool_call%s+name%s*=%s*"')
+							local think_open = find_unfenced("<thinking>") or find_unfenced("<thinking ")
 
 							local first_pos = #stream_buf + 1
 							local first_tag = nil
@@ -385,7 +429,10 @@ function repl.run(options)
 						ui.clear_thinking()
 						spinner_active = false
 					end
-					if not first_token and result.text:sub(-1) ~= "\n" then
+					if not first_token and has_seen_tool_call and result.text ~= "" then
+						io.write(result.text)
+						io.write(result.text:sub(-1) == "\n" and "" or "\n")
+					elseif not first_token and result.text:sub(-1) ~= "\n" then
 						io.write("\n")
 					end
 					if tool_header_shown then

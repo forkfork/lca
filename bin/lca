@@ -9,7 +9,7 @@ local function usage()
 Usage:
   lca [repl options]
   lca repl [repl options]
-  lca run <prompt> [--credentials path] [--model model] [--reasoning effort]
+  lca run <prompt> [--credentials path] [--model model] [--reasoning effort] [--service-tier tier]
   lca login <openai|bedrock> [login options]
   lca auth <login|refresh> [auth options]
 

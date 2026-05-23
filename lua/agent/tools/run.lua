@@ -13,6 +13,16 @@ local function truncate_output(output)
 	return output:sub(1, MAX_OUTPUT) .. "\n[truncated at " .. MAX_OUTPUT .. " bytes]", true
 end
 
+local function kill_process_tree(pid, handle, signal)
+	signal = signal or "sigterm"
+	if pid then
+		os.execute("pkill -" .. (signal == "sigkill" and "KILL" or "TERM") .. " -P " .. tostring(pid) .. " >/dev/null 2>&1")
+	end
+	if handle and not handle:is_closing() then
+		pcall(uv.process_kill, handle, signal)
+	end
+end
+
 function run.execute(args, context)
 	if not args.command or args.command == "" then
 		return {
@@ -69,7 +79,7 @@ function run.execute(args, context)
 	timer:start(timeout_ms, 0, function()
 		if not done then
 			timed_out = true
-			uv.process_kill(handle, "sigkill")
+			kill_process_tree(pid, handle, "sigterm")
 		end
 	end)
 
@@ -78,7 +88,7 @@ function run.execute(args, context)
 		uv.run("once")
 		if repl_ok and repl_mod.cancelled then
 			timed_out = true  -- reuse timeout path for cleanup
-			uv.process_kill(handle, "sigkill")
+			kill_process_tree(pid, handle, "sigterm")
 			break
 		end
 	end
@@ -88,6 +98,13 @@ function run.execute(args, context)
 		for _ = 1, 50 do
 			uv.run("nowait")
 			if done then break end
+		end
+		if not done then
+			kill_process_tree(pid, handle, "sigkill")
+			for _ = 1, 50 do
+				uv.run("nowait")
+				if done then break end
+			end
 		end
 	end
 
@@ -137,4 +154,3 @@ function run.execute(args, context)
 end
 
 return run
-
