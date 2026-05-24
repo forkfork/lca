@@ -13,6 +13,75 @@ local function truncate_output(output)
 	return output:sub(1, MAX_OUTPUT) .. "\n[truncated at " .. MAX_OUTPUT .. " bytes]", true
 end
 
+local function is_curl_command(command)
+	return tostring(command or ""):match("^%s*curl%s") ~= nil
+end
+
+local function strip_curl_progress(output)
+	output = tostring(output or ""):gsub("\r", "\n")
+	local kept = {}
+	for line in (output .. "\n"):gmatch("(.-)\n") do
+		if line == "" and #kept == 0 then
+			-- skip leading blank progress fragments
+		elseif line:match("^%s*%% Total%s+%% Received") then
+			-- curl progress header
+		elseif line:match("^%s*Dload%s+Upload%s+Total%s+Spent") then
+			-- curl progress subheader
+		elseif line:match("^%s*%d+%s+%d+%s+%d+%s+%d+%s+%d+%s+%d+") and line:find("%-%-:%-%-:%-%-") then
+			-- curl progress row
+		else
+			kept[#kept + 1] = line
+		end
+	end
+	local cleaned = table.concat(kept, "\n")
+	cleaned = cleaned:gsub("\n\n\n+", "\n\n")
+	return cleaned
+end
+
+local function broad_git_command_reason(command)
+	if command:match("^%s*LCA_ALLOW_BROAD_GIT=1[%s;]") then
+		return nil
+	end
+
+	local checks = {
+		{ "git%s+add%s+%-A[%s;&|)]", "git add -A stages every dirty file" },
+		{ "git%s+add%s+%-A$", "git add -A stages every dirty file" },
+		{ "git%s+add%s+%-%-all[%s;&|)]", "git add --all stages every dirty file" },
+		{ "git%s+add%s+%-%-all$", "git add --all stages every dirty file" },
+		{ "git%s+add%s+%-u%s*$", "git add -u stages broad tracked changes" },
+		{ "git%s+add%s+%-u%s*[;&|)]", "git add -u stages broad tracked changes" },
+		{ "git%s+add%s+%-%-update%s*$", "git add --update stages broad tracked changes" },
+		{ "git%s+add%s+%-%-update%s*[;&|)]", "git add --update stages broad tracked changes" },
+		{ "git%s+add%s+:/[%s;&|)]", "git add :/ stages the whole repository" },
+		{ "git%s+add%s+:/$", "git add :/ stages the whole repository" },
+		{ "git%s+commit%s+%-am[%s;&|)]", "git commit -am stages broad tracked changes" },
+		{ "git%s+commit%s+%-am$", "git commit -am stages broad tracked changes" },
+		{ "git%s+commit%s+%-a%s+%-m", "git commit -a -m stages broad tracked changes" },
+		{ "git%s+commit%s+%-%-all[%s;&|)]", "git commit --all stages broad tracked changes" },
+		{ "git%s+commit%s+%-%-all$", "git commit --all stages broad tracked changes" },
+	}
+	for _, check in ipairs(checks) do
+		if command:find(check[1]) then
+			return check[2]
+		end
+	end
+
+	local pos = 1
+	while true do
+		local start_at, end_at = command:find("git%s+add%s+%.", pos)
+		if not start_at then
+			break
+		end
+		local next_char = command:sub(end_at + 1, end_at + 1)
+		if next_char == "" or next_char:match("[%s;&|)]") then
+			return "git add . stages every dirty file under the current directory"
+		end
+		pos = end_at + 1
+	end
+
+	return nil
+end
+
 local function kill_process_tree(pid, handle, signal)
 	signal = signal or "sigterm"
 	if pid then
@@ -29,6 +98,21 @@ function run.execute(args, context)
 			is_error = true,
 			content = "command is required",
 			summary = "missing command",
+		}
+	end
+
+	local git_reason = broad_git_command_reason(args.command)
+	if git_reason then
+		return {
+			is_error = true,
+			content = table.concat({
+				"BLOCKED: broad git staging is not allowed through run.",
+				"",
+				git_reason .. ".",
+				"Stage explicit reviewed paths instead, then inspect `git diff --cached --stat` before committing.",
+				"If the user explicitly asked to stage everything, rerun with LCA_ALLOW_BROAD_GIT=1.",
+			}, "\n"),
+			summary = "blocked git command",
 		}
 	end
 
@@ -117,6 +201,9 @@ function run.execute(args, context)
 	handle:close()
 
 	local output = table.concat(chunks)
+	if is_curl_command(args.command) then
+		output = strip_curl_progress(output)
+	end
 	local truncated
 	output, truncated = truncate_output(output)
 
@@ -152,5 +239,7 @@ function run.execute(args, context)
 		summary = summary,
 	}
 end
+
+run._strip_curl_progress = strip_curl_progress
 
 return run

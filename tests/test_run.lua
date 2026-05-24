@@ -64,6 +64,82 @@ test("timeout kills child process", function()
 	end
 end)
 
+test("blocks broad git staging", function()
+	local result = run_tool.execute({
+		command = "git add -A && git commit -m nope",
+	}, { cwd = project_dir })
+
+	if not result.is_error then
+		error("expected broad git command to be blocked")
+	end
+	if result.summary ~= "blocked git command" then
+		error("unexpected summary: " .. tostring(result.summary))
+	end
+	if not result.content:find("Stage explicit reviewed paths", 1, true) then
+		error("missing explicit staging guidance")
+	end
+end)
+
+test("allows explicit git path staging syntax", function()
+	local result = run_tool.execute({
+		command = "git add lua/agent/tools/run.lua --dry-run",
+	}, { cwd = project_dir })
+
+	if result.summary == "blocked git command" then
+		error("explicit path staging should not be blocked")
+	end
+end)
+
+test("allows explicit root-relative git path staging", function()
+	local result = run_tool.execute({
+		command = "git add :/lua/agent/tools/run.lua --dry-run",
+	}, { cwd = project_dir })
+
+	if result.summary == "blocked git command" then
+		error("explicit root-relative path staging should not be blocked")
+	end
+end)
+
+test("requires broad git override at command start", function()
+	local result = run_tool.execute({
+		command = "echo LCA_ALLOW_BROAD_GIT=1; git add -A",
+	}, { cwd = project_dir })
+
+	if result.summary ~= "blocked git command" then
+		error("override marker in command body should not bypass guard")
+	end
+end)
+
+test("allows explicit broad git override", function()
+	local result = run_tool.execute({
+		command = "LCA_ALLOW_BROAD_GIT=1 git add -A --dry-run",
+	}, { cwd = project_dir })
+
+	if result.summary == "blocked git command" then
+		error("explicit override should bypass guard")
+	end
+end)
+
+test("strips curl progress meter", function()
+	local cleaned = run_tool._strip_curl_progress(table.concat({
+		"  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current",
+		"                                 Dload  Upload   Total   Spent    Left  Speed",
+		"\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0",
+		"\r100    12  100    12    0     0  21015      0 --:--:-- --:--:-- --:--:-- 12000",
+		"HTTP/1.0 200 OK",
+		"Content-Length: 12",
+		"",
+		"hello world",
+	}, "\n"))
+
+	if cleaned:find("%% Total", 1, true) or cleaned:find("Dload", 1, true) or cleaned:find("%-%-:%-%-:%-%-") then
+		error("curl progress was not stripped: " .. cleaned)
+	end
+	if not cleaned:find("HTTP/1.0 200 OK", 1, true) or not cleaned:find("hello world", 1, true) then
+		error("curl response content was lost: " .. cleaned)
+	end
+end)
+
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")
 io.write(string.format("  %s passed, %s failed\n",
 	green(tostring(passed)), failed > 0 and red(tostring(failed)) or tostring(failed)))

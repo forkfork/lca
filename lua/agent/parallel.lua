@@ -23,6 +23,11 @@ local FILE_READ_TOOLS = {
 local START_EVENT_TOOLS = {
 	find = true,
 	grep = true,
+	job_output = true,
+	job_start = true,
+	job_status = true,
+	job_stop = true,
+	job_wait = true,
 	ls = true,
 	run = true,
 	shell = true,
@@ -177,6 +182,7 @@ local function tool_to_command(name, args, context)
 end
 
 local MAX_BYTES = 20000
+local MAX_READ_BATCH_BYTES = tonumber(os.getenv("LCA_READ_BATCH_MAX_BYTES") or "") or 24000
 
 local function truncate(output)
 	if #output <= MAX_BYTES then
@@ -240,6 +246,57 @@ local function format_result(name, _args, output, exit_code)
 	return { is_error = true, content = "unknown tool", summary = "error" }
 end
 
+local function normalized_number(value, fallback)
+	local number = tonumber(value)
+	if not number then
+		number = fallback
+	end
+	return tostring(math.floor(number or 0))
+end
+
+local function read_call_key(tc, context)
+	if tc.name ~= "read" then
+		return nil
+	end
+	local args = tc.args or {}
+	if not args.path or args.path == "" then
+		return nil
+	end
+	local target = path_util.resolve(args.path, context.cwd or ".")
+	return table.concat({
+		target,
+		normalized_number(args.offset, 1),
+		normalized_number(args.limit, -1),
+	}, "\0")
+end
+
+local function duplicate_read_result(original_index)
+	return {
+		is_error = false,
+		content = "Duplicate read skipped; same result as tool call #" .. tostring(original_index) .. ".",
+		summary = "duplicate read",
+	}
+end
+
+local function already_read_result(info)
+	local where = info and info.message_index and ("message #" .. tostring(info.message_index)) or "recent context"
+	return {
+		is_error = false,
+		ui_state = "deferred",
+		content = "Read skipped; this exact file range is already visible in " .. where .. ". Use the existing read result unless the file changed.",
+		summary = "already in context",
+	}
+end
+
+local function read_budget_result(max_bytes)
+	return {
+		is_error = false,
+		ui_state = "deferred",
+		content = "Read batch output budget reached (" .. tostring(max_bytes) .. " bytes). Use a smaller targeted read in the next turn.",
+		summary = "read budget reached",
+	}
+end
+
 local function spawn_and_collect(cmd, callback)
 	local stdout_pipe = uv.new_pipe()
 	local stderr_pipe = uv.new_pipe()
@@ -298,7 +355,39 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		end
 	end
 
+	local deduped_shell_batch = {}
+	local shell_seen = {}
+	for _, item in ipairs(shell_batch) do
+		local key = item.tc.name .. "\0" .. item.cmd
+		local existing = shell_seen[key]
+		if existing then
+			existing.duplicates = existing.duplicates or {}
+			existing.duplicates[#existing.duplicates + 1] = item.index
+		else
+			shell_seen[key] = item
+			deduped_shell_batch[#deduped_shell_batch + 1] = item
+		end
+	end
+	shell_batch = deduped_shell_batch
+
 	local results = {}
+	local deduped_other_batch = {}
+	local read_seen = {}
+	local recent_read_keys = context.recent_read_keys or {}
+	for _, item in ipairs(other_batch) do
+		local key = read_call_key(item.tc, context)
+		if key and read_seen[key] then
+			results[item.index] = duplicate_read_result(read_seen[key])
+		elseif key and recent_read_keys[key] then
+			results[item.index] = already_read_result(recent_read_keys[key])
+		else
+			if key then
+				read_seen[key] = item.index
+			end
+			deduped_other_batch[#deduped_other_batch + 1] = item
+		end
+	end
+	other_batch = deduped_other_batch
 
 	if #shell_batch > 1 then
 		local pending = #shell_batch
@@ -308,6 +397,9 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			spawn_and_collect(item.cmd, function(output, exit_code)
 				local result = format_result(item.tc.name, item.tc.args, output, exit_code)
 				results[item.index] = result
+				for _, duplicate_index in ipairs(item.duplicates or {}) do
+					results[duplicate_index] = result
+				end
 				if on_tool then
 					on_tool({ type = "tool", name = item.tc.name, args = item.tc.args, result = result })
 				end
@@ -324,6 +416,9 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		emit_start(on_tool, item.tc)
 		local result = registry.execute(item.tc.name, item.tc.args, context)
 		results[item.index] = result
+		for _, duplicate_index in ipairs(item.duplicates or {}) do
+			results[duplicate_index] = result
+		end
 		if on_tool then
 			on_tool({ type = "tool", name = item.tc.name, args = item.tc.args, result = result })
 		end
@@ -333,6 +428,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	local read_targets = collect_read_targets(other_batch, context)
 	local edit_groups = collect_edit_groups(other_batch, context)
 	local completed_group_targets = {}
+	local read_batch_bytes = 0
 	for _, item in ipairs(other_batch) do
 		-- Check cancellation between sequential tool executions
 		if repl_ok and repl_mod.cancelled then break end
@@ -374,11 +470,19 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			result_emitted = true
 		elseif mutation_target and mutated_targets[mutation_target] then
 			result = stale_batch_result(mutation_target)
+		elseif tc.name == "read" and read_batch_bytes >= MAX_READ_BATCH_BYTES then
+			result = read_budget_result(MAX_READ_BATCH_BYTES)
 		else
 			emit_start(on_tool, tc)
 			result = registry.execute(tc.name, tc.args, context)
 			if mutation_target and result and not result.is_error then
 				mutated_targets[mutation_target] = true
+			end
+		end
+		if tc.name == "read" and result and not result.is_error and result.summary ~= "duplicate read" then
+			read_batch_bytes = read_batch_bytes + #(result.content or "")
+			if read_batch_bytes > MAX_READ_BATCH_BYTES then
+				result = read_budget_result(MAX_READ_BATCH_BYTES)
 			end
 		end
 		results[item.index] = result

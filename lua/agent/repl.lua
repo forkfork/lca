@@ -1,6 +1,9 @@
 local commands = require("agent.commands")
 local compaction = require("agent.compaction")
+local context_limits = require("agent.context_limits")
 local core = require("agent.core")
+local jobs = require("agent.jobs")
+local protocol = require("agent.tool_protocol")
 local session_module = require("agent.session")
 local ui = require("agent.ui")
 local socket = require("socket")
@@ -13,6 +16,7 @@ if not logo_ok then logo = nil end
 
 local repl = {}
 local history_path = ".lca-history"
+local AUTO_COMPACT_MIN_NEW_MESSAGES = tonumber(os.getenv("LCA_AUTO_COMPACT_MIN_NEW_MESSAGES") or "") or 10
 
 -- Cancellation state: set by SIGINT handler, checked by core loop
 repl.cancelled = false
@@ -131,6 +135,7 @@ function repl.run(options)
 	local session = session_module.create(options)
 	ui.header(session, { animated_logo = (logo ~= nil) })
 	start_logo_animation()
+	local last_auto_compact_messages = 0
 
 	local function auto_load()
 		local ok, err = session:load()
@@ -142,6 +147,31 @@ function repl.run(options)
 	end
 
 	auto_load()
+	last_auto_compact_messages = #session.messages
+	if context_limits.auto_compact_threshold(session.model) > 0 and session:estimated_model_input_tokens_usage_aware() >= context_limits.auto_compact_threshold(session.model) then
+		last_auto_compact_messages = math.max(0, #session.messages - AUTO_COMPACT_MIN_NEW_MESSAGES)
+	end
+
+	jobs.prune(session.cwd)
+
+	local function running_jobs_summary(verb)
+		local running = jobs.running(session.cwd)
+		if #running == 0 then return end
+		if ui.background_jobs_summary then
+			ui.background_jobs_summary(running, verb)
+		else
+			local noun = #running == 1 and "background job" or "background jobs"
+			local parts = { tostring(#running) .. " " .. noun .. " " .. verb }
+			for _, job in ipairs(running) do
+				local display = jobs.display(job)
+				local port = display.port ~= "" and (" " .. display.port) or ""
+				parts[#parts + 1] = "  " .. display.id .. port .. " " .. display.label
+			end
+			ui.muted(table.concat(parts, "\n"))
+		end
+	end
+
+	running_jobs_summary("running")
 
 	local function auto_save()
 		if #session.messages > 0 then
@@ -151,6 +181,35 @@ function repl.run(options)
 			else
 				ui.error("auto-save failed: " .. (err or "unknown"))
 			end
+		end
+	end
+
+	local function exit_jobs_summary()
+		running_jobs_summary("still running")
+	end
+
+	local function maybe_auto_compact()
+		local auto_compact_tokens = context_limits.auto_compact_threshold(session.model)
+		if auto_compact_tokens <= 0 then return end
+		if #session.messages == 0 then return end
+		local new_messages = #session.messages - last_auto_compact_messages
+		if new_messages < AUTO_COMPACT_MIN_NEW_MESSAGES then return end
+		local tokens = session:estimated_model_input_tokens_usage_aware()
+		if tokens < auto_compact_tokens then return end
+
+		ui.model_progress("compacting session  ~" .. tostring(math.floor(tokens / 1000)) .. "k / ~" .. tostring(math.floor(auto_compact_tokens / 1000)) .. "k tokens")
+		local ok, compacted, msgs_removed, new_tokens = pcall(function()
+			return compaction.compact(session, { bypass_threshold = true })
+		end)
+		if not ok then
+			ui.error("auto-compact failed: " .. tostring(compacted))
+			last_auto_compact_messages = #session.messages
+		elseif compacted then
+			ui.compaction(msgs_removed, new_tokens)
+			last_auto_compact_messages = #session.messages
+		else
+			ui.muted("auto-compact skipped")
+			last_auto_compact_messages = #session.messages
 		end
 	end
 
@@ -166,6 +225,7 @@ function repl.run(options)
 			pcall(function() ln.editstop() end)
 			io.write("\n")
 			auto_save()
+			exit_jobs_summary()
 			sigint:stop()
 			sigint:close()
 			os.exit(0)
@@ -179,6 +239,7 @@ function repl.run(options)
 			stop_logo_animation()
 			io.write("\n")
 			auto_save()
+			exit_jobs_summary()
 			return
 		end
 
@@ -188,6 +249,7 @@ function repl.run(options)
 				local command_result = commands.dispatch(line, session, ui)
 				if command_result == true then
 					auto_save()
+					exit_jobs_summary()
 					return
 				elseif command_result == "run" then
 					line = ""
@@ -202,7 +264,7 @@ function repl.run(options)
 
 			if line ~= nil and (line ~= "" or session.messages[#session.messages]) then
 				ui.turn_separator(session)
-				ui.thinking(#session.messages)
+				ui.thinking(#session.messages, "thinking")
 
 				local token_count = 0
 				local first_token = true
@@ -211,10 +273,108 @@ function repl.run(options)
 				local in_tool_call = false
 				local in_thinking = false
 				local has_seen_tool_call = false
+				local turn_has_seen_tool_call = false
 				local stream_buf = ""
 				local stream_seen = ""
 				local spinner_active = true
 				local tool_header_shown = false
+				local early_tool_announced = false
+				local hidden_tool_bytes = 0
+				local hidden_tool_last_report = 0
+				local hidden_tool_name = nil
+				local planned_tool_names = {}
+				local planned_tool_seen = {}
+				local planned_tool_scan_pos = 1
+				local live_model_progress = false
+				local live_model_progress_text = nil
+				local live_model_progress_timer = nil
+				local live_model_progress_last_token_at = 0
+				local LIVE_PROGRESS_STALE_AFTER = 0.6
+
+				local function live_model_progress_color()
+					if live_model_progress_last_token_at > 0 and socket.gettime() - live_model_progress_last_token_at <= LIVE_PROGRESS_STALE_AFTER then
+						return "green"
+					end
+					return "orange"
+				end
+
+				local function stop_live_model_progress_timer()
+					if not live_model_progress_timer then return end
+					if not live_model_progress_timer:is_closing() then
+						live_model_progress_timer:stop()
+						live_model_progress_timer:close()
+					end
+					live_model_progress_timer = nil
+				end
+
+				local function ensure_live_model_progress_timer()
+					if live_model_progress_timer then return end
+					live_model_progress_timer = uv.new_timer()
+					live_model_progress_timer:start(120, 120, function()
+						if not live_model_progress or not live_model_progress_text then
+							stop_live_model_progress_timer()
+							return
+						end
+						ui.model_progress_live(live_model_progress_text, live_model_progress_color())
+					end)
+				end
+
+				local function show_model_progress_live(text)
+					live_model_progress_text = text
+					ui.model_progress_live(text, live_model_progress_color())
+					live_model_progress = true
+					ensure_live_model_progress_timer()
+				end
+
+				local function clear_live_model_progress()
+					if not live_model_progress then return end
+					stop_live_model_progress_timer()
+					ui.clear_model_progress()
+					live_model_progress = false
+					live_model_progress_text = nil
+					live_model_progress_last_token_at = 0
+				end
+
+				local function write_visible(text)
+					if not text or text == "" then return end
+					clear_live_model_progress()
+					io.write(text)
+					io.flush()
+				end
+
+				local function planned_tool_label()
+					local limit = math.min(#planned_tool_names, 5)
+					local visible = {}
+					for i = 1, limit do
+						visible[#visible + 1] = planned_tool_names[i]
+					end
+					local text = table.concat(visible, ", ")
+					if #planned_tool_names > limit then
+						text = text .. ", +" .. tostring(#planned_tool_names - limit)
+					end
+					if #planned_tool_names == 1 then
+						return "planning tool: " .. text
+					end
+					return "planning tools: " .. text
+				end
+
+				local function scan_planned_tools()
+					local changed = false
+					while true do
+						local start_at, end_at, name = stream_seen:find('<tool_call%s+name%s*=%s*"([^"]+)"', planned_tool_scan_pos)
+						if not start_at then break end
+						planned_tool_scan_pos = end_at + 1
+						if name and name ~= "" and not planned_tool_seen[name] then
+							planned_tool_seen[name] = true
+							planned_tool_names[#planned_tool_names + 1] = name
+							changed = true
+						end
+					end
+					if changed then
+						show_model_progress_live(planned_tool_label())
+						early_tool_announced = true
+					end
+				end
 
 				local function inside_fenced_code(pos)
 					local in_fence = false
@@ -244,6 +404,34 @@ function repl.run(options)
 					end
 				end
 
+				local function compact_bytes(bytes)
+					if bytes < 1024 then
+						return tostring(bytes) .. "B"
+					end
+					return string.format("%.1fkB", bytes / 1024)
+				end
+
+				local function expects_large_tool_args(name)
+					return name == "edit" or name == "write" or name == "run" or name == "shell"
+				end
+
+				local function note_hidden_tool_progress(delta)
+					if not delta or delta == "" then return end
+					scan_planned_tools()
+					if not hidden_tool_name then
+						hidden_tool_name = stream_seen:match('<tool_call%s+name%s*=%s*"([^"]+)"')
+					end
+					if not expects_large_tool_args(hidden_tool_name) then
+						return
+					end
+					hidden_tool_bytes = hidden_tool_bytes + #delta
+					if early_tool_announced and hidden_tool_bytes - hidden_tool_last_report >= 2048 then
+						local name = hidden_tool_name or "tool"
+						show_model_progress_live("receiving " .. name .. " args... " .. compact_bytes(hidden_tool_bytes))
+						hidden_tool_last_report = hidden_tool_bytes
+					end
+				end
+
 				local function on_token(text)
 					if spinner_active then
 						ui.clear_thinking()
@@ -254,6 +442,7 @@ function repl.run(options)
 						first_token = false
 					end
 					token_count = token_count + 1
+					live_model_progress_last_token_at = socket.gettime()
 
 					if ui.is_debug() then
 						io.write(text)
@@ -264,6 +453,10 @@ function repl.run(options)
 					-- Filter out <tool_call name="...">, <thinking>, and post-tool-call text.
 					stream_buf = stream_buf .. text
 					stream_seen = stream_seen .. text
+					scan_planned_tools()
+					if in_tool_call then
+						note_hidden_tool_progress(text)
+					end
 
 					-- Accumulate at least 20 chars before processing to avoid
 					-- splitting tags across flushes. The longest prefix we need
@@ -279,6 +472,9 @@ function repl.run(options)
 							if close then
 								stream_buf = stream_buf:sub(close + 12)
 								in_tool_call = false
+								hidden_tool_name = nil
+								hidden_tool_bytes = 0
+								hidden_tool_last_report = 0
 							else
 								if #stream_buf > 12 then
 									stream_buf = stream_buf:sub(-12)
@@ -296,7 +492,7 @@ function repl.run(options)
 								end
 								break
 							end
-						elseif has_seen_tool_call then
+						elseif has_seen_tool_call or turn_has_seen_tool_call then
 							stream_buf = ""
 							break
 						else
@@ -317,16 +513,19 @@ function repl.run(options)
 
 							if first_tag == "tool_call" then
 								if first_pos > 1 then
-									io.write(stream_buf:sub(1, first_pos - 1))
-									io.flush()
+									write_visible(stream_buf:sub(1, first_pos - 1))
 								end
 								has_seen_tool_call = true
+								turn_has_seen_tool_call = true
 								stream_buf = stream_buf:sub(first_pos)
 								in_tool_call = true
+								hidden_tool_name = stream_buf:match('<tool_call%s+name%s*=%s*"([^"]+)"')
+								hidden_tool_bytes = 0
+								hidden_tool_last_report = 0
+								note_hidden_tool_progress(stream_buf)
 							elseif first_tag == "thinking" then
 								if first_pos > 1 then
-									io.write(stream_buf:sub(1, first_pos - 1))
-									io.flush()
+									write_visible(stream_buf:sub(1, first_pos - 1))
 								end
 								stream_buf = stream_buf:sub(first_pos)
 								in_thinking = true
@@ -355,16 +554,14 @@ function repl.run(options)
 										is_prefix = true
 									end
 									if is_prefix then
-										io.write(stream_buf:sub(1, last_lt - 1))
-										io.flush()
+										write_visible(stream_buf:sub(1, last_lt - 1))
 										stream_buf = tail
 										break
 									end
 								end
 
 								-- No partial tag — flush everything
-								io.write(stream_buf)
-								io.flush()
+								write_visible(stream_buf)
 								stream_buf = ""
 							end
 						end
@@ -376,6 +573,8 @@ function repl.run(options)
 						ui.clear_thinking()
 						spinner_active = false
 					end
+					clear_live_model_progress()
+					ui.clear_model_progress()
 					if not tool_header_shown then
 						ui.tool_header()
 						tool_header_shown = true
@@ -383,17 +582,34 @@ function repl.run(options)
 					ui.tool(event)
 				end
 
-				local function on_thinking()
+				local function on_thinking(info)
 					if tool_header_shown then
 						ui.tool_summary()
 						tool_header_shown = false
 					end
-					ui.thinking(#session.messages)
+					if info and info.status then
+						ui.model_progress(info.status)
+					end
+					local tool_count_text = "tool results"
+					if info and info.tools and info.tools >= 4 then
+						tool_count_text = tostring(info.tools) .. " tool results"
+					end
+					ui.thinking(#session.messages, "reviewing " .. tool_count_text)
 					spinner_active = true
 					in_tool_call = false
 					in_thinking = false
 					has_seen_tool_call = false
 					stream_buf = ""
+					early_tool_announced = false
+					hidden_tool_bytes = 0
+					hidden_tool_last_report = 0
+					hidden_tool_name = nil
+					planned_tool_names = {}
+					planned_tool_seen = {}
+					planned_tool_scan_pos = 1
+					live_model_progress = false
+					live_model_progress_text = nil
+					stop_live_model_progress_timer()
 				end
 
 				repl.busy = true
@@ -402,11 +618,11 @@ function repl.run(options)
 					return core.run_session(session, on_token, on_tool, on_thinking)
 				end)
 				repl.busy = false
+				stop_live_model_progress_timer()
 
 				-- Flush any held-back partial content from the stream filter
-				if #stream_buf > 0 and not has_seen_tool_call and not in_tool_call and not in_thinking then
-					io.write(stream_buf)
-					io.flush()
+				if #stream_buf > 0 and not has_seen_tool_call and not turn_has_seen_tool_call and not in_tool_call and not in_thinking then
+					write_visible(stream_buf)
 				end
 				stream_buf = ""
 
@@ -429,10 +645,15 @@ function repl.run(options)
 						ui.clear_thinking()
 						spinner_active = false
 					end
-					if not first_token and has_seen_tool_call and result.text ~= "" then
-						io.write(result.text)
-						io.write(result.text:sub(-1) == "\n" and "" or "\n")
+					if not first_token and turn_has_seen_tool_call and result.text ~= "" then
+						local visible_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text))
+						if visible_text ~= "" then
+							clear_live_model_progress()
+							io.write(visible_text)
+							io.write(visible_text:sub(-1) == "\n" and "" or "\n")
+						end
 					elseif not first_token and result.text:sub(-1) ~= "\n" then
+						clear_live_model_progress()
 						io.write("\n")
 					end
 					if tool_header_shown then
@@ -444,11 +665,7 @@ function repl.run(options)
 					end
 					session:add_assistant(result.text)
 
-					-- Check if compaction is needed
-					local compacted, msgs_removed, new_tokens = compaction.compact(session)
-					if compacted then
-						ui.compaction(msgs_removed, new_tokens)
-					end
+					maybe_auto_compact()
 
 					io.write("\n")
 				else
@@ -456,6 +673,7 @@ function repl.run(options)
 						io.write("\n")
 					else
 						ui.clear_thinking()
+						io.write("\n")
 					end
 					-- Don't show error if it was a cancellation
 					if not tostring(result):find("cancelled") then

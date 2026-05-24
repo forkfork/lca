@@ -3,8 +3,9 @@ local path = require("agent.util.path")
 
 local read = {}
 
-local DEFAULT_LIMIT = 2000
-local MAX_LIMIT = 2000
+local DEFAULT_LIMIT = tonumber(os.getenv("LCA_READ_DEFAULT_LIMIT") or "") or 160
+local MAX_LIMIT = tonumber(os.getenv("LCA_READ_MAX_LIMIT") or "") or 300
+local MAX_BYTES = tonumber(os.getenv("LCA_READ_MAX_BYTES") or "") or 12000
 
 local function split_lines(text)
 	local lines = {}
@@ -70,23 +71,46 @@ function read.execute(args, context)
 
 	local lines = split_lines(content)
 	local offset = math.floor(math.max(1, tonumber(args.offset) or 1))
-	local limit = math.floor(math.min(MAX_LIMIT, math.max(1, tonumber(args.limit) or DEFAULT_LIMIT)))
+	local requested_limit = math.floor(math.max(1, tonumber(args.limit) or DEFAULT_LIMIT))
+	local limit = math.floor(math.min(MAX_LIMIT, requested_limit))
 	local last = math.min(#lines, offset + limit - 1)
 	local output = {}
+	local bytes = 0
+	local limit_capped = requested_limit > MAX_LIMIT
+	local byte_capped = false
+	if offset > #lines then
+		last = offset - 1
+	end
 	for index = offset, last do
 		local tag = line_tag(index, lines[index])
-		output[#output + 1] = string.format("%d:%s: %s", index, tag, lines[index])
+		local line = string.format("%d:%s: %s", index, tag, lines[index])
+		if #output > 0 and bytes + #line + 1 > MAX_BYTES then
+			last = index - 1
+			byte_capped = true
+			break
+		end
+		output[#output + 1] = line
+		bytes = bytes + #line + 1
 	end
 
-	local suffix = ""
+	local suffixes = {}
 	if last < #lines then
-		suffix = "\n[truncated: showing lines " .. offset .. "-" .. last .. " of " .. #lines .. "]"
+		suffixes[#suffixes + 1] = "[truncated: showing lines " .. offset .. "-" .. last .. " of " .. #lines .. "]"
 	end
+	if limit_capped then
+		suffixes[#suffixes + 1] = "[read capped: requested " .. requested_limit .. " lines, max " .. MAX_LIMIT .. "]"
+	end
+	if byte_capped then
+		suffixes[#suffixes + 1] = "[read capped: output reached " .. MAX_BYTES .. " bytes; use smaller offset/limit chunks]"
+	end
+	local suffix = #suffixes > 0 and ("\n" .. table.concat(suffixes, "\n")) or ""
+	local shown_lines = math.max(0, last - offset + 1)
+	local capped = limit_capped or byte_capped
 
 	return {
 		is_error = false,
 		content = table.concat(output, "\n") .. suffix,
-		summary = tostring(last - offset + 1) .. " lines",
+		summary = tostring(shown_lines) .. " lines" .. (capped and ", capped" or ""),
 	}
 end
 

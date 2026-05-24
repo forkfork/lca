@@ -58,6 +58,20 @@ test("basic write with raw content", function()
 	assert_eq(calls[1].args._raw_content, "local x = 1")
 end)
 
+test("read tool result records requested range", function()
+	local message = protocol.tool_result_message("read", {
+		is_error = false,
+		content = "1:abcd: hello",
+	}, {
+		path = "app.lua",
+		offset = 10,
+		limit = 20,
+	})
+	assert(message:find('path="app.lua"', 1, true), "missing path attr")
+	assert(message:find('offset="10"', 1, true), "missing offset attr")
+	assert(message:find('limit="20"', 1, true), "missing limit attr")
+end)
+
 test("rejects raw content with </tool_call> literal", function()
 	local text = '<tool_call name="write">\n{"path":"test.lua"}\nlocal close = text:find("</tool_call>")\n</tool_call>'
 	local calls = protocol.extract_all_tool_calls(text)
@@ -137,6 +151,46 @@ test("extra close tag after non-raw tool does not create raw content", function(
 	local ok, err = protocol.validate_tool_calls(calls)
 	if not ok then
 		error("expected valid read call, got: " .. tostring(err))
+	end
+end)
+
+test("extra close tags after raw edit are ignored", function()
+	local text = table.concat({
+		'<tool_call name="edit">',
+		'{"path":"fake_tmux.py","start_line":1,"start_tag":"aaaa","end_line":2,"end_tag":"bbbb"}',
+		'line one',
+		'line two',
+		'</tool_call>',
+		'</tool_call>',
+		'',
+	}, "\n")
+	local calls = protocol.extract_all_tool_calls(text)
+	assert_eq(#calls, 1)
+	assert_eq(calls[1].name, "edit")
+	assert_eq(calls[1].args._raw_content, "line one\nline two")
+	local ok, err = protocol.validate_tool_calls(calls)
+	if not ok then
+		error("expected extra trailing close tag to be ignored, got: " .. tostring(err))
+	end
+end)
+
+test("extra close tags and trailing prose after raw edit are ignored", function()
+	local text = table.concat({
+		'<tool_call name="edit">',
+		'{"path":"fake_tmux.py","start_line":1,"start_tag":"aaaa","end_line":2,"end_tag":"bbbb"}',
+		'line one',
+		'line two',
+		'</tool_call>',
+		'</tool_call>',
+		'Tool call failed before execution because the message contained malformed tool markup.',
+	}, "\n")
+	local calls = protocol.extract_all_tool_calls(text)
+	assert_eq(#calls, 1)
+	assert_eq(calls[1].name, "edit")
+	assert_eq(calls[1].args._raw_content, "line one\nline two")
+	local ok, err = protocol.validate_tool_calls(calls)
+	if not ok then
+		error("expected extra trailing close tag and prose to be ignored, got: " .. tostring(err))
 	end
 end)
 

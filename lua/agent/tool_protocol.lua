@@ -38,6 +38,60 @@ local function contains_tool_protocol_tag(text)
 		and (text:find("<tool_call", 1, true) or text:find("</tool_call>", 1, true))
 end
 
+local function only_extra_close_tags(text)
+	text = tostring(text or "")
+	local pos = 1
+	while true do
+		local non_ws = text:find("%S", pos)
+		if not non_ws then
+			return true
+		end
+		if text:sub(non_ws, non_ws + 11) ~= "</tool_call>" then
+			return false
+		end
+		pos = non_ws + 12
+	end
+end
+
+local function extra_close_tags_then_prose(text)
+	text = tostring(text or "")
+	local pos = 1
+	local consumed = false
+	while true do
+		local non_ws = text:find("%S", pos)
+		if not non_ws then
+			return consumed
+		end
+		if text:sub(non_ws, non_ws + 11) ~= "</tool_call>" then
+			local rest = text:sub(non_ws)
+			return consumed and not contains_tool_protocol_tag(rest)
+		end
+		consumed = true
+		pos = non_ws + 12
+	end
+end
+
+local function find_close_tag_before_boundary(text, after_pos, boundary)
+	local closes = {}
+	local pos = after_pos
+	while true do
+		local found = text:find("</tool_call>", pos)
+		if not found or found >= boundary then break end
+		closes[#closes + 1] = found
+		pos = found + 12
+	end
+	if #closes == 0 then
+		return nil
+	end
+	for _, found in ipairs(closes) do
+		local suffix = text:sub(found + 12, boundary - 1)
+		if only_extra_close_tags(suffix) or extra_close_tags_then_prose(suffix) then
+			return found
+		end
+	end
+	return closes[#closes]
+end
+
 -- Find the JSON metadata and optional raw content inside a tool_call tag.
 -- Returns: json_body, json_end_pos, raw_content (or nil), close_tag_pos
 --
@@ -97,24 +151,14 @@ local function extract_json_body(text, start_pos, tool_name)
 		return json_body, first_close, nil, close_tag
 	end
 
-	-- Find the ACTUAL closing </tool_call> — the LAST one before the next
-	-- <tool_call opens (or end of text). If raw content contains tool-call
-	-- tags, this intentionally treats the rest as one malformed call so the
-	-- core can reject the response without executing a partial interpretation.
+	-- Find the ACTUAL closing </tool_call>. Literal tool-call tags inside raw
+	-- content remain part of the content and are rejected later, but extra
+	-- trailing close tags after a completed call are ignored.
 	local search_from = first_close + 1
 	local next_open = text:find("<tool_call%s+name", search_from)
 	local boundary = next_open or (#text + 1)
 
-	-- Find the last </tool_call> before the boundary
-	local close_tag = nil
-	local pos = search_from
-	while true do
-		local found = text:find("</tool_call>", pos)
-		if not found or found >= boundary then break end
-		close_tag = found
-		pos = found + 12
-	end
-
+	local close_tag = find_close_tag_before_boundary(text, search_from, boundary)
 	if not close_tag then
 		close_tag = #text + 1
 	end
@@ -217,19 +261,11 @@ function protocol.count_tool_calls(text)
 	return count
 end
 
--- Find the real </tool_call> close tag — the LAST one before the next <tool_call opens.
+-- Find the real </tool_call> close tag before the next <tool_call opens.
 local function find_close_tag(text, after_pos)
 	local next_open = text:find("<tool_call%s+name", after_pos)
 	local boundary = next_open or (#text + 1)
-	local last_close = nil
-	local pos = after_pos
-	while true do
-		local found = text:find("</tool_call>", pos)
-		if not found or found >= boundary then break end
-		last_close = found
-		pos = found + 12
-	end
-	return last_close
+	return find_close_tag_before_boundary(text, after_pos, boundary)
 end
 
 function protocol.strip_tool_calls(text)
@@ -292,6 +328,14 @@ function protocol.tool_result_message(name, result, args)
 	if args then
 		if args.path then
 			header = header .. ' path="' .. args.path .. '"'
+		end
+		if name == "read" then
+			if args.offset then
+				header = header .. ' offset="' .. tostring(args.offset) .. '"'
+			end
+			if args.limit then
+				header = header .. ' limit="' .. tostring(args.limit) .. '"'
+			end
 		end
 		if args.command then
 			header = header .. ' command="' .. args.command .. '"'

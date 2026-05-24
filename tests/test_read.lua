@@ -74,6 +74,43 @@ run_test("read output uses full-line tags", function()
 	assert_contains(result.content, "2:" .. tag_b .. ": " .. prefix .. "y")
 end)
 
+run_test("read caps oversized line requests", function()
+	local path = tmp_dir .. "/many-lines.txt"
+	local lines = {}
+	for i = 1, 500 do
+		lines[#lines + 1] = "line " .. i
+	end
+	write_file(path, table.concat(lines, "\n") .. "\n")
+
+	local result = read_tool.execute({ path = path, limit = 1000 }, { cwd = tmp_dir })
+	if result.is_error then
+		error(result.content)
+	end
+
+	assert_contains(result.summary, "300 lines, capped")
+	assert_contains(result.content, "[read capped: requested 1000 lines, max 300]")
+	if result.content:find("\n301:", 1, true) then
+		error("read should not return beyond the capped line count")
+	end
+end)
+
+run_test("read caps oversized byte output", function()
+	local path = tmp_dir .. "/wide-lines.txt"
+	local lines = {}
+	for i = 1, 80 do
+		lines[#lines + 1] = string.rep("x", 500)
+	end
+	write_file(path, table.concat(lines, "\n") .. "\n")
+
+	local result = read_tool.execute({ path = path, limit = 80 }, { cwd = tmp_dir })
+	if result.is_error then
+		error(result.content)
+	end
+
+	assert_contains(result.summary, "capped")
+	assert_contains(result.content, "[read capped: output reached 12000 bytes; use smaller offset/limit chunks]")
+end)
+
 os.execute("rm -rf " .. string.format("%q", tmp_dir))
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")

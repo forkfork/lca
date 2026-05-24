@@ -115,7 +115,7 @@ Useful REPL commands:
 /model gpt-5.5
 /reasoning low
 /explain
-/clear
+/clear                clear the current and saved session
 /exit
 ```
 

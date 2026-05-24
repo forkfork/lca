@@ -33,6 +33,9 @@ lua/agent/
     codex.lua              OpenAI/Codex Responses API provider
     bedrock.lua            AWS Bedrock provider
 
+  net/
+    http_transport.lua     small HTTPS/HTTP/1.1 streaming transport for Codex
+
   system_prompt.lua        builds the prompt from tools and project context
   project_context.lua      loads AGENTS.md / CLAUDE.md instructions
   project_index.lua        lightweight project file index for the prompt
@@ -175,6 +178,20 @@ caches credentials by mtime and refreshes expired credentials through a
 Session model selection is provider-aware. If the user leaves the default model
 in place and the credentials are for Bedrock, `session.lua` uses the model stored
 in the credentials file or a Bedrock default.
+
+### Provider Transport
+
+Codex uses the internal `agent.net.http_transport` module instead of spawning
+`curl`. The transport is intentionally narrow: HTTPS, HTTP/1.1, POST,
+`Connection: close`, `Accept-Encoding: identity`, fixed request
+`Content-Length`, chunked response decoding, bounded response diagnostics, and
+structured connect/TLS/write/first-byte/idle/total deadlines. It streams SSE
+chunks to `agent.providers.codex`, which parses response deltas and preserves the
+existing `complete(request, on_token)` provider contract.
+
+Bedrock currently still uses `curl` as a subprocess transport. That code remains
+provider-local in `agent.providers.bedrock`; the core loop and tool execution
+layers do not depend on either transport choice.
 
 ## MCP Integration
 

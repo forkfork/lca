@@ -253,6 +253,126 @@ run_test("emits start events only for potentially slow tools", function()
 	assert_eq(#events, 3)
 end)
 
+run_test("deduplicates identical shell tool calls in one batch", function()
+	local events = {}
+	local calls = {
+		{ name = "ls", args = { path = tmp_dir } },
+		{ name = "ls", args = { path = tmp_dir } },
+	}
+
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir }, function(event)
+		events[#events + 1] = {
+			name = event.name,
+			phase = event.phase or "result",
+		}
+	end)
+
+	assert_eq(results[1].is_error, false, "first ls should succeed")
+	assert_eq(results[2].is_error, false, "duplicate ls should receive reused result")
+	assert_eq(results[1].content, results[2].content, "duplicate result content should match")
+	assert_eq(events[1].name, "ls")
+	assert_eq(events[1].phase, "start")
+	assert_eq(events[2].name, "ls")
+	assert_eq(events[2].phase, "result")
+	assert_eq(#events, 2)
+end)
+
+run_test("deduplicates identical read tool calls in one batch", function()
+	local path = tmp_dir .. "/dedupe-read.txt"
+	write_file(path, "one\ntwo\nthree\n")
+	local events = {}
+	local calls = {
+		{ name = "read", args = { path = path, offset = 1, limit = 2 } },
+		{ name = "read", args = { path = path, offset = 1, limit = 2 } },
+	}
+
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir }, function(event)
+		events[#events + 1] = {
+			name = event.name,
+			phase = event.phase or "result",
+			summary = event.result and event.result.summary,
+		}
+	end)
+
+	assert_eq(results[1].is_error, false, "first read should succeed")
+	assert_eq(results[2].is_error, false, "duplicate read should receive marker result")
+	assert_contains(results[1].content, "1:")
+	assert_eq(results[2].summary, "duplicate read")
+	assert_contains(results[2].content, "same result as tool call #1")
+	assert_eq(#events, 1, "duplicate read should not emit a second result event")
+	assert_eq(events[1].name, "read")
+	assert_eq(events[1].summary, "2 lines")
+end)
+
+run_test("skips exact read already visible in recent context", function()
+	local path = tmp_dir .. "/already-read.txt"
+	write_file(path, "one\ntwo\nthree\n")
+	local key = path .. "\0" .. "1" .. "\0" .. "2"
+	local events = {}
+
+	local results = parallel.execute_batch({
+		{ name = "read", args = { path = path, offset = 1, limit = 2 } },
+	}, {
+		cwd = tmp_dir,
+		recent_read_keys = {
+			[key] = { message_index = 12 },
+		},
+	}, function(event)
+		events[#events + 1] = event
+	end)
+
+	assert_eq(results[1].is_error, false)
+	assert_eq(results[1].summary, "already in context")
+	assert_contains(results[1].content, "message #12")
+	assert_eq(#events, 0, "already-visible read should not emit a tool event")
+end)
+
+run_test("executes different read range even when file was recently read", function()
+	local path = tmp_dir .. "/different-read-range.txt"
+	write_file(path, "one\ntwo\nthree\n")
+	local key = path .. "\0" .. "1" .. "\0" .. "1"
+
+	local results = parallel.execute_batch({
+		{ name = "read", args = { path = path, offset = 2, limit = 1 } },
+	}, {
+		cwd = tmp_dir,
+		recent_read_keys = {
+			[key] = { message_index = 12 },
+		},
+	})
+
+	assert_eq(results[1].is_error, false)
+	assert_eq(results[1].summary, "1 lines")
+	assert_contains(results[1].content, "2:")
+end)
+
+run_test("caps total read output in one batch", function()
+	local path_a = tmp_dir .. "/read-budget-a.txt"
+	local path_b = tmp_dir .. "/read-budget-b.txt"
+	local wide = string.rep("x", 500)
+	local lines = {}
+	for _ = 1, 80 do
+		lines[#lines + 1] = wide
+	end
+	write_file(path_a, table.concat(lines, "\n") .. "\n")
+	write_file(path_b, table.concat(lines, "\n") .. "\n")
+
+	local calls = {
+		{ name = "read", args = { path = path_a, offset = 1, limit = 80 } },
+		{ name = "read", args = { path = path_b, offset = 1, limit = 80 } },
+		{ name = "read", args = { path = path_a, offset = 20, limit = 80 } },
+	}
+
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir })
+
+	assert_eq(results[1].is_error, false, "first read should succeed")
+	assert_eq(results[2].is_error, false, "second read should succeed or be capped quietly")
+	assert_eq(results[3].is_error, false, "budget cap should be non-error")
+	assert_eq(results[3].summary, "read budget reached")
+	assert_eq(results[3].ui_state, "deferred")
+	assert_contains(results[3].content, "Read batch output budget reached")
+end)
+
 os.execute("rm -rf " .. shell.quote(tmp_dir))
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")

@@ -3,6 +3,11 @@ local read = require("agent.tools.read")
 local edit = require("agent.tools.edit")
 local find_tool = require("agent.tools.find")
 local grep = require("agent.tools.grep")
+local job_output = require("agent.tools.job_output")
+local job_start = require("agent.tools.job_start")
+local job_status = require("agent.tools.job_status")
+local job_stop = require("agent.tools.job_stop")
+local job_wait = require("agent.tools.job_wait")
 local run = require("agent.tools.run")
 local write = require("agent.tools.write")
 local mcp = require("agent.mcp")
@@ -13,6 +18,11 @@ local tools = {
 	edit = edit,
 	find = find_tool,
 	grep = grep,
+	job_output = job_output,
+	job_start = job_start,
+	job_status = job_status,
+	job_stop = job_stop,
+	job_wait = job_wait,
 	ls = ls,
 	read = read,
 	run = run,
@@ -40,7 +50,7 @@ function registry.is_valid(name)
 end
 
 function registry.names()
-	local names = { "ls", "read", "find", "grep", "edit", "write", "run" }
+	local names = { "ls", "read", "find", "grep", "edit", "write", "run", "job_start", "job_status", "job_output", "job_stop", "job_wait" }
 	for _, t in ipairs(mcp_tools) do
 		names[#names + 1] = "mcp__" .. t._server .. "__" .. t.name
 	end
@@ -113,6 +123,10 @@ For tools that DON'T write file content, args go in JSON:
 {"command":"lua /tmp/hello.lua"}
 </tool_call>
 
+<tool_call name="job_start">
+{"command":"lua tests/test_tool_writes.lua"}
+</tool_call>
+
 For edit and write, put ONLY metadata in JSON. File content goes as RAW TEXT after the JSON line — NO escaping, NO quoting, just the literal code:
 
 <tool_call name="edit">
@@ -139,22 +153,38 @@ To delete lines, leave the content empty (nothing after the JSON line):
 
 ## Available tools
 - ls: list directory entries. Args: path (optional).
-- read: read a text file. Args: path (required), offset (optional, 1-indexed line), limit (optional, line count, default 2000).
+- read: read a focused text-file slice. Args: path (required), offset (optional, 1-indexed line), limit (optional, line count, default 160, max 300). For larger files, read targeted chunks instead of the whole file.
 - find: list files recursively. Args: path (optional), maxDepth (optional), pattern (optional, e.g. "*.lua").
 - grep: search file contents. Args: pattern (required), path (optional), glob (optional).
 - edit: replace lines in a file. JSON args: path, start_line, start_tag, end_line, end_tag. Raw content after JSON replaces all lines in the range. Tags are the 4-char CAS codes from read output (e.g. "10:Q8fA: code here") — they verify the file hasn't changed.
 - write: create or overwrite a file. JSON args: path. Raw content after JSON becomes the file. Parent directories are created automatically.
 - run: execute a shell command. Args: command, timeout (optional, milliseconds, default 120000). stdout+stderr captured.
+- job_start: start a long-running shell command as a durable job. Args: command (required), cwd (optional), timeout (optional, milliseconds), temporary (optional boolean). Returns a job id immediately. Do not set timeout for servers, watchers, or dev processes unless the user explicitly asks for one.
+- job_status: inspect a durable job. Args: id (required).
+- job_output: read bounded job output. Args: id (required), stream (optional stdout/stderr), tail (optional lines), offset (optional byte offset), limit (optional bytes), search (optional literal text).
+- job_stop: stop a durable job's process group. Args: id (required).
+- job_wait: wait briefly for a durable job. Args: id (required), timeout or timeout_ms (optional, milliseconds, default 1000), tail (optional stdout lines).
 
 ## Strategy
 
-- When you read a file, read the WHOLE thing (omit the limit arg). Don't use small limits like 50 or 100 — it wastes tool calls. One full read is better than three partial reads.
-- For "describe/explain this project": find to see the tree, then read the key files fully. File names tell you a lot.
-- For "how does X work": read the specific file(s). Use grep to locate them if needed.
+- Prefer targeted reads. Use grep/find first, then read only relevant ranges with `offset` and `limit`. For files likely under ~300 lines, a default read is fine. For larger files, read narrow sections unless the user explicitly asks for the whole file.
+- For "describe/explain this project": find to see the tree, then read key manifests/docs first. Read large source files in focused sections.
+- For "how does X work": use grep to locate relevant symbols, then read the specific nearby section(s).
 - For edits: read the target file, make the change. Don't read unrelated files.
 - You may batch multiple edits to the same file only when the line ranges are non-overlapping and all edits use tags from a previous read output already visible in this conversation. They are applied bottom-to-top so line numbers stay valid. If edits overlap or depend on earlier edits, make one edit, re-read, then continue.
 - Batch independent tool calls in one message — they run in parallel.
 - Do NOT batch read with edit/write for the same file. Same-message tool results are unavailable to other tool calls, so read first, wait for the result, then edit in the next turn.
+- Use run for short commands that should block until completion. Use job_start for long-running commands such as dev servers, watchers, slow test suites, or commands you may need to inspect or stop later.
+- For servers, watchers, and dev processes, call job_start without timeout. Use timeout only for bounded jobs expected to finish.
+- For curl, prefer `curl -sS -i URL` so output is readable and does not include the progress meter.
+
+## Git safety
+
+- Treat a dirty git worktree as user-owned. Do not stage, commit, discard, or rewrite unrelated changes.
+- For commits: inspect status, identify the intended files, stage explicit reviewed paths only, run `git diff --cached --stat` and `git diff --cached --check`, then commit.
+- Do NOT use broad staging (`git add -A`, `git add .`, `git add -u`, `git commit -am`) unless the user explicitly asks to commit every dirty change. Prefer `git add path1 path2`.
+- If `git diff --check` reports whitespace in files outside the intended commit, stop and report it. Do not fix unrelated files just to make a commit pass.
+- Push only after the commit succeeds and the user asked to push.
 
 ## Rules
 
