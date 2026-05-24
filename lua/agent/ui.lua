@@ -127,7 +127,7 @@ end
 
 -- ─── ASCII Banner ───────────────────────────────────────────────────────────
 
-local BANNER_SUB = "  lua coding absurdity"
+local BANNER_SUB = "  lua coding agent"
 
 ui.header_lines = 0
 
@@ -587,11 +587,11 @@ local function limited_lines(value, opts)
 			truncated = true
 			break
 		end
-		line = line:gsub("\t", "    ")
-		if #line > max_width then
-			line = line:sub(1, max_width - 3) .. "..."
+		local l = line:gsub("\t", "    ")
+		if #l > max_width then
+			l = l:sub(1, max_width - 3) .. "..."
 		end
-		lines[#lines + 1] = line
+		lines[#lines + 1] = l
 	end
 	if truncated then
 		lines[#lines + 1] = "..."
@@ -934,3 +934,4 @@ function ui.status(session)
 end
 
 return ui
+

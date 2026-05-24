@@ -1,4 +1,4 @@
-# lca - lua coding absurdity
+# lca - lua coding agent
 
 lca is a small Lua coding tool for people who want the moving parts to be
 boring and visible.

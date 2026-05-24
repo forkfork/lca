@@ -4,6 +4,13 @@ local config = require("agent.config")
 
 local bedrock = {}
 
+local function debug_log(fmt, ...)
+	local ok, core = pcall(require, "agent.core")
+	if ok and core.debug_log then
+		core.debug_log(fmt, ...)
+	end
+end
+
 local function load_credentials(path)
 	local providers = require("agent.providers")
 	local body = providers.credentials_body(path)
@@ -146,6 +153,13 @@ local function sign_request(method, uri_path, host, body, creds)
 	return authorization, now
 end
 
+local MIN_CACHE_TOKENS = 1024
+local CHARS_PER_TOKEN_ESTIMATE = 4
+
+local function estimate_tokens(text)
+	return math.ceil(#(text or "") / CHARS_PER_TOKEN_ESTIMATE)
+end
+
 local function build_request_body(request)
 	local messages = {}
 	for _, msg in ipairs(request.messages or {}) do
@@ -160,6 +174,37 @@ local function build_request_body(request)
 		end
 	end
 
+	-- Place a cachePoint after the last stable turn prefix.
+	-- The system prompt gets its own cachePoint, and we add one more
+	-- after the longest prefix of conversation turns whose cumulative
+	-- tokens exceed the minimum cache threshold.
+	local cache_points_used = 0
+	local MAX_CACHE_POINTS = 5
+
+	if #messages >= 2 and cache_points_used < MAX_CACHE_POINTS then
+		local cumulative_chars = 0
+		local cache_boundary = nil
+		-- Walk turns: only place the cache point after a completed
+		-- assistant+user pair (i.e., not including the final user message
+		-- that triggers this request).
+		local boundary_limit = #messages - 1
+		for i = 1, boundary_limit do
+			local msg = messages[i]
+			for _, block in ipairs(msg.content) do
+				cumulative_chars = cumulative_chars + #(block.text or "")
+			end
+			-- Place after a user message (completes a turn pair)
+			if msg.role == "user" and i > 1 then
+				cache_boundary = i
+			end
+		end
+		if cache_boundary and cumulative_chars >= MIN_CACHE_TOKENS * CHARS_PER_TOKEN_ESTIMATE then
+			local target = messages[cache_boundary]
+			target.content[#target.content + 1] = { cachePoint = { type = "default" } }
+			cache_points_used = cache_points_used + 1
+		end
+	end
+
 	local body = {
 		messages = messages,
 		inferenceConfig = {
@@ -170,6 +215,10 @@ local function build_request_body(request)
 
 	if request.system_prompt then
 		body.system = { { text = request.system_prompt } }
+		if estimate_tokens(request.system_prompt) >= MIN_CACHE_TOKENS and cache_points_used < MAX_CACHE_POINTS then
+			body.system[#body.system + 1] = { cachePoint = { type = "default" } }
+			cache_points_used = cache_points_used + 1
+		end
 	end
 
 	return json.encode(body)
@@ -299,6 +348,7 @@ local function do_complete(request, on_token)
 	local last_tool_call_end = 0
 	local POST_TOOL_THRESHOLD = 40
 	local stream_error = nil
+	local usage = nil
 
 	stdout_pipe:read_start(function(err, data)
 		if err then
@@ -366,6 +416,21 @@ local function do_complete(request, on_token)
 							return
 						end
 					end
+				end
+			elseif event_type == "metadata" and payload ~= "" then
+				local usage_json = json.field(payload, "usage")
+				if usage_json then
+					local input_tokens = json.number_field(usage_json, "inputTokens") or 0
+					local output_tokens = json.number_field(usage_json, "outputTokens") or 0
+					local cache_read = json.number_field(usage_json, "cacheReadInputTokens") or 0
+					local cache_write = json.number_field(usage_json, "cacheWriteInputTokens") or 0
+					usage = {
+						prompt_tokens = input_tokens,
+						output_tokens = output_tokens,
+						cached_tokens = cache_read,
+						cache_write_tokens = cache_write,
+						total_tokens = input_tokens + output_tokens,
+					}
 				end
 			elseif (event_type == "modelStreamErrorException" or event_type == "internalServerException") and payload ~= "" then
 				stream_error = json.field(payload, "message") or json.field(payload, "originalMessage") or payload:sub(1, 300)
@@ -438,6 +503,7 @@ local function do_complete(request, on_token)
 
 	return {
 		text = full_text,
+		_usage = usage,
 	}
 end
 
@@ -448,6 +514,12 @@ function bedrock.complete(request, on_token)
 		local ok, result = pcall(do_complete, request, on_token)
 
 		if ok then
+			if result._usage then
+				local u = result._usage
+				local pct = u.prompt_tokens > 0 and (u.cached_tokens / u.prompt_tokens * 100) or 0
+				debug_log("[bedrock] usage input=%d output=%d cache_read=%d cache_write=%d cached=%.1f%%",
+					u.prompt_tokens, u.output_tokens, u.cached_tokens, u.cache_write_tokens or 0, pct)
+			end
 			return result
 		end
 
