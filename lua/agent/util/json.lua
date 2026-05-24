@@ -140,7 +140,7 @@ local function fuzzy_extract_fields(body)
 		if ws_end then pos = ws_end + 1 end
 		if pos > len then break end
 
-		local key_start, key_end, key = inner:find('^"([^"]+)"%s*:%s*', pos)
+			local _, key_end, key = inner:find('^"([^"]+)"%s*:%s*', pos)
 		if not key then break end
 
 		-- If this is NOT a short field, it's a long field — stop here
@@ -187,7 +187,7 @@ local function fuzzy_extract_fields(body)
 	-- Try to find two long fields by locating the boundary between them.
 	-- The boundary looks like: ","newText": or ", "newText": (after oldText value ends)
 	-- Strategy: find the LAST occurrence of ,"newText": or ,"oldText": as a split point
-	local first_key_start, first_key_end, first_key = remaining:find('^"([^"]+)"%s*:%s*')
+		local _, first_key_end, first_key = remaining:find('^"([^"]+)"%s*:%s*')
 	if first_key and LONG_FIELDS[first_key] then
 		local after_first_key = first_key_end + 1
 
@@ -195,9 +195,7 @@ local function fuzzy_extract_fields(body)
 		-- Pattern: ...","nextKey":  — we search for ","oldText": or ","newText": or ","content":
 		local second_key_pattern = ',%s*"(oldText)"%s*:%s*'
 		local second_key_pattern2 = ',%s*"(newText)"%s*:%s*'
-		local second_key_pattern3 = ',%s*"(content)"%s*:%s*'
-
-		local split_pos, split_end, second_key = nil, nil, nil
+			local split_pos, split_end, second_key = nil, nil, nil
 
 		-- For edit tool: if first key is oldText, look for newText boundary
 		-- For edit tool: if first key is newText, look for oldText boundary (unusual order)

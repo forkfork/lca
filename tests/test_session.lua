@@ -125,13 +125,13 @@ end)
 
 run_test("system prompt is frozen for cache stability", function()
 	local path = tmp_dir .. "/session-system-prompt.json"
-	local project_dir = tmp_dir .. "/project"
-	os.execute("mkdir -p " .. shell.quote(project_dir))
+	local cache_project_dir = tmp_dir .. "/project"
+	os.execute("mkdir -p " .. shell.quote(cache_project_dir))
 	local first = session_module.create({ session_id = "lca-test-session" })
-	first.cwd = project_dir
+	first.cwd = cache_project_dir
 
 	local prompt_before = first:get_system_prompt()
-	local file = io.open(project_dir .. "/pyproject.toml", "w")
+	local file = io.open(cache_project_dir .. "/pyproject.toml", "w")
 	assert(file)
 	file:write("[project]\nname = \"later\"\n")
 	file:close()

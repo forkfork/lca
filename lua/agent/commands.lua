@@ -92,7 +92,10 @@ end
 
 local function format_context_report(session, limit)
 	limit = math.max(1, math.min(tonumber(limit) or 8, 30))
-	local usage_tokens, usage_estimate = session.estimated_model_input_tokens_usage_aware and session:estimated_model_input_tokens_usage_aware() or nil
+	local usage_tokens, usage_estimate
+	if session.estimated_model_input_tokens_usage_aware then
+		usage_tokens, usage_estimate = session:estimated_model_input_tokens_usage_aware()
+	end
 	local session_tokens = session:estimated_session_tokens()
 	local system_tokens = session:estimated_system_prompt_tokens()
 	local mcp_prompt_tokens = session:estimated_mcp_prompt_tokens()

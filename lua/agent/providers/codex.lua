@@ -11,8 +11,10 @@ local MAX_RETRIES = tonumber(os.getenv("LCA_CODEX_MAX_RETRIES") or "") or 2
 local INITIAL_BACKOFF_SEC = 1
 local FIRST_BYTE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_FIRST_BYTE_TIMEOUT") or "") or 45
 local IDLE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_IDLE_TIMEOUT") or "") or 60
-local TOTAL_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_TOTAL_TIMEOUT") or "") or 130
+local TOTAL_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_TOTAL_TIMEOUT") or "") or 600
 local POST_TOOL_THRESHOLD = tonumber(os.getenv("LCA_CODEX_POST_TOOL_THRESHOLD") or "") or 800
+local MAX_OUTPUT_TEXT_CHARS = tonumber(os.getenv("LCA_CODEX_MAX_OUTPUT_TEXT_CHARS") or "") or 200000
+local MAX_SSE_LINE_BYTES = tonumber(os.getenv("LCA_CODEX_MAX_SSE_LINE_BYTES") or "") or 262144
 local PROMPT_CACHE_KEY_OVERRIDE = os.getenv("LCA_CODEX_PROMPT_CACHE_KEY")
 local DEFAULT_SERVICE_TIER = os.getenv("LCA_CODEX_DEFAULT_SERVICE_TIER") or "priority"
 local DUMP_REQUEST_DIR = os.getenv("LCA_CODEX_DUMP_REQUEST_DIR")
@@ -20,6 +22,10 @@ local LOG_RAW_USAGE = os.getenv("LCA_CODEX_LOG_RAW_USAGE") == "1"
 
 local CLOSE_TOOL_CALL = "</tool_call>"
 local CLOSE_TOOL_CALL_LEN = #CLOSE_TOOL_CALL
+local RAW_CONTENT_TOOLS = {
+	edit = true,
+	write = true,
+}
 local last_prefix_hashes_by_key = {}
 local dump_counter = 0
 
@@ -390,34 +396,130 @@ local function usage_from_payload(payload)
 	}
 end
 
-local function sse_parser(on_delta, on_usage)
+local function compact_sample(text, max_len)
+	text = tostring(text or "")
+	text = text:gsub("\r", "\\r"):gsub("\n", "\\n")
+	text = text:gsub("[%z\1-\8\11\12\14-\31\127]", "?")
+	max_len = max_len or 1200
+	if #text > max_len then
+		return text:sub(1, max_len) .. "...[" .. tostring(#text) .. " chars]"
+	end
+	return text
+end
+
+local function new_sse_stats()
+	return {
+		body_chunks = 0,
+		body_bytes = 0,
+		lines = 0,
+		data_lines = 0,
+		output_deltas = 0,
+		output_delta_bytes = 0,
+		usage_events = 0,
+		json_type_missing = 0,
+		json_payload_errors = 0,
+		non_data_lines = 0,
+		line_buffer_bytes = 0,
+		max_line_bytes = 0,
+		event_types = {},
+		sample_types = {},
+		last_payload_sample = "",
+	}
+end
+
+local function note_event_type(stats, event_type)
+	event_type = tostring(event_type or "(missing)")
+	stats.event_types[event_type] = (stats.event_types[event_type] or 0) + 1
+	if #stats.sample_types < 8 then
+		for _, seen in ipairs(stats.sample_types) do
+			if seen == event_type then
+				return
+			end
+		end
+		stats.sample_types[#stats.sample_types + 1] = event_type
+	end
+end
+
+local function format_event_type_counts(stats)
+	local pairs_list = {}
+	for event_type, count in pairs(stats.event_types or {}) do
+		pairs_list[#pairs_list + 1] = { event_type = event_type, count = count }
+	end
+	table.sort(pairs_list, function(a, b)
+		if a.count == b.count then
+			return a.event_type < b.event_type
+		end
+		return a.count > b.count
+	end)
+	local limit = math.min(#pairs_list, 10)
+	local parts = {}
+	for i = 1, limit do
+		parts[#parts + 1] = pairs_list[i].event_type .. "=" .. tostring(pairs_list[i].count)
+	end
+	if #pairs_list > limit then
+		parts[#parts + 1] = "+" .. tostring(#pairs_list - limit) .. " more"
+	end
+	return #parts > 0 and table.concat(parts, ",") or "(none)"
+end
+
+local function sse_parser(on_delta, on_usage, on_abort, stats)
 	local line_buffer = ""
+	stats = stats or new_sse_stats()
 	return function(chunk)
+		stats.body_chunks = stats.body_chunks + 1
+		stats.body_bytes = stats.body_bytes + #chunk
 		line_buffer = line_buffer .. chunk
+		stats.line_buffer_bytes = #line_buffer
+		if #line_buffer > MAX_SSE_LINE_BYTES then
+			if on_abort then
+				on_abort("sse_line_too_large", #line_buffer)
+			end
+			return false
+		end
 		while true do
 			local pos = line_buffer:find("\n", 1, true)
 			if not pos then
+				stats.line_buffer_bytes = #line_buffer
 				return
 			end
 			local line = line_buffer:sub(1, pos - 1):gsub("\r$", "")
 			line_buffer = line_buffer:sub(pos + 1)
+			stats.lines = stats.lines + 1
+			stats.max_line_bytes = math.max(stats.max_line_bytes, #line)
 			local payload = line:match("^data:%s*(.+)$")
 			if payload then
+				stats.data_lines = stats.data_lines + 1
+				stats.last_payload_sample = compact_sample(payload, 500)
 				local event_type = json.field(payload, "type")
+				if event_type then
+					note_event_type(stats, event_type)
+				else
+					stats.json_type_missing = stats.json_type_missing + 1
+					local ok = pcall(json.decode, payload)
+					if not ok then
+						stats.json_payload_errors = stats.json_payload_errors + 1
+					end
+					note_event_type(stats, "(missing)")
+				end
 				if on_usage then
 					local usage = usage_from_payload(payload)
 					if usage then
+						stats.usage_events = stats.usage_events + 1
 						on_usage(usage)
 					end
 				end
 				if event_type == "response.output_text.delta" then
 					local delta = json.field(payload, "delta")
 					if delta and delta ~= "" then
+						stats.output_deltas = stats.output_deltas + 1
+						stats.output_delta_bytes = stats.output_delta_bytes + #delta
 						if on_delta(delta) == false then
 							return false
 						end
 					end
 				end
+			elseif line ~= "" then
+				stats.non_data_lines = stats.non_data_lines + 1
 			end
 		end
 	end
@@ -435,6 +537,32 @@ local function timing_summary(timings)
 		timings.first_byte and string.format("%.3f", timings.first_byte) or "never",
 		timings.headers and string.format("%.3f", timings.headers) or "unknown",
 		timings.total and string.format("%.3f", timings.total) or "unknown"
+	)
+end
+
+local function transport_diagnostics_summary(diag)
+	if not diag then
+		return "(none)"
+	end
+	local function seconds(value)
+		return value and string.format("%.3f", tonumber(value) or 0) or "unknown"
+	end
+	return string.format(
+		"elapsed=%s since_last_progress=%s first_byte=%s deadline=%s wait_phase=%s wait_mode=%s read_buffer=%d body_chunks=%d last_body_chunk_bytes=%d last_body_chunk_age=%s http_chunk_index=%d last_http_chunk_size=%d transfer=%s content_length_remaining=%s",
+		seconds(diag.elapsed),
+		seconds(diag.since_last_progress),
+		tostring(diag.first_byte_seen == true),
+		tostring(diag.wait_deadline_kind or "unknown"),
+		tostring(diag.wait_phase or "unknown"),
+		tostring(diag.wait_mode or "unknown"),
+		tonumber(diag.read_buffer_bytes) or 0,
+		tonumber(diag.body_chunks) or 0,
+		tonumber(diag.last_body_chunk_bytes) or 0,
+		seconds(diag.last_body_chunk_at),
+		tonumber(diag.http_chunk_index) or 0,
+		tonumber(diag.last_http_chunk_size) or 0,
+		tostring(diag.transfer_encoding or "unknown"),
+		tostring(diag.content_length_remaining or "unknown")
 	)
 end
 
@@ -483,13 +611,131 @@ local function canonical_tool_text(text)
 	return text
 end
 
+local function complete_tool_calls_prefix(text)
+	text = tostring(text or "")
+	local parts = {}
+	local search_from = 1
+
+	while true do
+		local tag_start, tag_end, name = text:find('<tool_call%s+name="([^"]+)"%s*>', search_from)
+		if not tag_start then
+			break
+		end
+		local close = nil
+		if RAW_CONTENT_TOOLS[name] then
+			local next_open = text:find("<tool_call%s+name", tag_end + 1)
+			local boundary = next_open or (#text + 1)
+			local close_search_from = tag_end + 1
+			while true do
+				local candidate = text:find(CLOSE_TOOL_CALL, close_search_from, true)
+				if not candidate or candidate >= boundary then
+					break
+				end
+				local suffix = text:sub(candidate + CLOSE_TOOL_CALL_LEN, boundary - 1)
+				if suffix:gsub(CLOSE_TOOL_CALL, ""):match("^%s*$") then
+					close = candidate
+					break
+				end
+				close_search_from = candidate + CLOSE_TOOL_CALL_LEN
+			end
+		else
+			close = text:find(CLOSE_TOOL_CALL, tag_end + 1, true)
+		end
+		if not close then
+			break
+		end
+		parts[#parts + 1] = text:sub(tag_start, close + CLOSE_TOOL_CALL_LEN - 1)
+		search_from = close + CLOSE_TOOL_CALL_LEN
+	end
+
+	return table.concat(parts, "\n")
+end
+
+local function valid_complete_tool_calls_text(text)
+	local ok, protocol = pcall(require, "agent.tool_protocol")
+	if not ok or not protocol.extract_all_tool_calls or not protocol.validate_tool_calls then
+		return nil, 0, "tool protocol unavailable"
+	end
+
+	local calls = protocol.extract_all_tool_calls(text or "")
+	if #calls == 0 then
+		return nil, 0, "no complete tool calls"
+	end
+	local valid, validation_err = protocol.validate_tool_calls(calls)
+	if not valid then
+		return nil, #calls, validation_err or "invalid tool calls"
+	end
+	return text, #calls, nil
+end
+
+local function salvage_partial_tool_response(chunks, transport_err)
+	local partial = table.concat(chunks or {})
+	if partial == "" then
+		return nil
+	end
+
+	local complete = complete_tool_calls_prefix(partial)
+	local valid_text, call_count, validation_err = valid_complete_tool_calls_text(complete)
+	if not valid_text then
+		if complete ~= "" then
+			debug_log("[codex] partial tool salvage rejected calls=%d reason=%s chars=%d",
+				tonumber(call_count) or 0,
+				tostring(validation_err),
+				#complete
+			)
+		end
+		return nil
+	end
+
+	local trailing_chars = math.max(0, #partial - #valid_text)
+	debug_log("[codex] salvaged partial tool response chars=%d->%d calls=%d trailing_chars=%d after %s/%s",
+		#partial,
+		#valid_text,
+		call_count,
+		trailing_chars,
+		tostring(transport_err and transport_err.kind or "unknown"),
+		tostring(transport_err and transport_err.phase or "unknown")
+	)
+	if transport_err and transport_err.diagnostics then
+		debug_log("[codex] partial salvage transport diagnostics %s",
+			transport_diagnostics_summary(transport_err.diagnostics)
+		)
+	end
+	return valid_text, call_count
+end
+
+local function log_sse_stats(prefix, stats, body_tail)
+	if not stats then return end
+	debug_log("[codex] stream stats %s chunks=%d body_bytes=%d lines=%d data_lines=%d non_data_lines=%d output_deltas=%d output_delta_bytes=%d usage_events=%d type_missing=%d json_errors=%d line_buffer=%d max_line=%d event_types=\"%s\" sample_types=\"%s\" last_payload=\"%s\" body_tail=\"%s\"",
+		prefix or "",
+		tonumber(stats.body_chunks) or 0,
+		tonumber(stats.body_bytes) or 0,
+		tonumber(stats.lines) or 0,
+		tonumber(stats.data_lines) or 0,
+		tonumber(stats.non_data_lines) or 0,
+		tonumber(stats.output_deltas) or 0,
+		tonumber(stats.output_delta_bytes) or 0,
+		tonumber(stats.usage_events) or 0,
+		tonumber(stats.json_type_missing) or 0,
+		tonumber(stats.json_payload_errors) or 0,
+		tonumber(stats.line_buffer_bytes) or 0,
+		tonumber(stats.max_line_bytes) or 0,
+		format_event_type_counts(stats),
+		table.concat(stats.sample_types or {}, ","),
+		compact_sample(stats.last_payload_sample or "", 700),
+		compact_sample(body_tail or "", 700)
+	)
+end
+
 local function do_complete(request, credentials, body, on_token)
 	local chunks = {}
+	local sse_stats = new_sse_stats()
 	local full_stream = ""
 	local tool_call_seen = false
 	local tool_call_closed = false
 	local last_tool_call_end = 0
 	local cutoff = false
+	local abort_reason = nil
 	local usage = nil
 	local result, err = transport.request({
 		host = request.host or CODEX_HOST,
@@ -505,6 +751,15 @@ local function do_complete(request, credentials, body, on_token)
 		on_body_chunk = sse_parser(function(delta)
 			chunks[#chunks + 1] = delta
 			full_stream = full_stream .. delta
+			if #full_stream > MAX_OUTPUT_TEXT_CHARS then
+				abort_reason = "output_text_too_large"
+				debug_log("[codex] stream cutoff reason=%s response_chars=%d threshold=%d",
+					abort_reason,
+					#full_stream,
+					MAX_OUTPUT_TEXT_CHARS
+				)
+				return false
+			end
 			if on_token then
 				on_token(delta)
 			end
@@ -535,13 +790,37 @@ local function do_complete(request, credentials, body, on_token)
 				end
 		end, function(next_usage)
 			usage = next_usage
-		end),
+		end, function(reason, size)
+			abort_reason = reason
+			debug_log("[codex] stream cutoff reason=%s buffered_bytes=%d threshold=%d",
+				tostring(reason),
+				tonumber(size) or 0,
+				MAX_SSE_LINE_BYTES
+			)
+		end, sse_stats),
 	})
 
 	if err then
+		local salvaged_text, salvaged_calls = salvage_partial_tool_response(chunks, err)
+		if salvaged_text then
+			return {
+				status = err.status or 200,
+				text = salvaged_text,
+				response_bytes = err.response_bytes or 0,
+				body_tail = err.body_tail or "",
+				timings = err.timings,
+				usage = usage,
+				early_cutoff = true,
+				partial_salvage = true,
+				partial_salvaged_calls = salvaged_calls,
+				sse_stats = sse_stats,
+			}
+		end
 		err.text_chunks = chunks
+		err.sse_stats = sse_stats
 		return nil, err
 	end
+	result.sse_stats = sse_stats
 	result.text = table.concat(chunks)
 	if cutoff or tool_call_seen then
 		local canonical = canonical_tool_text(result.text)
@@ -555,6 +834,7 @@ local function do_complete(request, credentials, body, on_token)
 	end
 	result.usage = usage
 	result.early_cutoff = cutoff
+	result.abort_reason = abort_reason
 	return result
 end
 
@@ -584,6 +864,15 @@ function codex.complete(request, on_token)
 				result.response_bytes or 0,
 				timing_summary(result.timings)
 			)
+			if result.partial_salvage then
+				debug_log("[codex] attempt %d used salvaged partial tool response calls=%d",
+					attempt + 1,
+					tonumber(result.partial_salvaged_calls) or 0
+				)
+			end
+			if result.sse_stats and ((result.sse_stats.output_deltas or 0) == 0 or LOG_RAW_USAGE) then
+				log_sse_stats("success", result.sse_stats, result.body_tail)
+			end
 			if result.usage then
 				local prompt_tokens = tonumber(result.usage.prompt_tokens) or 0
 				local cached_tokens = tonumber(result.usage.cached_tokens) or 0
@@ -625,6 +914,8 @@ function codex.complete(request, on_token)
 				else
 					error("Codex HTTP error " .. tostring(result.status) .. ": " .. body_tail:sub(1, 500))
 				end
+			elseif result.abort_reason then
+				error("Codex stream aborted: " .. tostring(result.abort_reason))
 			elseif result.text == "" and body_tail ~= "" then
 				if is_auth_error(body_tail) then
 					invalidate_credentials_cache()
@@ -645,6 +936,8 @@ function codex.complete(request, on_token)
 					_http_status = result.status,
 					_timings = result.timings,
 					_response_bytes = result.response_bytes,
+					_partial_salvage = result.partial_salvage or nil,
+					_partial_salvaged_calls = result.partial_salvaged_calls,
 				}
 			end
 		else
@@ -656,22 +949,25 @@ function codex.complete(request, on_token)
 				tostring(err.phase or "unknown"),
 				tostring(err.detail)
 			)
-			debug_log("[codex] attempt %d failed: %s response_bytes=%d timing=%s",
+			local body_tail = tostring(err.body_tail or "")
+			debug_log("[codex] attempt %d failed: %s response_bytes=%d streamed_text_chunks=%d body_tail_bytes=%d timing=%s transport=%s",
 				attempt + 1,
 				last_error,
 				err.response_bytes or 0,
-				timing_summary(err.timings)
+				#streamed_chunks,
+				#body_tail,
+				timing_summary(err.timings),
+				transport_diagnostics_summary(err.diagnostics)
 			)
+			log_sse_stats("failure", err.sse_stats, body_tail)
 
 			if err.kind == "cancelled" then
 				error("cancelled")
 			end
 
-			local retryable_no_bytes = err.kind == "timeout"
-				and err.phase == "first_byte"
-				and (err.response_bytes or 0) == 0
+			local retryable_timeout_without_text = err.kind == "timeout"
 				and no_streamed_text
-			if not retryable_no_bytes or attempt >= max_retries then
+			if not retryable_timeout_without_text or attempt >= max_retries then
 				error(last_error)
 			end
 		end
@@ -692,8 +988,11 @@ end
 codex._request_body = request_body
 codex._input_json = input_json
 codex._canonical_tool_text = canonical_tool_text
+codex._complete_tool_calls_prefix = complete_tool_calls_prefix
+codex._salvage_partial_tool_response = salvage_partial_tool_response
 codex._post_tool_tail_kind = post_tool_tail_kind
 codex._should_cut_after_tool = should_cut_after_tool
+codex._default_deadlines = default_deadlines
 codex._prompt_cache_key = prompt_cache_key
 codex._usage_from_payload = usage_from_payload
 codex._headers = codex_headers

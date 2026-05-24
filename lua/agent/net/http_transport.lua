@@ -66,6 +66,7 @@ local Connection = {}
 Connection.__index = Connection
 
 function Connection:fail(kind, detail, phase)
+	local current = now()
 	error({
 		_transport_error = true,
 		kind = kind,
@@ -75,6 +76,22 @@ function Connection:fail(kind, detail, phase)
 		response_bytes = self.response_bytes,
 		status = self.status,
 		body_tail = self.body_tail,
+		diagnostics = {
+			elapsed = current - self.started_at,
+			since_last_progress = self.last_progress_at and (current - self.last_progress_at) or nil,
+			first_byte_seen = self.first_byte_at ~= nil,
+			read_buffer_bytes = #(self.read_buffer or ""),
+			body_chunks = self.body_chunks or 0,
+			last_body_chunk_bytes = self.last_body_chunk_bytes or 0,
+			last_body_chunk_at = self.last_body_chunk_at and (current - self.last_body_chunk_at) or nil,
+			http_chunk_index = self.http_chunk_index or 0,
+			last_http_chunk_size = self.last_http_chunk_size or 0,
+			transfer_encoding = self.transfer_encoding,
+			content_length_remaining = tonumber(self.content_length_remaining or ""),
+			wait_phase = self.wait_phase,
+			wait_mode = self.wait_mode,
+			wait_deadline_kind = self.wait_deadline_kind,
+		},
 	}, 0)
 end
 
@@ -83,6 +100,8 @@ function Connection:is_cancelled()
 end
 
 function Connection:wait(sock, mode, deadline, phase)
+	self.wait_phase = phase
+	self.wait_mode = mode
 	local fd = fd_for(sock)
 	if not fd then
 		self:fail("poll", "socket has no fd", phase)
@@ -313,11 +332,17 @@ function Connection:read_controlled(phase)
 		if not self.first_byte_at then
 			deadline = self.started_at + self.deadlines.first_byte
 			phase = "first_byte"
+			self.wait_deadline_kind = "first_byte"
 		else
-			deadline = math.min(
-				self.started_at + self.deadlines.total,
-				(self.last_progress_at or now()) + self.deadlines.idle
-			)
+			local total_deadline = self.started_at + self.deadlines.total
+			local idle_deadline = (self.last_progress_at or now()) + self.deadlines.idle
+			if total_deadline <= idle_deadline then
+				deadline = total_deadline
+				self.wait_deadline_kind = "total"
+			else
+				deadline = idle_deadline
+				self.wait_deadline_kind = "idle"
+			end
 		end
 		self:wait(self.sock, err == "wantwrite" and "write" or "read", deadline, phase)
 	end
@@ -413,6 +438,7 @@ end
 
 function Connection:next_body_chunk(headers)
 	local transfer = (headers["transfer-encoding"] or ""):lower()
+	self.transfer_encoding = transfer ~= "" and transfer or nil
 	if transfer:find("chunked", 1, true) then
 		local size_line = self:read_until("\r\n", "chunk_size", self.limits.line_bytes)
 		local hex = size_line:match("^%s*([0-9a-fA-F]+)")
@@ -424,11 +450,16 @@ function Connection:next_body_chunk(headers)
 			self:read_chunk_trailers()
 			return nil
 		end
+		self.http_chunk_index = (self.http_chunk_index or 0) + 1
+		self.last_http_chunk_size = size
 		local data = self:read_exact(size, "chunk_body")
 		local crlf = self:read_exact(2, "chunk_terminator")
 		if crlf ~= "\r\n" then
 			self:fail("chunked", "bad chunk terminator", "body")
 		end
+		self.body_chunks = (self.body_chunks or 0) + 1
+		self.last_body_chunk_bytes = #data
+		self.last_body_chunk_at = now()
 		return data
 	end
 
@@ -439,10 +470,20 @@ function Connection:next_body_chunk(headers)
 		end
 		local data = self:read_exact(content_length, "body")
 		headers["content-length"] = "0"
+		self.content_length_remaining = 0
+		self.body_chunks = (self.body_chunks or 0) + 1
+		self.last_body_chunk_bytes = #data
+		self.last_body_chunk_at = now()
 		return data
 	end
 
-	return self:read_controlled("body")
+	local data = self:read_controlled("body")
+	if data then
+		self.body_chunks = (self.body_chunks or 0) + 1
+		self.last_body_chunk_bytes = #data
+		self.last_body_chunk_at = now()
+	end
+	return data
 end
 
 local function header_lines(headers)
@@ -565,6 +606,10 @@ function transport.request(options)
 		read_buffer = "",
 		body_tail = "",
 		response_bytes = 0,
+		body_chunks = 0,
+		http_chunk_index = 0,
+		last_body_chunk_bytes = 0,
+		last_http_chunk_size = 0,
 	}, Connection)
 
 	local ok, result = pcall(function()

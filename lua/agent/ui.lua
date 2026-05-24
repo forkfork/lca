@@ -125,13 +125,6 @@ local function pad_right(value, width)
 	return value
 end
 
-local function truncate_text(value, width)
-	value = tostring(value or "")
-	if #value <= width then return value end
-	if width <= 3 then return value:sub(1, width) end
-	return value:sub(1, width - 3) .. "..."
-end
-
 -- ─── ASCII Banner ───────────────────────────────────────────────────────────
 
 local BANNER_SUB = "  lua coding absurdity"
@@ -785,11 +778,6 @@ local function note_tool_batch_event(event)
 	elseif event.result and event.result.is_error then
 		tool_failures = tool_failures + 1
 	end
-end
-
-local function is_deferred_tool_result(event)
-	local state = tool_safety_state(event)
-	return state == "deferred"
 end
 
 function ui.tool(event)

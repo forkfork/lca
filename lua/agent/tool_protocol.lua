@@ -187,12 +187,12 @@ local function extract_json_body(text, start_pos, tool_name)
 end
 
 function protocol.extract_tool_call(text)
-	local tag_start, tag_end, name = find_tool_open(text, 1)
+	local _, tag_end, name = find_tool_open(text, 1)
 	if not name then
 		return nil
 	end
 
-	local body, body_end, raw_content = extract_json_body(text, tag_end + 1, name)
+	local body, _, raw_content = extract_json_body(text, tag_end + 1, name)
 	if not body then
 		return nil
 	end
@@ -214,7 +214,7 @@ function protocol.extract_all_tool_calls(text)
 	local search_from = 1
 
 	while true do
-		local tag_start, tag_end, name = find_tool_open(text, search_from)
+		local _, tag_end, name = find_tool_open(text, search_from)
 		if not name then break end
 
 		local body, body_end, raw_content, close_tag = extract_json_body(text, tag_end + 1, name)

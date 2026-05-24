@@ -1,4 +1,3 @@
-local shell = require("agent.util.shell")
 local uv = require("luv")
 
 local run = {}
@@ -21,15 +20,11 @@ local function strip_curl_progress(output)
 	output = tostring(output or ""):gsub("\r", "\n")
 	local kept = {}
 	for line in (output .. "\n"):gmatch("(.-)\n") do
-		if line == "" and #kept == 0 then
-			-- skip leading blank progress fragments
-		elseif line:match("^%s*%% Total%s+%% Received") then
-			-- curl progress header
-		elseif line:match("^%s*Dload%s+Upload%s+Total%s+Spent") then
-			-- curl progress subheader
-		elseif line:match("^%s*%d+%s+%d+%s+%d+%s+%d+%s+%d+%s+%d+") and line:find("%-%-:%-%-:%-%-") then
-			-- curl progress row
-		else
+		local is_progress = (line == "" and #kept == 0)
+			or line:match("^%s*%% Total%s+%% Received")
+			or line:match("^%s*Dload%s+Upload%s+Total%s+Spent")
+			or (line:match("^%s*%d+%s+%d+%s+%d+%s+%d+%s+%d+%s+%d+") and line:find("%-%-:%-%-:%-%-"))
+		if not is_progress then
 			kept[#kept + 1] = line
 		end
 	end
@@ -147,13 +142,13 @@ function run.execute(args, context)
 		}
 	end
 
-	stdout_pipe:read_start(function(err, data)
+	stdout_pipe:read_start(function(_, data)
 		if data then
 			chunks[#chunks + 1] = data
 		end
 	end)
 
-	stderr_pipe:read_start(function(err, data)
+	stderr_pipe:read_start(function(_, data)
 		if data then
 			chunks[#chunks + 1] = data
 		end

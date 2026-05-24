@@ -97,7 +97,7 @@ end)
 run_test("read caps oversized byte output", function()
 	local path = tmp_dir .. "/wide-lines.txt"
 	local lines = {}
-	for i = 1, 80 do
+	for _ = 1, 80 do
 		lines[#lines + 1] = string.rep("x", 500)
 	end
 	write_file(path, table.concat(lines, "\n") .. "\n")

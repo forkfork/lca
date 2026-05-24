@@ -84,7 +84,7 @@ local function read_prompt()
 
 	-- Resume/pause animation based on buffer content
 	if logo_active then
-		ln.editsetchanged(function(buf, len)
+		ln.editsetchanged(function(_, len)
 			if len == 0 then
 				start_anim()
 			else
@@ -135,7 +135,7 @@ function repl.run(options)
 	local session = session_module.create(options)
 	ui.header(session, { animated_logo = (logo ~= nil) })
 	start_logo_animation()
-	local last_auto_compact_messages = 0
+	local last_auto_compact_messages
 
 	local function auto_load()
 		local ok, err = session:load()
@@ -278,10 +278,13 @@ function repl.run(options)
 				local stream_seen = ""
 				local spinner_active = true
 				local tool_header_shown = false
-				local early_tool_announced = false
 				local hidden_tool_bytes = 0
 				local hidden_tool_last_report = 0
 				local hidden_tool_name = nil
+				local hidden_tool_start_pos = nil
+				local hidden_tool_target = nil
+				local hidden_tool_last_label = nil
+				local hidden_tool_displayed = false
 				local planned_tool_names = {}
 				local planned_tool_seen = {}
 				local planned_tool_scan_pos = 1
@@ -372,7 +375,6 @@ function repl.run(options)
 					end
 					if changed then
 						show_model_progress_live(planned_tool_label())
-						early_tool_announced = true
 					end
 				end
 
@@ -415,20 +417,88 @@ function repl.run(options)
 					return name == "edit" or name == "write" or name == "run" or name == "shell"
 				end
 
+				local function unescape_json_fragment(value)
+					value = tostring(value or "")
+					value = value:gsub('\\"', '"'):gsub("\\\\", "\\")
+					return value
+				end
+
+				local function basename(value)
+					value = tostring(value or "")
+					return value:match("([^/]+)$") or value
+				end
+
+				local function hidden_tool_text()
+					if not hidden_tool_start_pos then
+						return stream_buf
+					end
+					return stream_seen:sub(hidden_tool_start_pos)
+				end
+
+				local function detect_hidden_tool_target()
+					if hidden_tool_target then
+						return hidden_tool_target
+					end
+					local text = hidden_tool_text()
+					local path_value = text:match('"path"%s*:%s*"([^"]+)"')
+					if path_value and path_value ~= "" then
+						hidden_tool_target = basename(unescape_json_fragment(path_value))
+						return hidden_tool_target
+					end
+					local command_value = text:match('"command"%s*:%s*"([^"]+)"')
+					if command_value and command_value ~= "" then
+						command_value = unescape_json_fragment(command_value):gsub("%s+", " "):gsub("^%s+", "")
+						if #command_value > 36 then
+							command_value = command_value:sub(1, 33) .. "..."
+						end
+						hidden_tool_target = command_value
+						return hidden_tool_target
+					end
+					return nil
+				end
+
+				local function hidden_tool_label()
+					local name = hidden_tool_name or "tool"
+					local target = detect_hidden_tool_target()
+					if target and target ~= "" then
+						return name .. " " .. target
+					end
+					return name
+				end
+
+				local function finish_hidden_tool_progress()
+					if expects_large_tool_args(hidden_tool_name) and hidden_tool_bytes >= 4096 then
+						clear_live_model_progress()
+						ui.model_progress("received " .. hidden_tool_label() .. "  " .. compact_bytes(hidden_tool_bytes))
+					end
+					hidden_tool_name = nil
+					hidden_tool_start_pos = nil
+					hidden_tool_target = nil
+					hidden_tool_last_label = nil
+					hidden_tool_displayed = false
+					hidden_tool_bytes = 0
+					hidden_tool_last_report = 0
+				end
+
 				local function note_hidden_tool_progress(delta)
 					if not delta or delta == "" then return end
 					scan_planned_tools()
 					if not hidden_tool_name then
-						hidden_tool_name = stream_seen:match('<tool_call%s+name%s*=%s*"([^"]+)"')
+						hidden_tool_name = hidden_tool_text():match('<tool_call%s+name%s*=%s*"([^"]+)"')
 					end
 					if not expects_large_tool_args(hidden_tool_name) then
 						return
 					end
 					hidden_tool_bytes = hidden_tool_bytes + #delta
-					if early_tool_announced and hidden_tool_bytes - hidden_tool_last_report >= 2048 then
-						local name = hidden_tool_name or "tool"
-						show_model_progress_live("receiving " .. name .. " args... " .. compact_bytes(hidden_tool_bytes))
+					local label = hidden_tool_label()
+					local should_report = not hidden_tool_displayed
+						or label ~= hidden_tool_last_label
+						or hidden_tool_bytes - hidden_tool_last_report >= 512
+					if should_report then
+						show_model_progress_live("receiving " .. label .. "... " .. compact_bytes(hidden_tool_bytes) .. " streamed")
 						hidden_tool_last_report = hidden_tool_bytes
+						hidden_tool_last_label = label
+						hidden_tool_displayed = true
 					end
 				end
 
@@ -472,9 +542,7 @@ function repl.run(options)
 							if close then
 								stream_buf = stream_buf:sub(close + 12)
 								in_tool_call = false
-								hidden_tool_name = nil
-								hidden_tool_bytes = 0
-								hidden_tool_last_report = 0
+								finish_hidden_tool_progress()
 							else
 								if #stream_buf > 12 then
 									stream_buf = stream_buf:sub(-12)
@@ -519,9 +587,12 @@ function repl.run(options)
 								turn_has_seen_tool_call = true
 								stream_buf = stream_buf:sub(first_pos)
 								in_tool_call = true
+								local buffer_start = #stream_seen - #stream_buf + 1
+								hidden_tool_start_pos = buffer_start
 								hidden_tool_name = stream_buf:match('<tool_call%s+name%s*=%s*"([^"]+)"')
 								hidden_tool_bytes = 0
 								hidden_tool_last_report = 0
+								hidden_tool_target = nil
 								note_hidden_tool_progress(stream_buf)
 							elseif first_tag == "thinking" then
 								if first_pos > 1 then
@@ -588,6 +659,7 @@ function repl.run(options)
 						tool_header_shown = false
 					end
 					if info and info.status then
+						ui.clear_model_progress()
 						ui.model_progress(info.status)
 					end
 					local tool_count_text = "tool results"
@@ -600,10 +672,13 @@ function repl.run(options)
 					in_thinking = false
 					has_seen_tool_call = false
 					stream_buf = ""
-					early_tool_announced = false
 					hidden_tool_bytes = 0
 					hidden_tool_last_report = 0
 					hidden_tool_name = nil
+					hidden_tool_start_pos = nil
+					hidden_tool_target = nil
+					hidden_tool_last_label = nil
+					hidden_tool_displayed = false
 					planned_tool_names = {}
 					planned_tool_seen = {}
 					planned_tool_scan_pos = 1

@@ -4,6 +4,7 @@ local parallel = require("agent.parallel")
 local protocol = require("agent.tool_protocol")
 local system_prompt = require("agent.system_prompt")
 local path_util = require("agent.util.path")
+local json = require("agent.util.json")
 
 local core = {}
 
@@ -138,6 +139,52 @@ local function read_key(path, offset, limit)
 		normalized_number(offset, 1),
 		normalized_number(limit, -1),
 	}, "\0")
+end
+
+local function tool_call_key(tc)
+	if not tc or not tc.name then
+		return nil
+	end
+	local args = tc.args or {}
+	local encoded_args = {}
+	for key, value in pairs(args) do
+		if key ~= "_raw_content" then
+			encoded_args[key] = value
+		end
+	end
+	local ok, encoded = pcall(json.encode, encoded_args)
+	if not ok then
+		encoded = tostring(tc.raw or "")
+	end
+	return table.concat({
+		tostring(tc.name),
+		tostring(encoded),
+		tostring(args._raw_content or ""),
+	}, "\0")
+end
+
+local function tool_calls_text(tool_calls)
+	local parts = {}
+	for _, tc in ipairs(tool_calls or {}) do
+		local args = {}
+		for key, value in pairs(tc.args or {}) do
+			if key ~= "_raw_content" then
+				args[key] = value
+			end
+		end
+		local ok, encoded = pcall(json.encode, args)
+		if not ok then
+			encoded = tc.raw or "{}"
+		end
+		parts[#parts + 1] = '<tool_call name="' .. tostring(tc.name) .. '">'
+		parts[#parts + 1] = encoded
+		local raw_content = tc.args and tc.args._raw_content
+		if raw_content ~= nil then
+			parts[#parts + 1] = tostring(raw_content)
+		end
+		parts[#parts + 1] = "</tool_call>"
+	end
+	return table.concat(parts, "\n")
 end
 
 local function recent_read_keys(session)
@@ -312,6 +359,21 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 
 		log("\n--- ASSISTANT RESPONSE ---")
 		log("%s", response.text)
+		if response._partial_salvage then
+			local salvaged_calls = tonumber(response._partial_salvaged_calls) or 0
+			log("[codex] using salvaged partial response tool_calls=%d response_bytes=%d",
+				salvaged_calls,
+				tonumber(response._response_bytes) or 0
+			)
+			if on_thinking then
+				on_thinking({
+					step = step,
+					messages = #session.messages,
+					tools = total_tool_executions,
+					status = "salvaged partial response  " .. tostring(salvaged_calls) .. " tools",
+				})
+			end
+		end
 
 		local raw_tool_calls = protocol.extract_all_tool_calls(response.text)
 		-- Filter out tool calls with invalid names (e.g. examples in prose)
@@ -358,7 +420,16 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 
 		-- Enforce tool budget and per-batch cap
 		local batch = {}
+		local seen_tool_calls = {}
 		for i, tc in ipairs(tool_calls) do
+			local key = tool_call_key(tc)
+			if key and seen_tool_calls[key] then
+				log("DUPLICATE TOOL CALL dropped at call %d/%d: %s", i, #tool_calls, tc.name)
+				goto continue_tool_call
+			end
+			if key then
+				seen_tool_calls[key] = true
+			end
 			total_tool_executions = total_tool_executions + 1
 			if total_tool_executions > MAX_TOOL_STEPS then
 				log("TOOL BUDGET HIT mid-batch at call %d/%d", i, #tool_calls)
@@ -369,6 +440,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				break
 			end
 			batch[#batch + 1] = tc
+			::continue_tool_call::
 		end
 		local read_only_batch = batch_is_read_only(batch)
 		if read_only_batch then
@@ -414,9 +486,10 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			end
 		else
 
-			-- Only store the tool call XML in the session — discard surrounding prose
-			-- which is pre-result speculation/hallucination
-			local clean_response = protocol.extract_only_tool_calls_text(response.text)
+			-- Only store the actually executed tool calls. The model can emit
+			-- duplicates or calls past the batch cap; keeping those in history
+			-- teaches the next turn the wrong continuation.
+			local clean_response = tool_calls_text(batch)
 
 			-- Execute tool calls (parallel for read-only, sequential for mutating)
 			session:add_assistant(clean_response)

@@ -71,6 +71,7 @@ function system_prompt.build(options)
 		"- Use run to verify code after writing or editing.",
 		"- NEVER ask for confirmation or permission. NEVER say \"Want me to...\", \"Shall I...\", \"Would you like me to...\". Just DO it. If the user asks you to do something, do it immediately with tools. No preamble, no asking.",
 		"- CRITICAL: If you emit ANY tool_call tags, your message must contain ONLY those tags — no text before, after, or between them. End your message immediately after the last </tool_call>. You will get results back and can respond then.",
+		"- After completing work, mention any important technical decision or tradeoff naturally, without a labeled note. Assume the user is technical; avoid generic reassurance.",
 		"- NEVER claim a file was read, changed, or tested unless a tool_result for that action is in the conversation.",
 		"- If a tool returns an error, acknowledge it. Do NOT pretend the operation succeeded.",
 		"- GROUNDING RULE: Every file path, line number, function name, and code snippet you cite MUST appear verbatim in a tool_result above. If you cannot find it in a tool_result, do not reference it. Do not cite paths like 'src/foo.lua' unless 'src/foo.lua' literally appeared in a find/ls/read result. When quoting code, copy-paste from the tool_result — never reconstruct from memory.",

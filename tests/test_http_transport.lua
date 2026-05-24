@@ -200,6 +200,27 @@ test("idle timeout after headers", function()
 	})
 	assert(not result)
 	assert(err.kind == "timeout")
+	assert(err.diagnostics)
+	assert(err.diagnostics.first_byte_seen == true)
+	assert((err.diagnostics.since_last_progress or 0) >= 0)
+	assert(err.diagnostics.wait_deadline_kind == "idle")
+end)
+
+test("chunk-size timeout reports transport diagnostics", function()
+	local result, err = request("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n", {
+		delay_after_headers = 0.2,
+		deadlines = { connect = 2, tls = 2, write = 2, first_byte = 2, idle = 0.05, total = 2 },
+	})
+	assert(not result)
+	assert(err.kind == "timeout")
+	assert(err.phase == "chunk_size")
+	assert(err.diagnostics)
+	assert(err.diagnostics.transfer_encoding == "chunked")
+	assert(err.diagnostics.first_byte_seen == true)
+	assert((err.diagnostics.since_last_progress or 0) >= 0)
+	assert((err.diagnostics.body_chunks or -1) == 0)
+	assert(err.diagnostics.wait_phase == "chunk_size")
+	assert(err.diagnostics.wait_deadline_kind == "idle")
 end)
 
 test("cancel waiting for first byte", function()

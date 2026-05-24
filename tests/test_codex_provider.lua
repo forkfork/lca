@@ -68,6 +68,61 @@ test("canonical tool text keeps multiple complete tool calls", function()
 	assert(canonical:find('"path":"README.md"', 1, true), "missing second call")
 end)
 
+test("partial salvage keeps only fully closed tool calls", function()
+	local partial = table.concat({
+		'<tool_call name="ls">',
+		'{"path":"."}',
+		"</tool_call>",
+		'<tool_call name="write">',
+		'{"path":"agent_flow_tui.py"}',
+		"#!/usr/bin/env python3",
+		"print('still streaming')",
+	}, "\n")
+	local salvaged = codex._complete_tool_calls_prefix(partial)
+	assert(salvaged:find('<tool_call name="ls">', 1, true), "missing complete ls call")
+	if salvaged:find("agent_flow_tui.py", 1, true) then
+		error("salvage kept incomplete write call: " .. salvaged)
+	end
+	if salvaged:find("</tool_call>%s*$") == nil then
+		error("salvage should end at a real close tag: " .. salvaged)
+	end
+end)
+
+test("partial salvage does not synthesize close tags", function()
+	local partial = table.concat({
+		'<tool_call name="write">',
+		'{"path":"agent_flow_tui.py"}',
+		"print('unterminated')",
+	}, "\n")
+	local salvaged = codex._complete_tool_calls_prefix(partial)
+	assert_eq(salvaged, "")
+end)
+
+test("partial salvage does not truncate raw content at literal close text", function()
+	local partial = table.concat({
+		'<tool_call name="write">',
+		'{"path":"agent_flow_tui.py"}',
+		'print("</tool_call>")',
+		"print('after literal close')",
+	}, "\n")
+	local salvaged = codex._complete_tool_calls_prefix(partial)
+	assert_eq(salvaged, "")
+end)
+
+test("partial salvage rejects literal tool markup in raw content", function()
+	local partial = table.concat({
+		'<tool_call name="write">',
+		'{"path":"agent_flow_tui.py"}',
+		"print('bad')",
+		'<tool_call name="run">',
+		'{"command":"echo nested"}',
+		"</tool_call>",
+		"</tool_call>",
+	}, "\n")
+	local salvaged = codex._salvage_partial_tool_response({ partial }, { kind = "timeout", phase = "chunk_size" })
+	assert_eq(salvaged, nil)
+end)
+
 test("post-tool tail classifier cuts prose after extra close", function()
 	assert_eq(codex._post_tool_tail_kind(" \n"), "whitespace")
 	assert_eq(codex._post_tool_tail_kind("</tool_call>\n"), "extra_close")
@@ -94,6 +149,12 @@ test("request body uses session-specific prompt cache key", function()
 	if not body:find('"prompt_cache_key":"lca-session-123"', 1, true) then
 		error("missing session prompt cache key: " .. body)
 	end
+end)
+
+test("codex total timeout default allows long active streams", function()
+	local deadlines = codex._default_deadlines({})
+	assert_eq(deadlines.total, 600)
+	assert_eq(deadlines.idle, 60)
 end)
 
 test("request body defaults codex service tier to priority", function()

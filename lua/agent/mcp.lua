@@ -1,6 +1,5 @@
 local uv = require("luv")
 local fs = require("agent.util.fs")
-local json_util = require("agent.util.json")
 
 local mcp = {}
 
@@ -16,7 +15,7 @@ local function create_connection(name, config)
 		args = config.args or {},
 		stdio = { stdin_pipe, stdout_pipe, stderr_pipe },
 		env = config.env,
-	}, function(code)
+	}, function()
 		if not stdout_pipe:is_closing() then stdout_pipe:close() end
 		if not stderr_pipe:is_closing() then stderr_pipe:close() end
 		if not stdin_pipe:is_closing() then stdin_pipe:close() end
@@ -42,7 +41,7 @@ local function create_connection(name, config)
 		tools = {},
 	}
 
-	stdout_pipe:read_start(function(err, data)
+	stdout_pipe:read_start(function(_, data)
 		if not data then return end
 		conn.buf = conn.buf .. data
 		while true do
@@ -155,11 +154,11 @@ function mcp.start(config_path)
 	local all_tools = {}
 
 	for name, config in pairs(servers) do
-		local conn, err = create_connection(name, config)
+		local conn = create_connection(name, config)
 		if conn then
-			local init_result, init_err = initialize(conn)
+			local init_result = initialize(conn)
 			if init_result then
-				local tools, tools_err = discover_tools(conn)
+				local tools = discover_tools(conn)
 				if tools then
 					for _, tool in ipairs(tools) do
 						tool._server = name
@@ -205,7 +204,7 @@ function mcp.call_tool(server_name, tool_name, arguments)
 end
 
 function mcp.stop()
-	for name, conn in pairs(connections) do
+	for _, conn in pairs(connections) do
 		if not conn.stdin:is_closing() then
 			conn.stdin:close()
 		end

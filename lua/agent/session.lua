@@ -235,6 +235,7 @@ function session:estimated_session_tokens()
 end
 
 function session:estimated_mcp_prompt_tokens()
+	local _ = self
 	local ok, registry = pcall(require, "agent.tool_registry")
 	if not ok or not registry.mcp_prompt_section then
 		return 0

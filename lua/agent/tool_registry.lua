@@ -177,6 +177,8 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - Use run for short commands that should block until completion. Use job_start for long-running commands such as dev servers, watchers, slow test suites, or commands you may need to inspect or stop later.
 - For servers, watchers, and dev processes, call job_start without timeout. Use timeout only for bounded jobs expected to finish.
 - For curl, prefer `curl -sS -i URL` so output is readable and does not include the progress meter.
+- For user-facing artifacts, do one bounded product-quality pass after the first successful implementation and verification. Exercise the artifact briefly, then fix only small issues discovered by using it.
+- Match smoke tests to artifact type: CLI/TUI apps need `--help`, a non-interactive path, and a short pseudo-terminal run when possible; web apps need a browser/screenshot/console check; parsers need valid and malformed input; background services need start/status/output/stop; libraries need focused behavioral tests.
 
 ## Git safety
 

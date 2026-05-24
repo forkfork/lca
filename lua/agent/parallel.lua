@@ -21,6 +21,7 @@ local FILE_READ_TOOLS = {
 }
 
 local START_EVENT_TOOLS = {
+	edit = true,
 	find = true,
 	grep = true,
 	job_output = true,
@@ -31,6 +32,7 @@ local START_EVENT_TOOLS = {
 	ls = true,
 	run = true,
 	shell = true,
+	write = true,
 }
 
 local function emit_start(on_tool, tc)
