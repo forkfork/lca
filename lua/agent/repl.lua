@@ -23,6 +23,19 @@ repl.cancelled = false
 -- Track whether we're in an active operation (LLM call / tool execution)
 repl.busy = false
 
+local editing = false
+
+function repl.cleanup_terminal()
+	if ln and editing then
+		pcall(function() ln.editsetchanged(nil) end)
+		pcall(function() ln.editstop() end)
+		editing = false
+	end
+	pcall(function() io.write("\27[0m\27[?25h") end)
+	pcall(function() io.flush() end)
+	os.execute("stty sane 2>/dev/null")
+end
+
 if ln then
 	pcall(function() ln.historyload(history_path) end)
 	pcall(function() ln.historysetmaxlen(1000) end)
@@ -63,6 +76,7 @@ local function read_prompt()
 	end
 
 	ln.editstart(ui.plain_prompt())
+	editing = true
 
 	local result_line = nil
 	local done = false
@@ -120,11 +134,10 @@ local function read_prompt()
 	end
 
 	-- Restore terminal to cooked mode so normal output works
-	pcall(function() ln.editstop() end)
+	repl.cleanup_terminal()
 	if result_line ~= nil then
 		io.write("\r\n")
 	end
-	os.execute("stty sane 2>/dev/null")
 	io.flush()
 
 	return result_line
@@ -213,23 +226,60 @@ function repl.run(options)
 		end
 	end
 
-	-- Install SIGINT (Ctrl-C) handler
-	local sigint = uv.new_signal()
-	sigint:start("sigint", function()
+	local signal_handles = {}
+	local function close_signal_handles()
+		for _, handle in ipairs(signal_handles) do
+			if not handle:is_closing() then
+				handle:stop()
+				handle:close()
+			end
+		end
+		signal_handles = {}
+	end
+
+	local function graceful_exit(code, quiet)
+		stop_logo_animation()
+		repl.cleanup_terminal()
+		if quiet then
+			pcall(auto_save)
+			pcall(exit_jobs_summary)
+		else
+			io.write("\n")
+			auto_save()
+			exit_jobs_summary()
+		end
+		close_signal_handles()
+		os.exit(code or 0)
+	end
+
+	local function install_signal(name, callback)
+		local handle = uv.new_signal()
+		local ok = pcall(function()
+			handle:start(name, callback)
+		end)
+		if ok then
+			signal_handles[#signal_handles + 1] = handle
+		else
+			if not handle:is_closing() then handle:close() end
+		end
+	end
+
+	-- Install Ctrl-C and termination handlers. These are best-effort: hard kills
+	-- and some suspended SSH failures cannot run process cleanup.
+	install_signal("sigint", function()
 		if repl.busy then
 			-- Cancel the current operation, return to prompt
 			repl.cancelled = true
 		else
 			-- Not busy — exit the REPL
-			stop_logo_animation()
-			pcall(function() ln.editstop() end)
-			io.write("\n")
-			auto_save()
-			exit_jobs_summary()
-			sigint:stop()
-			sigint:close()
-			os.exit(0)
+			graceful_exit(0)
 		end
+	end)
+	install_signal("sighup", function()
+		graceful_exit(0, true)
+	end)
+	install_signal("sigterm", function()
+		graceful_exit(0, true)
 	end)
 	while true do
 		-- Reset cancellation flag at the top of each prompt cycle
@@ -237,9 +287,11 @@ function repl.run(options)
 		local line = read_prompt()
 		if line == nil then
 			stop_logo_animation()
+			repl.cleanup_terminal()
 			io.write("\n")
 			auto_save()
 			exit_jobs_summary()
+			close_signal_handles()
 			return
 		end
 
@@ -248,8 +300,10 @@ function repl.run(options)
 			if line:sub(1, 1) == "/" then
 				local command_result = commands.dispatch(line, session, ui)
 				if command_result == true then
+					repl.cleanup_terminal()
 					auto_save()
 					exit_jobs_summary()
+					close_signal_handles()
 					return
 				elseif command_result == "run" then
 					line = ""

@@ -122,6 +122,7 @@ local ok, err = pcall(function()
 end)
 
 if not ok then
+	pcall(function() repl.cleanup_terminal() end)
 	io.stderr:write("error: " .. tostring(err) .. "\n")
 	os.exit(1)
 end

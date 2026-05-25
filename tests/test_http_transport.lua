@@ -224,7 +224,7 @@ test("chunk-size timeout reports transport diagnostics", function()
 end)
 
 test("cancel waiting for first byte", function()
-	local cancelled, close_cancel = cancel_after(0.05)
+	local cancelled, close_cancel = cancel_after(0.25)
 	local result, err = request("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", {
 		delay_first_byte = 0.5,
 		deadlines = { connect = 2, tls = 2, write = 2, first_byte = 2, idle = 2, total = 3 },
