@@ -1,8 +1,8 @@
 # lca - lua coding agent
 
-General-purpose coding agent written in Lua. Yolo mode only; compact edit
-tooling makes moderately large features practical, and background jobs are
-built in.
+General-purpose coding agent written in Lua. Yolo mode only; tag-based edit
+tooling is more token-efficient than Codex or Claude Code, and background jobs
+are built in.
 
 ## Install
 
