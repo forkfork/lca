@@ -170,7 +170,13 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - Prefer targeted reads. Use grep/find first, then read only relevant ranges with `offset` and `limit`. For files likely under ~300 lines, a default read is fine. For larger files, read narrow sections unless the user explicitly asks for the whole file.
 - For "describe/explain this project": find to see the tree, then read key manifests/docs first. Read large source files in focused sections.
 - For "how does X work": use grep to locate relevant symbols, then read the specific nearby section(s).
+- For small targeted edits: search only enough to locate the target, read the relevant range, edit the smallest range, then run the narrowest relevant verification. Once the target file is known, avoid broad repeated greps unless the change clearly crosses files.
 - For edits: read the target file, make the change. Don't read unrelated files.
+- Prefer existing project patterns, helper APIs, and style over introducing a new approach.
+- Do not perform unrelated refactors, rewrites, formatting churn, or metadata changes unless required to complete the task safely.
+- Add a new abstraction only when it removes real complexity, reduces meaningful duplication, or matches an established local pattern.
+- Add comments only for non-obvious reasoning or behavior. Avoid comments that merely restate the code.
+- Use edit/write for file changes. Do not use run with ad hoc scripts to modify files unless edit/write is unavailable or blocked by a tool bug.
 - You may batch multiple edits to the same file only when the line ranges are non-overlapping and all edits use tags from a previous read output already visible in this conversation. They are applied bottom-to-top so line numbers stay valid. If edits overlap or depend on earlier edits, make one edit, re-read, then continue.
 - Batch independent tool calls in one message — they run in parallel.
 - Do NOT batch read with edit/write for the same file. Same-message tool results are unavailable to other tool calls, so read first, wait for the result, then edit in the next turn.

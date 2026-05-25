@@ -206,6 +206,40 @@ run_test("allows same-file mutation after failed previous mutation", function()
 	assert_lines(path, { "alpha", "BETA" })
 end)
 
+run_test("skips later run after failed edit", function()
+	local path = tmp_dir .. "/failed-edit-then-run.txt"
+	local marker = tmp_dir .. "/should-not-exist"
+	write_file(path, "alpha\n")
+	local lines = split_lines(read_file(path))
+
+	local calls = {
+		{
+			name = "edit",
+			args = {
+				path = path,
+				start_line = 1,
+				start_tag = "BAD!",
+				end_line = 1,
+				end_tag = read_tool.line_tag(1, lines[1]),
+				_raw_content = "ALPHA",
+			},
+		},
+		{ name = "run", args = { command = "touch " .. shell.quote(marker) } },
+	}
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir })
+
+	assert_eq(results[1].is_error, true, "edit should fail")
+	assert_eq(results[2].is_error, true, "run should be skipped")
+	assert_eq(results[2].summary, "skipped after failed mutation")
+	assert_eq(results[2].ui_state, "deferred")
+	assert_contains(results[2].content, "earlier edit/write")
+	local f = io.open(marker, "r")
+	if f then
+		f:close()
+		error("run executed despite failed edit")
+	end
+end)
+
 run_test("allows mutations to different files in one batch", function()
 	local path_a = tmp_dir .. "/a.txt"
 	local path_b = tmp_dir .. "/b.txt"

@@ -76,6 +76,42 @@ run_test("blocked syntax errors use target path and candidate context", function
 	assert_not_contains(result.content, "/tmp/lua_", "temp lint path should be hidden")
 end)
 
+run_test("accepts runtime Lua syntax newer than system luac", function()
+	local target = tmp_dir .. "/bitwise.lua"
+	write_file(target, "local value = 1 ~ 2\nreturn value\n")
+	local lines = read_tool.split_lines(assert(io.open(target)):read("*a"))
+	local result = edit_tool.execute({
+		path = target,
+		start_line = 2,
+		start_tag = read_tool.line_tag(2, lines[2]),
+		end_line = 2,
+		end_tag = read_tool.line_tag(2, lines[2]),
+		_raw_content = "return value + 1",
+	}, { cwd = tmp_dir })
+
+	if result.is_error then
+		error(result.content)
+	end
+end)
+
+run_test("allows edits that preserve pre-existing syntax error", function()
+	local target = tmp_dir .. "/already_broken.lua"
+	write_file(target, "local = 1\nreturn 1\n")
+	local lines = read_tool.split_lines(assert(io.open(target)):read("*a"))
+	local result = edit_tool.execute({
+		path = target,
+		start_line = 2,
+		start_tag = read_tool.line_tag(2, lines[2]),
+		end_line = 2,
+		end_tag = read_tool.line_tag(2, lines[2]),
+		_raw_content = "return 2",
+	}, { cwd = tmp_dir })
+
+	if result.is_error then
+		error(result.content)
+	end
+end)
+
 os.execute("rm -rf " .. shell.quote(tmp_dir))
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")

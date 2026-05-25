@@ -4,6 +4,7 @@ local path_util = require("agent.util.path")
 local shell_util = require("agent.util.shell")
 
 local parallel = {}
+local cached_has_rg
 
 local SHELL_TOOLS = {
 	ls = true,
@@ -154,6 +155,15 @@ local function collect_read_targets(other_batch, context)
 	return targets
 end
 
+local function has_rg()
+	if cached_has_rg ~= nil then
+		return cached_has_rg
+	end
+	local ok, why, code = os.execute("command -v rg >/dev/null 2>&1")
+	cached_has_rg = ok == true or ok == 0 or (why == "exit" and code == 0)
+	return cached_has_rg
+end
+
 local function tool_to_command(name, args, context)
 	local cwd = context.cwd or "."
 
@@ -174,10 +184,17 @@ local function tool_to_command(name, args, context)
 			return nil
 		end
 		local target = path_util.resolve(args.path or ".", cwd)
-		if args.glob and args.glob ~= "" then
-			return "rg --line-number --color=never --glob " .. shell_util.quote(args.glob) .. " " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
+		if has_rg() then
+			if args.glob and args.glob ~= "" then
+				return "rg --line-number --color=never --glob " .. shell_util.quote(args.glob) .. " " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
+			end
+			return "rg --line-number --color=never " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
 		end
-		return "rg --line-number --color=never " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
+		local cmd = "grep -R -n -I"
+		if args.glob and args.glob ~= "" then
+			cmd = cmd .. " --include=" .. shell_util.quote(args.glob)
+		end
+		return cmd .. " -- " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
 	end
 
 	return nil
@@ -296,6 +313,15 @@ local function read_budget_result(max_bytes)
 		ui_state = "deferred",
 		content = "Read batch output budget reached (" .. tostring(max_bytes) .. " bytes). Use a smaller targeted read in the next turn.",
 		summary = "read budget reached",
+	}
+end
+
+local function skipped_run_after_failed_mutation_result()
+	return {
+		is_error = true,
+		ui_state = "deferred",
+		content = "Skipped run because an earlier edit/write in this batch failed. Re-read or fix the failed mutation before running verification.",
+		summary = "skipped after failed mutation",
 	}
 end
 
@@ -431,6 +457,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	local edit_groups = collect_edit_groups(other_batch, context)
 	local completed_group_targets = {}
 	local read_batch_bytes = 0
+	local mutation_failed = false
 	for _, item in ipairs(other_batch) do
 		-- Check cancellation between sequential tool executions
 		if repl_ok and repl_mod.cancelled then break end
@@ -439,7 +466,9 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		local result
 		local result_emitted = false
 		local edit_group = mutation_target and edit_groups[mutation_target]
-		if mutation_target and read_targets[mutation_target] then
+		if tc.name == "run" and mutation_failed then
+			result = skipped_run_after_failed_mutation_result()
+		elseif mutation_target and read_targets[mutation_target] then
 			result = dependent_batch_result(mutation_target)
 		elseif edit_group and not completed_group_targets[mutation_target] and not mutated_targets[mutation_target] then
 			table.sort(edit_group, function(a, b)
@@ -456,6 +485,8 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 				results[group_item.index] = group_result
 				if group_result and not group_result.is_error then
 					any_success = true
+				elseif group_item.tc.name == "edit" or group_item.tc.name == "write" then
+					mutation_failed = true
 				end
 				if on_tool then
 					on_tool({ type = "tool", name = group_item.tc.name, args = group_item.tc.args, result = group_result })
@@ -480,6 +511,9 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			if mutation_target and result and not result.is_error then
 				mutated_targets[mutation_target] = true
 			end
+		end
+		if (tc.name == "edit" or tc.name == "write") and result and result.is_error then
+			mutation_failed = true
 		end
 		if tc.name == "read" and result and not result.is_error and result.summary ~= "duplicate read" then
 			read_batch_bytes = read_batch_bytes + #(result.content or "")

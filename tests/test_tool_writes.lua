@@ -139,7 +139,7 @@ local function assert_syntax_valid(path)
 	local ext = path:match("%.([^%.]+)$")
 	local cmd
 	if ext == "lua" then
-		cmd = "luac -p"
+		cmd = shell.quote(arg[-1] or "lua") .. " -e " .. shell.quote("assert(loadfile(arg[1]))")
 	elseif ext == "py" then
 		cmd = "python3 -m py_compile"
 	elseif ext == "js" then

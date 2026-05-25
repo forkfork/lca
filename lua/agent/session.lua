@@ -229,11 +229,15 @@ local function estimate_text_tokens(value)
 	return math.ceil(#value / 4)
 end
 
-local function format_token_estimate(tokens)
+local function format_token_count(tokens)
 	if tokens >= 1000 then
-		return "~" .. math.floor((tokens + 500) / 1000) .. "k tokens"
+		return "~" .. math.floor((tokens + 500) / 1000) .. "k"
 	end
-	return "~" .. tokens .. " tokens"
+	return "~" .. tokens
+end
+
+local function format_token_estimate(tokens)
+	return format_token_count(tokens) .. " tokens"
 end
 
 function session:estimated_tokens()
@@ -325,9 +329,9 @@ function session:load_message(path)
 	local mcp_tokens = self:estimated_mcp_prompt_tokens()
 	local model_tokens = session_tokens + system_tokens + mcp_tokens
 
-	local details = self:turn_count() .. " turns, " .. format_token_estimate(model_tokens) .. ", " .. format_token_estimate(session_tokens) .. " session, " .. format_token_estimate(system_tokens) .. " system"
+	local details = self:turn_count() .. " turns, " .. format_token_estimate(model_tokens) .. ", " .. format_token_count(session_tokens) .. " session, " .. format_token_count(system_tokens) .. " system"
 	if mcp_tokens > 0 then
-		details = details .. ", " .. format_token_estimate(mcp_tokens) .. " MCP"
+		details = details .. ", " .. format_token_count(mcp_tokens) .. " MCP"
 	end
 	if model_tokens > DUMB_MODE_TOKEN_THRESHOLD then
 		details = details .. " · dumb mode"

@@ -23,7 +23,7 @@ dependencies = {
    "luasec",
    "lua-cjson",
    "luv",
-   "linenoise-luv"
+   "linenoise-luv >= 0.1.3"
 }
 build = {
    type = "builtin",

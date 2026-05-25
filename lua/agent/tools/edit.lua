@@ -95,6 +95,20 @@ local function blocked_edit_content(lint_output, args, candidate_lines, fallback
 	}, "\n")
 end
 
+local function introduced_lint_error(target, original_content, candidate_content)
+	local candidate_lint = lint.check_content(target, candidate_content)
+	if not candidate_lint then
+		return nil
+	end
+
+	local original_lint = lint.check_content(target, original_content)
+	if original_lint and normalize_lint_output(original_lint, target) == normalize_lint_output(candidate_lint, target) then
+		return nil
+	end
+
+	return candidate_lint
+end
+
 -- Tag-based edit: replace lines identified by line number + tag
 local function execute_tagged(args, context)
 	local target = path.resolve(args.path, context.cwd)
@@ -170,8 +184,8 @@ local function execute_tagged(args, context)
 		final = final .. "\n"
 	end
 
-	-- Pre-write syntax check — reject edits that would corrupt the file
-	local lint_output = lint.check_content(target, final)
+	-- Pre-write syntax check — reject edits that introduce syntax errors.
+	local lint_output = introduced_lint_error(target, content, final)
 	if lint_output then
 		return {
 			is_error = true,
@@ -256,7 +270,7 @@ function edit.execute(args, context)
 	local next_content = replace_once(original, args.oldText, args.newText)
 
 	-- Pre-write syntax check
-	local lint_output = lint.check_content(target, next_content)
+	local lint_output = introduced_lint_error(target, original, next_content)
 	if lint_output then
 		local next_lines = read_tool.split_lines(next_content)
 		local fallback_line = line_number_for_offset(original, start_at)

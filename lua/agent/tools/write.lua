@@ -24,6 +24,10 @@ local function line_count(text)
 	return newlines + 1
 end
 
+local function normalize_lint_output(lint_output, display_path)
+	return tostring(lint_output or ""):gsub("%s+$", ""):gsub("/tmp/%S+%.%w+", display_path)
+end
+
 function write.execute(args, context)
 	if not args.path or args.path == "" then
 		return {
@@ -75,8 +79,17 @@ function write.execute(args, context)
 		}
 	end
 
-	-- Pre-write syntax check — block writes that produce invalid syntax
+	-- Pre-write syntax check — block writes that introduce invalid syntax.
 	local lint_output = lint.check_content(target, content)
+	if lint_output then
+		local ok, original = pcall(fs.read_file, target)
+		if ok then
+			local original_lint = lint.check_content(target, original)
+			if original_lint and normalize_lint_output(original_lint, target) == normalize_lint_output(lint_output, target) then
+				lint_output = nil
+			end
+		end
+	end
 	if lint_output then
 		return {
 			is_error = true,
