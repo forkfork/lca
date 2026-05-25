@@ -42,6 +42,7 @@ function supervisor.main(argv)
 	local done = false
 	local timed_out = false
 	local timer
+	local kill_timer
 	local handle, pid_or_err = uv.spawn("sh", {
 		args = { "-c", job.command },
 		cwd = job.cwd,
@@ -52,6 +53,10 @@ function supervisor.main(argv)
 		if timer then
 			timer:stop()
 			timer:close()
+		end
+		if kill_timer then
+			kill_timer:stop()
+			kill_timer:close()
 		end
 		if timed_out then
 			finish(job, "timed_out", code)
@@ -81,11 +86,12 @@ function supervisor.main(argv)
 			if done then return end
 			timed_out = true
 			local pgid = tostring(math.floor(tonumber(job.pgid)))
-			os.execute("/bin/kill -TERM -" .. pgid .. " >/dev/null 2>&1")
-			uv.sleep(500)
-			if not done then
-				os.execute("/bin/kill -KILL -" .. pgid .. " >/dev/null 2>&1")
-			end
+			os.execute("/bin/kill -TERM -- -" .. pgid .. " >/dev/null 2>&1")
+			kill_timer = uv.new_timer()
+			kill_timer:start(500, 0, function()
+				if done then return end
+				os.execute("/bin/kill -KILL -- -" .. pgid .. " >/dev/null 2>&1")
+			end)
 		end)
 	end
 

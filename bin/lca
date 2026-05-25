@@ -4,6 +4,93 @@ local function shell_quote(value)
 	return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
 end
 
+local function command_succeeds(command)
+	local ok, reason, code = os.execute(command)
+	return ok == true or ok == 0 or code == 0 or (reason == "exit" and code == 0)
+end
+
+local function executable_exists(value)
+	if not value or value == "" then return false end
+	if value:find("/", 1, true) then
+		local file = io.open(value, "r")
+		if file then
+			file:close()
+			return true
+		end
+		return false
+	end
+	local path = os.getenv("PATH") or ""
+	for dir in path:gmatch("[^:]+") do
+		local file = io.open(dir .. "/" .. value, "r")
+		if file then
+			file:close()
+			return true
+		end
+	end
+	return false
+end
+
+local function lua_version_name(candidate)
+	local handle = io.popen(shell_quote(candidate) .. " -e " .. shell_quote("print(_VERSION:match('%d+%.%d+'))") .. " 2>/dev/null", "r")
+	if not handle then return nil end
+	local output = handle:read("*l")
+	handle:close()
+	return output
+end
+
+local function parse_luarocks_prefix(lua_version)
+	local handle = io.popen("luarocks --lua-version=" .. shell_quote(lua_version) .. " path --bin 2>/dev/null", "r")
+	if not handle then return nil end
+	local output = handle:read("*a")
+	handle:close()
+
+	local parts = {}
+	for name, value in output:gmatch("export%s+([A-Z_]+)='([^']*)'") do
+		if name == "LUA_PATH" or name == "LUA_CPATH" or name == "PATH" then
+			parts[#parts + 1] = name .. "=" .. shell_quote(value)
+		end
+	end
+	if #parts == 0 then return nil end
+	return table.concat(parts, " ") .. " "
+end
+
+local function lua_can_run_lca(candidate, prefix)
+	local probe = "pcall(require,'luarocks.loader'); require('luv'); require('cjson')"
+	return command_succeeds((prefix or "") .. shell_quote(candidate) .. " -e " .. shell_quote(probe) .. " >/dev/null 2>&1")
+end
+
+local function lua_command_prefix()
+	local candidates = {}
+	for _, candidate in ipairs({
+		os.getenv("LCA_LUA"),
+		os.getenv("LUA"),
+	}) do
+		if candidate and candidate ~= "" then
+			candidates[#candidates + 1] = candidate
+		end
+	end
+	for _, candidate in ipairs({ "lua5.5", "lua5.4", "lua5.3", "lua5.2", "lua5.1", "lua", "luajit" }) do
+		candidates[#candidates + 1] = candidate
+	end
+
+	local seen = {}
+	for _, candidate in ipairs(candidates) do
+		if candidate and candidate ~= "" and not seen[candidate] and executable_exists(candidate) then
+			seen[candidate] = true
+			if lua_can_run_lca(candidate) then
+				return shell_quote(candidate)
+			end
+			local version = lua_version_name(candidate)
+			local prefix = version and parse_luarocks_prefix(version) or nil
+			if prefix and lua_can_run_lca(candidate, prefix) then
+				return prefix .. shell_quote(candidate)
+			end
+		end
+	end
+
+	return "lua"
+end
+
 local function usage()
 	io.stderr:write([[
 Usage:
@@ -62,7 +149,7 @@ local executable = target.installed
 local local_file = io.open(target.local_path, "r")
 if local_file then
 	local_file:close()
-	executable = "lua " .. shell_quote(target.local_path)
+	executable = lua_command_prefix() .. " " .. shell_quote(target.local_path)
 end
 
 local parts = { executable }

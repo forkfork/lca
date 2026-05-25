@@ -9,7 +9,7 @@ are built in.
 macOS:
 
 ```bash
-brew install lua@5.5 luarocks curl openssl
+brew install lua@5.5 luarocks curl openssl cmake
 LUA_PREFIX="$(brew --prefix lua@5.5)"
 luarocks install --local --lua-dir="$LUA_PREFIX" lca
 eval "$(luarocks --local --lua-dir="$LUA_PREFIX" path --bin)"

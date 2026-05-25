@@ -283,34 +283,103 @@ local function is_linux()
 	return uv.fs_stat("/proc/self/stat") ~= nil
 end
 
-local function lua_executable()
-	local function exists(value)
-		if not value or value == "" then return false end
-		if value:find("/", 1, true) then
-			return uv.fs_stat(value) ~= nil
+local cached_lua_command
+
+local function command_succeeds(command)
+	local ok, reason, code = os.execute(command)
+	return ok == true or ok == 0 or code == 0 or (reason == "exit" and code == 0)
+end
+
+local function executable_exists(value)
+	if not value or value == "" then return false end
+	if value:find("/", 1, true) then
+		return uv.fs_stat(value) ~= nil
+	end
+	local path = os.getenv("PATH") or ""
+	for dir in path:gmatch("[^:]+") do
+		if uv.fs_stat(dir .. "/" .. value) then
+			return true
 		end
-		local path = os.getenv("PATH") or ""
-		for dir in path:gmatch("[^:]+") do
-			if uv.fs_stat(dir .. "/" .. value) then
-				return true
+	end
+	return false
+end
+
+local function parse_luarocks_env(lua_version)
+	local handle = io.popen("luarocks --lua-version=" .. shell.quote(lua_version) .. " path --bin 2>/dev/null", "r")
+	if not handle then return nil end
+	local output = handle:read("*a")
+	handle:close()
+
+	local env = {}
+	for name, value in output:gmatch("export%s+([A-Z_]+)='([^']*)'") do
+		if name == "LUA_PATH" or name == "LUA_CPATH" or name == "PATH" then
+			env[name] = value
+		end
+	end
+	if not env.LUA_PATH and not env.LUA_CPATH then
+		return nil
+	end
+	return env
+end
+
+local function lua_version_name(candidate)
+	local handle = io.popen(shell.quote(candidate) .. " -e " .. shell.quote("print(_VERSION:match('%d+%.%d+'))") .. " 2>/dev/null", "r")
+	if not handle then return nil end
+	local output = handle:read("*l")
+	handle:close()
+	return output
+end
+
+local function supervisor_probe(candidate, env)
+	local prefix = ""
+	if env then
+		for _, name in ipairs({ "LUA_PATH", "LUA_CPATH", "PATH" }) do
+			if env[name] then
+				prefix = prefix .. name .. "=" .. shell.quote(env[name]) .. " "
 			end
 		end
-		return false
 	end
+	local probe = "require('luv'); require('cjson')"
+	return command_succeeds(prefix .. shell.quote(candidate) .. " -e " .. shell.quote(probe) .. " >/dev/null 2>&1")
+end
 
-	local candidates = {
+local function lua_command()
+	if cached_lua_command then return cached_lua_command end
+
+	local candidates = {}
+	for _, candidate in ipairs({
+		os.getenv("LCA_LUA"),
 		os.getenv("LUA"),
 		uv.exepath and uv.exepath() or nil,
 		arg and arg[-1] or nil,
-		"lua",
-		"lua5.4",
-	}
-	for _, candidate in ipairs(candidates) do
-		if exists(candidate) then
-			return candidate
+	}) do
+		if candidate and candidate ~= "" then
+			candidates[#candidates + 1] = candidate
 		end
 	end
-	return "lua"
+	for _, candidate in ipairs({ "lua5.5", "lua5.4", "lua5.3", "lua5.2", "lua5.1", "lua", "luajit" }) do
+		candidates[#candidates + 1] = candidate
+	end
+
+	local seen = {}
+	for _, candidate in ipairs(candidates) do
+		if candidate and candidate ~= "" and not seen[candidate] and executable_exists(candidate) then
+			seen[candidate] = true
+			if supervisor_probe(candidate) then
+				cached_lua_command = { executable = candidate, env = nil }
+				return cached_lua_command
+			end
+			local version = lua_version_name(candidate)
+			local rocks_env = version and parse_luarocks_env(version) or nil
+			if rocks_env and supervisor_probe(candidate, rocks_env) then
+				cached_lua_command = { executable = candidate, env = rocks_env }
+				return cached_lua_command
+			end
+		end
+	end
+
+	cached_lua_command = { executable = "lua", env = nil }
+	return cached_lua_command
 end
 
 local function supervisor_package_path()
@@ -388,14 +457,18 @@ function jobs.start(args, context)
 	write_file(stdout, "")
 	write_file(stderr, "")
 
-	local handle, pid_or_err = uv.spawn(lua_executable(), {
-		args = {
-			"-e",
-			"package.path=" .. json.string(supervisor_package_path()) .. ";require('agent.job_supervisor').main({" .. json.string(cwd) .. "," .. json.string(id) .. "})",
-		},
+	local supervisor_code = "package.path=" .. json.string(supervisor_package_path()) .. ";require('agent.job_supervisor').main({" .. json.string(cwd) .. "," .. json.string(id) .. "})"
+	local lua = lua_command()
+	local env = {}
+	for name, value in pairs(lua.env or {}) do
+		env[#env + 1] = name .. "=" .. value
+	end
+	local handle, pid_or_err = uv.spawn(lua.executable, {
+		args = { "-e", supervisor_code },
 		cwd = cwd,
 		detached = true,
 		stdio = { nil, nil, nil },
+		env = #env > 0 and env or nil,
 	})
 
 	if not handle then
@@ -410,7 +483,6 @@ function jobs.start(args, context)
 	current.supervisor_pid = pid_or_err
 	jobs.save(cwd, current)
 	handle:unref()
-	handle:close()
 	return job
 end
 
@@ -718,10 +790,10 @@ function jobs.stop(cwd, id)
 	local target = job.pgid or job.pid
 	if target then
 		target = tostring(math.floor(tonumber(target)))
-		os.execute("/bin/kill -TERM -" .. target .. " >/dev/null 2>&1")
+		os.execute("/bin/kill -TERM -- -" .. target .. " >/dev/null 2>&1")
 		uv.sleep(200)
 		if process_alive(job.pid) then
-			os.execute("/bin/kill -KILL -" .. target .. " >/dev/null 2>&1")
+			os.execute("/bin/kill -KILL -- -" .. target .. " >/dev/null 2>&1")
 		end
 	end
 
