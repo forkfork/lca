@@ -96,6 +96,23 @@ local VALID_SERVICE_TIERS = {
 	priority = true,
 }
 
+local VALID_FLOW_MODES = {
+	off = true,
+	on = true,
+	insanitywolf = true,
+}
+
+local function resolve_flow(value)
+	if not value or value == "" then
+		return "off"
+	end
+	value = tostring(value):lower()
+	if not VALID_FLOW_MODES[value] then
+		error("invalid flow mode: " .. tostring(value))
+	end
+	return value
+end
+
 local function resolve_reasoning_effort(value)
 	if not value or value == "" then
 		return nil
@@ -126,6 +143,7 @@ function session.create(options)
 		model = resolve_model(options),
 		reasoning_effort = resolve_reasoning_effort(options.reasoning_effort),
 		service_tier = resolve_service_tier(options.service_tier),
+		flow = resolve_flow(options.flow),
 		cwd = cwd,
 		messages = {},
 		system_prompt = nil,
@@ -170,7 +188,7 @@ end
 function session:get_system_prompt()
 	if type(self.system_prompt) ~= "string" or self.system_prompt == "" then
 		local system_prompt = require("agent.system_prompt")
-		self.system_prompt = system_prompt.build({ cwd = self.cwd })
+		self.system_prompt = system_prompt.build({ cwd = self.cwd, flow = self.flow })
 	end
 	return self.system_prompt
 end
@@ -348,6 +366,7 @@ function session:serialize()
 		model = self.model,
 		reasoning_effort = self.reasoning_effort,
 		service_tier = self.service_tier,
+		flow = resolve_flow(self.flow),
 		cwd = self.cwd,
 		messages = self.messages,
 		system_prompt = self.system_prompt,
@@ -451,6 +470,11 @@ function session:load(path)
 	if data.service_tier and data.service_tier ~= require("cjson").null then
 		self.service_tier = resolve_service_tier(data.service_tier)
 	end
+	if data.flow and data.flow ~= require("cjson").null then
+		self.flow = resolve_flow(data.flow)
+	else
+		self.flow = "off"
+	end
 	return true
 end
 
@@ -503,5 +527,5 @@ session.DEFAULT_SESSION_FILE = DEFAULT_SESSION_FILE
 session.DEFAULT_HANDOFF_FILE = DEFAULT_HANDOFF_FILE
 session.resolve_reasoning_effort = resolve_reasoning_effort
 session.resolve_service_tier = resolve_service_tier
-
+session.resolve_flow = resolve_flow
 return session

@@ -180,6 +180,21 @@ run_test("loaded session remaps stale codex model for deepseek credentials", fun
 	end
 	assert_eq(loaded_session.model, "deepseek-v4-flash")
 end)
+run_test("flow mode is saved and loaded", function()
+	local path = tmp_dir .. "/session-flow.json"
+	local first = session_module.create({ session_id = "lca-test-session", flow = "insanitywolf" })
+	local ok, err = first:save(path)
+	if not ok then
+		error(err)
+	end
+
+	local second = session_module.create({})
+	local loaded, load_err = second:load(path)
+	if not loaded then
+		error(load_err)
+	end
+	assert_eq(second.flow, "insanitywolf")
+end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))
 

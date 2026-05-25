@@ -12,11 +12,13 @@ local provider_response = table.concat({
 	"</tool_result>",
 	"After",
 }, "\n")
+local last_request = nil
 
 package.loaded["agent.providers"] = {
 	load = function()
 		return {
-			complete = function()
+			complete = function(request)
+				last_request = request
 				if type(provider_response) == "table" then
 					return provider_response
 				end
@@ -101,6 +103,29 @@ test("stores only deduped executed tool calls in assistant history", function()
 	end
 	if count ~= 2 then
 		error("expected only 2 unique executed tool calls in history, got " .. tostring(count) .. ": " .. assistant_text)
+	end
+end)
+
+test("flow mode is included in system prompt", function()
+	provider_response = "flow done"
+	last_request = nil
+
+	local session = session_module.create({ flow = "on" })
+	session.cwd = project_dir
+	session:add_user("trigger flow")
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "flow done" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if not last_request or type(last_request.system_prompt) ~= "string" then
+		error("provider request was not captured")
+	end
+	if not last_request.system_prompt:find("Flow mode is on.", 1, true) then
+		error("missing flow policy in system prompt")
+	end
+	if #last_request.messages ~= 1 then
+		error("flow policy should not be appended as a session message")
 	end
 end)
 

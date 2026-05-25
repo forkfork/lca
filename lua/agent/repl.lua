@@ -65,17 +65,17 @@ end
 
 -- ─── Readline ──────────────────────────────────────────────────────────────
 
-local function read_prompt()
+local function read_prompt(session)
 	ui.clear_thinking()
 
 	if not ln then
-		io.write(ui.plain_prompt())
+		io.write(ui.plain_prompt(session))
 		io.flush()
 		local line = io.read("*l")
 		return line and trim(line) or nil
 	end
 
-	ln.editstart(ui.plain_prompt())
+	ln.editstart(ui.plain_prompt(session))
 	editing = true
 
 	local result_line = nil
@@ -284,7 +284,7 @@ function repl.run(options)
 	while true do
 		-- Reset cancellation flag at the top of each prompt cycle
 		repl.cancelled = false
-		local line = read_prompt()
+		local line = read_prompt(session)
 		if line == nil then
 			stop_logo_animation()
 			repl.cleanup_terminal()

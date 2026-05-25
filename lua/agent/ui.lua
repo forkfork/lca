@@ -173,11 +173,17 @@ function ui.prompt()
 	return color("cyan", "> ")
 end
 
-function ui.plain_prompt()
+function ui.plain_prompt(session)
 	-- linenoise-luv counts prompt bytes, not terminal display columns.
 	-- Multibyte Unicode prompts (for example "☽ ") make cursor redraw/backspace
 	-- positions drift, so keep the editable prompt ASCII-only.
-	return "> "
+	local flow = session and session.flow or "off"
+	if flow == "on" then
+		return "lca flow > "
+	elseif flow == "insanitywolf" then
+		return "lca insanitywolf > "
+	end
+	return "lca > "
 end
 
 -- ─── Turn Separator ─────────────────────────────────────────────────────────
@@ -934,6 +940,7 @@ function ui.status(session)
 		"model: " .. session.model,
 		"reasoning: " .. (session.reasoning_effort or "default"),
 		"service tier: " .. (session.service_tier or "default"),
+		"flow: " .. (session.flow or "off"),
 		"cwd: " .. session.cwd,
 		"credentials: " .. session.credentials_path,
 		"turns: " .. session:turn_count(),
