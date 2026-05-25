@@ -46,7 +46,39 @@ local function resolve_model(options)
 		local model = json.field(body, "model")
 		return model or "us.anthropic.claude-opus-4-6-v1"
 	end
+	if provider == "deepseek" then
+		local model = json.field(body, "model")
+		return model or "deepseek-v4-pro"
+	end
 	return options.model or "gpt-5.5"
+end
+
+local function model_for_credentials(credentials_path, current_model)
+	local providers = require("agent.providers")
+	local path = credentials_path or config.default_credentials_path()
+	local ok, body = pcall(providers.credentials_body, path)
+	if not ok then return current_model or "gpt-5.5" end
+	local provider = json.field(body, "provider")
+	local configured_model = json.field(body, "model")
+	current_model = current_model or "gpt-5.5"
+	if provider == "bedrock" then
+		if current_model:match("^us%.") or current_model:match("^eu%.") or current_model:match("^ap%.") or current_model:find("anthropic", 1, true) then
+			return current_model
+		end
+		return configured_model or "us.anthropic.claude-opus-4-6-v1"
+	end
+	if provider == "deepseek" then
+		if current_model:find("deepseek", 1, true) then
+			return current_model
+		end
+		return configured_model or "deepseek-v4-pro"
+	end
+	if provider == "codex" then
+		if current_model:find("deepseek", 1, true) or current_model:match("^us%.") or current_model:match("^eu%.") or current_model:match("^ap%.") or current_model:find("anthropic", 1, true) then
+			return configured_model or "gpt-5.5"
+		end
+	end
+	return current_model
 end
 
 local VALID_REASONING_EFFORTS = {
@@ -408,6 +440,7 @@ function session:load(path)
 	if data.credentials_path then
 		self.credentials_path = data.credentials_path
 	end
+	self.model = model_for_credentials(self.credentials_path, self.model)
 	if data.reasoning_effort and data.reasoning_effort ~= require("cjson").null then
 		self.reasoning_effort = resolve_reasoning_effort(data.reasoning_effort)
 	end

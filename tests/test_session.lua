@@ -38,6 +38,12 @@ local function run_test(name, fn)
 	end
 end
 
+local function write_file(path, content)
+	local file = assert(io.open(path, "w"))
+	file:write(content)
+	file:close()
+end
+
 io.write("\n" .. dim("═══ Session Tests ═══") .. "\n\n")
 
 run_test("session id is saved and loaded", function()
@@ -149,6 +155,30 @@ run_test("system prompt is frozen for cache stability", function()
 		error(load_err)
 	end
 	assert_eq(second:get_system_prompt(), prompt_before)
+end)
+
+run_test("loaded session remaps stale codex model for deepseek credentials", function()
+	local credentials_path = tmp_dir .. "/deepseek-credentials.json"
+	write_file(credentials_path, [[{
+		"provider": "deepseek",
+		"providers": {
+			"deepseek": { "provider": "deepseek", "apiKey": "test", "model": "deepseek-v4-flash" }
+		}
+	}]])
+	local path = tmp_dir .. "/session-deepseek-model.json"
+	write_file(path, [[{
+		"id": "lca-test-session",
+		"model": "gpt-5.5",
+		"credentials_path": "]] .. credentials_path .. [[",
+		"messages": []
+	}]])
+
+	local loaded_session = session_module.create({ credentials_path = credentials_path })
+	local loaded, load_err = loaded_session:load(path)
+	if not loaded then
+		error(load_err)
+	end
+	assert_eq(loaded_session.model, "deepseek-v4-flash")
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))

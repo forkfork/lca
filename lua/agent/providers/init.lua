@@ -8,6 +8,11 @@ local providers = {}
 local PROVIDER_MODULES = {
 	codex = "agent.providers.codex",
 	bedrock = "agent.providers.bedrock",
+	deepseek = "agent.providers.deepseek",
+}
+
+local PROVIDER_ALIASES = {
+	openai = "codex",
 }
 
 local cache = {}
@@ -21,6 +26,46 @@ local function get_mtime(path)
 		return stat.mtime.sec
 	end
 	return 0
+end
+
+local function decode_body(body)
+	local ok, tbl = pcall(json.decode, body or "")
+	if ok and type(tbl) == "table" then
+		return tbl
+	end
+	return nil
+end
+
+local function normalize_provider_name(provider)
+	provider = tostring(provider or "")
+	return PROVIDER_ALIASES[provider] or provider
+end
+
+local function selected_provider_name_from_table(tbl)
+	if type(tbl) ~= "table" then
+		return nil
+	end
+	local provider = normalize_provider_name(tbl.provider or tbl.currentProvider)
+	if provider ~= "" and PROVIDER_MODULES[provider] then
+		return provider
+	end
+	return nil
+end
+
+local function selected_credentials_body(root_body)
+	local tbl = decode_body(root_body)
+	if not tbl or type(tbl.providers) ~= "table" then
+		error("credentials file must contain provider and providers fields; run lca login <provider>")
+	end
+	local provider = selected_provider_name_from_table(tbl) or "codex"
+	local selected = tbl.providers[provider] or tbl.providers[PROVIDER_ALIASES[provider] or provider]
+	if type(selected) ~= "table" then
+		error("credentials file has no credentials for provider: " .. tostring(provider))
+	end
+	if selected.provider == nil then
+		selected.provider = provider
+	end
+	return json.encode(selected)
 end
 
 local function is_expired(body)
@@ -60,9 +105,10 @@ local function run_credential_process(command)
 end
 
 local function refresh_credentials(credentials_path, body)
+	local selected_body = selected_credentials_body(body)
 	-- Strategy 1: credential_process field in the credentials file
 	-- If present, run the command and use its output as new credentials
-	local credential_process = json.field(body, "credential_process")
+	local credential_process = json.field(selected_body, "credential_process")
 	if credential_process then
 		local new_body, err = run_credential_process(credential_process)
 		if new_body then
@@ -74,15 +120,21 @@ local function refresh_credentials(credentials_path, body)
 				local ok_decode, new_tbl = pcall(cjson.decode, new_body)
 				if ok_decode and type(new_tbl) == "table" then
 					new_tbl.credential_process = credential_process
-					local provider = json.field(body, "provider")
+					local provider = json.field(selected_body, "provider")
 					if provider then
 						new_tbl.provider = provider
 					end
-					local model = json.field(body, "model")
+					local model = json.field(selected_body, "model")
 					if model then
 						new_tbl.model = model
 					end
-					new_body = cjson.encode(new_tbl)
+					local root = decode_body(body)
+					if root and type(root.providers) == "table" and provider then
+						root.providers[provider] = new_tbl
+						new_body = cjson.encode(root)
+					else
+						new_body = cjson.encode(new_tbl)
+					end
 				end
 				-- Write refreshed credentials back to disk
 				pcall(fs.write_file, credentials_path, new_body)
@@ -104,7 +156,7 @@ local function refresh_credentials(credentials_path, body)
 	cache.body = nil
 	cache.parsed = nil
 	local fresh_body = fs.read_file(credentials_path)
-	if fresh_body and not is_expired(fresh_body) then
+	if fresh_body and not is_expired(selected_credentials_body(fresh_body)) then
 		cache.path = credentials_path
 		cache.mtime = get_mtime(credentials_path)
 		cache.body = fresh_body
@@ -120,7 +172,7 @@ local function read_credentials(credentials_path)
 	local mtime = get_mtime(credentials_path)
 	if cache.path == credentials_path and cache.mtime == mtime and cache.body then
 		-- Check if cached credentials are expired
-		if is_expired(cache.body) then
+		if is_expired(selected_credentials_body(cache.body)) then
 			return refresh_credentials(credentials_path, cache.body)
 		end
 		return cache.body
@@ -132,7 +184,7 @@ local function read_credentials(credentials_path)
 	cache.parsed = nil
 
 	-- Check if freshly-read credentials are already expired
-	if is_expired(body) then
+	if is_expired(selected_credentials_body(body)) then
 		return refresh_credentials(credentials_path, body)
 	end
 
@@ -140,16 +192,17 @@ local function read_credentials(credentials_path)
 end
 
 function providers.credentials_body(credentials_path)
-	return read_credentials(credentials_path or config.default_credentials_path())
+	return selected_credentials_body(read_credentials(credentials_path or config.default_credentials_path()))
 end
 
 local function detect_provider(credentials_path)
 	local body = read_credentials(credentials_path)
-	local provider = json.field(body, "provider")
+	local tbl = decode_body(body)
+	local provider = selected_provider_name_from_table(tbl)
 	if provider and PROVIDER_MODULES[provider] then
 		return provider
 	end
-	return "codex"
+	error("credentials file must select a supported provider")
 end
 
 function providers.load(credentials_path)

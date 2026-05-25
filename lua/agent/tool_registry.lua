@@ -175,6 +175,7 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - Batch independent tool calls in one message — they run in parallel.
 - Do NOT batch read with edit/write for the same file. Same-message tool results are unavailable to other tool calls, so read first, wait for the result, then edit in the next turn.
 - Use run for short commands that should block until completion. Use job_start for long-running commands such as dev servers, watchers, slow test suites, or commands you may need to inspect or stop later.
+- If the user asked you to run tests/check/verify and a run tool completes successfully, report the result instead of reading unrelated files.
 - For servers, watchers, and dev processes, call job_start without timeout. Use timeout only for bounded jobs expected to finish.
 - For curl, prefer `curl -sS -i URL` so output is readable and does not include the progress meter.
 - For user-facing artifacts, do one bounded product-quality pass after the first successful implementation and verification. Exercise the artifact briefly, then fix only small issues discovered by using it.

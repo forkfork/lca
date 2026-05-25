@@ -32,6 +32,7 @@ lua/agent/
     init.lua               provider detection, credential cache/refresh
     codex.lua              OpenAI/Codex Responses API provider
     bedrock.lua            AWS Bedrock provider
+    deepseek.lua           DeepSeek chat completions provider
 
   net/
     http_transport.lua     small HTTPS/HTTP/1.1 streaming transport for Codex
@@ -171,7 +172,9 @@ Providers expose a common `complete(request, on_token)` shape. The core loop doe
 not know whether a request is going to OpenAI/Codex or AWS Bedrock.
 
 `providers/init.lua` reads the credentials file, detects the provider from the
-`provider` field, and defaults to `codex` when no provider is specified. It also
+`provider` field, and defaults to `codex` when no provider is specified. The
+credentials file is a multi-provider object with `provider` selecting an entry
+from `providers`. It also
 caches credentials by mtime and refreshes expired credentials through a
 `credential_process` command when configured.
 

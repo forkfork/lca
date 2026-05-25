@@ -33,12 +33,16 @@ eval "$(luarocks --local path --bin)"
 ## Auth
 
 Most users should choose Bedrock/AWS on first run, using their normal AWS
-credentials. Codex/OpenAI OAuth is also supported for Codex subscribers.
+credentials. Codex/OpenAI OAuth and DeepSeek API keys are also supported.
 
 ```bash
 lca login bedrock
 lca login openai
+lca login deepseek
 ```
+
+Repeated `lca login <provider>` calls update the active provider and preserve
+credentials for the other providers in `~/.lca-credentials.json`.
 
 ## Usage
 

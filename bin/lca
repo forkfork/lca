@@ -97,7 +97,7 @@ Usage:
   lca [repl options]
   lca repl [repl options]
   lca run <prompt> [--credentials path] [--model model] [--reasoning effort] [--service-tier tier]
-  lca login <openai|bedrock> [login options]
+  lca login <openai|bedrock|deepseek> [login options]
   lca auth <login|refresh> [auth options]
 
 Examples:
@@ -105,6 +105,7 @@ Examples:
   lca repl --model gpt-5.5
   lca run "Explain this project"
   lca login openai
+  lca login deepseek
 ]])
 	os.exit(2)
 end

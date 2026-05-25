@@ -61,6 +61,12 @@ run_test("gpt-5 family defaults to larger context", function()
 	assert_eq(limits.context_window("gpt-5-something"), 400000)
 end)
 
+run_test("deepseek family uses documented large context", function()
+	local limits = reload()
+	assert_eq(limits.context_window("deepseek-v4-pro"), 1000000)
+	assert_eq(limits.context_window("deepseek-custom"), 1000000)
+end)
+
 run_test("explicit auto compact override wins", function()
 	assert_eq(child_eval("LCA_AUTO_COMPACT_TOKENS=50000", "l.auto_compact_threshold('gpt-5.5')"), "50000")
 	assert_eq(child_eval("LCA_AUTO_COMPACT_TOKENS=0", "l.auto_compact_threshold('gpt-5.5')"), "0")

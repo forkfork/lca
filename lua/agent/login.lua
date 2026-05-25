@@ -59,6 +59,7 @@ local function prompt_provider(credentials_path)
 	io.stderr:write("Choose a provider:\n")
 	io.stderr:write("  1) Codex / OpenAI OAuth\n")
 	io.stderr:write("  2) Bedrock / AWS\n")
+	io.stderr:write("  3) DeepSeek API key\n")
 	io.stderr:write("  q) Quit\n")
 	io.stderr:write("> ")
 	io.stderr:flush()
@@ -70,6 +71,9 @@ local function prompt_provider(credentials_path)
 	end
 	if answer == "2" or answer == "bedrock" or answer == "aws" then
 		return "bedrock"
+	end
+	if answer == "3" or answer == "deepseek" then
+		return "deepseek"
 	end
 	return nil
 end

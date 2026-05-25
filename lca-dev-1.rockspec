@@ -8,7 +8,7 @@ description = {
 	summary = "A Lua coding absurdity using OpenAI Codex OAuth credentials",
 	detailed = [[
 	lca is a from-scratch Lua coding absurdity with
-OpenAI Codex OAuth login, AWS Bedrock support, an interactive REPL, local tools,
+OpenAI Codex OAuth login, AWS Bedrock support, DeepSeek support, an interactive REPL, local tools,
 streaming responses, context compaction, and MCP server support.
 
 The tag-based read/edit tool design is inspired by Salvatore Sanfilippo
@@ -52,6 +52,7 @@ build = {
 		["agent.providers"] = "lua/agent/providers/init.lua",
 		["agent.providers.bedrock"] = "lua/agent/providers/bedrock.lua",
 		["agent.providers.codex"] = "lua/agent/providers/codex.lua",
+		["agent.providers.deepseek"] = "lua/agent/providers/deepseek.lua",
 		["agent.tools.edit"] = "lua/agent/tools/edit.lua",
 		["agent.tools.find"] = "lua/agent/tools/find.lua",
 		["agent.tools.grep"] = "lua/agent/tools/grep.lua",

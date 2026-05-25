@@ -118,6 +118,16 @@ local function clean_assistant_text(text)
 	return protocol.strip_tool_results(protocol.strip_tool_calls(text or ""))
 end
 
+local function compact_log_text(text, max_len)
+	text = tostring(text or "")
+	text = text:gsub("\r", "\\r"):gsub("\n", "\\n")
+	max_len = max_len or 1200
+	if #text > max_len then
+		return text:sub(1, max_len) .. "...[" .. tostring(#text) .. " chars]"
+	end
+	return text
+end
+
 local function attr(text, name)
 	return tostring(text or ""):match(name .. '="([^"]*)"')
 end
@@ -379,15 +389,34 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		-- Filter out tool calls with invalid names (e.g. examples in prose)
 		local registry = require("agent.tool_registry")
 		local tool_calls = {}
+		local invalid_tool_names = {}
 		for _, tc in ipairs(raw_tool_calls) do
 			if registry.is_valid(tc.name) then
 				tool_calls[#tool_calls + 1] = tc
+			else
+				invalid_tool_names[#invalid_tool_names + 1] = tostring(tc.name)
 			end
+		end
+		if #raw_tool_calls > 0 or (response.text or ""):find("<tool_call", 1, true) then
+			log("[tool-protocol] raw_calls=%d valid_calls=%d invalid_names=%s contains_open=%s contains_close=%s response_sample=%s",
+				#raw_tool_calls,
+				#tool_calls,
+				#invalid_tool_names > 0 and table.concat(invalid_tool_names, ",") or "(none)",
+				tostring((response.text or ""):find("<tool_call", 1, true) ~= nil),
+				tostring((response.text or ""):find("</tool_call>", 1, true) ~= nil),
+				compact_log_text(response.text, 1200)
+			)
+		elseif #raw_tool_calls == 0 then
+			log("[tool-protocol] no tool calls response_sample=%s", compact_log_text(response.text, 1200))
 		end
 		local protocol_ok, protocol_err = protocol.validate_tool_calls(tool_calls)
 		if not protocol_ok then
 			local text = "Tool call blocked: " .. protocol_err
 			log_separator("TOOL PROTOCOL VIOLATION")
+			log("[tool-protocol] violation=%s response_sample=%s",
+				tostring(protocol_err),
+				compact_log_text(response.text, 2000)
+			)
 			log("%s", text)
 			return {
 				text = text,

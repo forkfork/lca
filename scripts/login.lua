@@ -1,6 +1,8 @@
 #!/usr/bin/env lua
 
--- Unified login script: dispatches to OpenAI OAuth2 or AWS Bedrock credential setup
+-- Unified login script: dispatches to OpenAI OAuth2, AWS Bedrock, or DeepSeek credential setup.
+-- Keep this script dependency-free so it can bootstrap credentials before the
+-- full LuaRocks runtime path is configured.
 
 local function shell_quote(value)
 	return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
@@ -24,6 +26,142 @@ local function write_credentials(path, content)
 	file:write(content, "\n")
 	file:close()
 	os.execute("chmod 600 " .. shell_quote(path))
+end
+
+local function read_file(path)
+	local file = io.open(path, "r")
+	if not file then
+		return nil
+	end
+	local content = file:read("*a")
+	file:close()
+	return content
+end
+
+local function provider_key(provider)
+	if provider == "openai" then
+		return "codex"
+	end
+	return provider
+end
+
+local function skip_json_string(text, pos)
+	pos = pos + 1
+	while pos <= #text do
+		local char = text:sub(pos, pos)
+		if char == "\\" then
+			pos = pos + 2
+		elseif char == '"' then
+			return pos + 1
+		else
+			pos = pos + 1
+		end
+	end
+	return nil
+end
+
+local function find_matching_brace(text, open_pos)
+	local depth = 0
+	local pos = open_pos
+	while pos <= #text do
+		local char = text:sub(pos, pos)
+		if char == '"' then
+			pos = skip_json_string(text, pos)
+			if not pos then return nil end
+		elseif char == "{" then
+			depth = depth + 1
+			pos = pos + 1
+		elseif char == "}" then
+			depth = depth - 1
+			if depth == 0 then
+				return pos
+			end
+			pos = pos + 1
+		else
+			pos = pos + 1
+		end
+	end
+	return nil
+end
+
+local function parse_provider_entries(content)
+	local entries = {}
+	if not content or content == "" then
+		return entries
+	end
+	local providers_key = content:find('"providers"%s*:')
+	if not providers_key then
+		return entries
+	end
+	local object_start = content:find("{", providers_key)
+	if not object_start then
+		return entries
+	end
+	local object_end = find_matching_brace(content, object_start)
+	if not object_end then
+		return entries
+	end
+	local pos = object_start + 1
+	while pos < object_end do
+		local key_start, key_end, key = content:find('"%s*([^"]-)%s*"%s*:', pos)
+		if not key_start or key_start >= object_end then
+			break
+		end
+		local value_start = content:find("{", key_end + 1)
+		if not value_start or value_start >= object_end then
+			break
+		end
+		local value_end = find_matching_brace(content, value_start)
+		if not value_end then
+			break
+		end
+		entries[key] = content:sub(value_start, value_end)
+		pos = value_end + 1
+	end
+	return entries
+end
+
+local function ensure_provider_field(content, provider)
+	content = tostring(content or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if content:find('"provider"%s*:') then
+		return content
+	end
+	local open_pos = content:find("{", 1, true)
+	if not open_pos then
+		error("new credentials are not valid JSON")
+	end
+	return content:sub(1, open_pos) .. '\n  "provider": ' .. json_string(provider) .. "," .. content:sub(open_pos + 1)
+end
+
+local function indent_json(content, spaces)
+	local prefix = string.rep(" ", spaces or 0)
+	content = tostring(content or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	return prefix .. content:gsub("\n", "\n" .. prefix)
+end
+
+local function merge_credentials(existing_content, selected_provider, provider_content)
+	local selected = provider_key(selected_provider)
+	local providers = parse_provider_entries(existing_content)
+	providers[selected] = ensure_provider_field(provider_content, selected)
+
+	local keys = {}
+	for key in pairs(providers) do
+		keys[#keys + 1] = key
+	end
+	table.sort(keys)
+
+	local lines = {
+		"{",
+		'  "provider": ' .. json_string(selected) .. ",",
+		'  "providers": {',
+	}
+	for index, key in ipairs(keys) do
+		local suffix = index < #keys and "," or ""
+		lines[#lines + 1] = "    " .. json_string(key) .. ": " .. indent_json(providers[key], 4):gsub("^%s+", "") .. suffix
+	end
+	lines[#lines + 1] = "  }"
+	lines[#lines + 1] = "}"
+	return table.concat(lines, "\n")
 end
 
 local function read_aws_credentials_file(profile)
@@ -113,9 +251,28 @@ local function bedrock_login(options)
 	return table.concat(parts, "\n")
 end
 
+local function deepseek_login(options)
+	local api_key = options.api_key or os.getenv("DEEPSEEK_API_KEY")
+	if not api_key or api_key == "" then
+		error("No DeepSeek API key found. Set DEEPSEEK_API_KEY or pass --api-key")
+	end
+
+	local model = options.model or "deepseek-v4-pro"
+	local base_url = options.base_url or "https://api.deepseek.com"
+	return table.concat({
+		"{",
+		'  "provider": "deepseek",',
+		'  "baseUrl": ' .. json_string(base_url) .. ",",
+		'  "model": ' .. json_string(model) .. ",",
+		'  "apiKey": ' .. json_string(api_key),
+		"}",
+	}, "\n")
+end
+
 local function openai_login(options)
 	local script_dir = arg[0]:match("^(.*)/[^/]+$") or "."
 	local auth_script = script_dir .. "/auth.lua"
+	local temp_out = os.tmpname()
 
 	local auth_file = io.open(auth_script, "r")
 	local cmd_parts
@@ -125,23 +282,28 @@ local function openai_login(options)
 	else
 		cmd_parts = { "lca-auth", "login" }
 	end
-	if options.out_path then
-		cmd_parts[#cmd_parts + 1] = "--out"
-		cmd_parts[#cmd_parts + 1] = shell_quote(options.out_path)
-	end
+	cmd_parts[#cmd_parts + 1] = "--out"
+	cmd_parts[#cmd_parts + 1] = shell_quote(temp_out)
 
 	local command = table.concat(cmd_parts, " ")
 	local ok = os.execute(command)
 	if not ok then
+		os.remove(temp_out)
 		error("OpenAI login failed")
 	end
-	return nil
+	local content = read_file(temp_out)
+	os.remove(temp_out)
+	if not content or content == "" then
+		error("OpenAI login did not write credentials")
+	end
+	return content
 end
 
 local function usage()
 	io.stderr:write([[
 Usage:
   lua scripts/login.lua bedrock [--region region] [--model model] [--profile profile] [--out path]
+  lua scripts/login.lua deepseek [--api-key key] [--model model] [--base-url url] [--out path]
   lua scripts/login.lua openai [--out path]
 
 Providers:
@@ -149,11 +311,15 @@ Providers:
             Reads from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars,
             or from ~/.aws/credentials (default profile).
 
+  deepseek  Writes a DeepSeek credentials file.
+            Reads from DEEPSEEK_API_KEY, or from --api-key.
+
   openai    Runs the OpenAI OAuth2 PKCE login flow (delegates to auth.lua).
 
 Examples:
   lua scripts/login.lua bedrock
   lua scripts/login.lua bedrock --region us-east-1 --model us.anthropic.claude-opus-4-6-v1
+  lua scripts/login.lua deepseek --model deepseek-v4-pro
   lua scripts/login.lua openai
 
 Default output: ~/.lca-credentials.json
@@ -182,6 +348,12 @@ while index <= #arg do
 	elseif arg[index] == "--profile" then
 		options.profile = arg[index + 1]
 		index = index + 2
+	elseif arg[index] == "--api-key" then
+		options.api_key = arg[index + 1]
+		index = index + 2
+	elseif arg[index] == "--base-url" then
+		options.base_url = arg[index + 1]
+		index = index + 2
 	else
 		usage()
 	end
@@ -190,6 +362,8 @@ end
 local ok, result = pcall(function()
 	if provider == "bedrock" then
 		return bedrock_login(options)
+	elseif provider == "deepseek" then
+		return deepseek_login(options)
 	elseif provider == "openai" then
 		return openai_login(options)
 	end
@@ -203,10 +377,8 @@ end
 
 if result then
 	options.out_path = options.out_path or default_credentials_path()
-	if options.out_path then
-		write_credentials(options.out_path, result)
-		print("Credentials written to " .. options.out_path)
-	else
-		print(result)
-	end
+	local existing = read_file(options.out_path)
+	local merged = merge_credentials(existing, provider, result)
+	write_credentials(options.out_path, merged)
+	print("Credentials written to " .. options.out_path)
 end
