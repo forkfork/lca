@@ -736,7 +736,7 @@ function repl.run(options)
 					end
 					if not first_token then
 						local ttft = first_token_time and (first_token_time - start_time) or elapsed
-						ui.stream_stats(token_count, elapsed, ttft)
+						ui.stream_stats(token_count, elapsed, ttft, result._response_meta)
 					end
 					session:add_assistant(result.text)
 

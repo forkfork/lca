@@ -279,9 +279,22 @@ end
 
 -- ─── Stream Stats ───────────────────────────────────────────────────────────
 
-function ui.stream_stats(tokens, elapsed, ttft)
+local function transport_label(meta)
+	meta = meta or {}
+	local transport = meta._transport
+	if transport == "websocket" then
+		return meta._transport_reused and "ws reused" or "ws"
+	elseif transport == "http" then
+		return meta._transport_fallback and "http fallback" or "http"
+	end
+	return nil
+end
+
+function ui.stream_stats(tokens, elapsed, ttft, meta)
 	local tps = elapsed > 0 and (tokens / elapsed) or 0
-	io.write(color("dim", string.format("  (%d tokens, %.1fs, TTFT %.2fs, %.0f tok/s)", tokens, elapsed, ttft, tps)) .. "\n")
+	local transport = transport_label(meta)
+	local suffix = transport and (" · " .. transport) or ""
+	io.write(color("dim", string.format("  (%d tokens, %.1fs, TTFT %.2fs, %.0f tok/s%s)", tokens, elapsed, ttft, tps, suffix)) .. "\n")
 end
 
 -- ─── Compaction ─────────────────────────────────────────────────────────────
@@ -934,4 +947,3 @@ function ui.status(session)
 end
 
 return ui
-

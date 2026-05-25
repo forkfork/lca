@@ -1,6 +1,7 @@
 local json = require("agent.util.json")
 local config = require("agent.config")
 local transport = require("agent.net.http_transport")
+local websocket_transport = require("agent.net.websocket_transport")
 
 local codex = {}
 
@@ -19,6 +20,12 @@ local PROMPT_CACHE_KEY_OVERRIDE = os.getenv("LCA_CODEX_PROMPT_CACHE_KEY")
 local DEFAULT_SERVICE_TIER = os.getenv("LCA_CODEX_DEFAULT_SERVICE_TIER") or "priority"
 local DUMP_REQUEST_DIR = os.getenv("LCA_CODEX_DUMP_REQUEST_DIR")
 local LOG_RAW_USAGE = os.getenv("LCA_CODEX_LOG_RAW_USAGE") == "1"
+local WEBSOCKET_ENABLED = os.getenv("LCA_CODEX_WEBSOCKET") ~= "0"
+	and os.getenv("LCA_CODEX_DISABLE_WEBSOCKET") ~= "1"
+local WEBSOCKET_UPGRADE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_WEBSOCKET_UPGRADE_TIMEOUT") or "") or 5
+local WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC = tonumber(os.getenv("LCA_CODEX_WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE") or "") or 8
+local WEBSOCKET_CONNECT_ATTEMPTS = tonumber(os.getenv("LCA_CODEX_WEBSOCKET_CONNECT_ATTEMPTS") or "") or 3
+local WEBSOCKET_REUSE = os.getenv("LCA_CODEX_WEBSOCKET_REUSE") ~= "0"
 
 local CLOSE_TOOL_CALL = "</tool_call>"
 local CLOSE_TOOL_CALL_LEN = #CLOSE_TOOL_CALL
@@ -27,6 +34,7 @@ local RAW_CONTENT_TOOLS = {
 	write = true,
 }
 local last_prefix_hashes_by_key = {}
+local websocket_connections_by_key = {}
 local dump_counter = 0
 
 local function debug_log(fmt, ...)
@@ -117,6 +125,22 @@ local function codex_headers(credentials, request)
 	local affinity_id = cache_affinity_id(request)
 	if affinity_id and affinity_id ~= "" then
 		headers[#headers + 1] = { "session_id", affinity_id }
+		headers[#headers + 1] = { "x-client-request-id", affinity_id }
+	end
+	return headers
+end
+
+local function codex_websocket_headers(credentials, request)
+	local headers = {
+		{ "Authorization", "Bearer " .. credentials.access },
+		{ "chatgpt-account-id", credentials.account_id },
+		{ "originator", "lca" },
+		{ "OpenAI-Beta", "responses_websockets=2026-02-06" },
+	}
+	local affinity_id = cache_affinity_id(request)
+	if affinity_id and affinity_id ~= "" then
+		headers[#headers + 1] = { "session-id", affinity_id }
+		headers[#headers + 1] = { "thread-id", affinity_id }
 		headers[#headers + 1] = { "x-client-request-id", affinity_id }
 	end
 	return headers
@@ -462,6 +486,39 @@ local function format_event_type_counts(stats)
 	return #parts > 0 and table.concat(parts, ",") or "(none)"
 end
 
+local function process_event_payload(payload, on_delta, on_usage, stats)
+	stats.last_payload_sample = compact_sample(payload, 500)
+	local event_type = json.field(payload, "type")
+	if event_type then
+		note_event_type(stats, event_type)
+	else
+		stats.json_type_missing = stats.json_type_missing + 1
+		local ok = pcall(json.decode, payload)
+		if not ok then
+			stats.json_payload_errors = stats.json_payload_errors + 1
+		end
+		note_event_type(stats, "(missing)")
+	end
+	if on_usage then
+		local usage = usage_from_payload(payload)
+		if usage then
+			stats.usage_events = stats.usage_events + 1
+			on_usage(usage)
+		end
+	end
+	if event_type == "response.output_text.delta" then
+		local delta = json.field(payload, "delta")
+		if delta and delta ~= "" then
+			stats.output_deltas = stats.output_deltas + 1
+			stats.output_delta_bytes = stats.output_delta_bytes + #delta
+			if on_delta(delta) == false then
+				return false
+			end
+		end
+	end
+	return event_type
+end
+
 local function sse_parser(on_delta, on_usage, on_abort, stats)
 	local line_buffer = ""
 	stats = stats or new_sse_stats()
@@ -486,41 +543,16 @@ local function sse_parser(on_delta, on_usage, on_abort, stats)
 			line_buffer = line_buffer:sub(pos + 1)
 			stats.lines = stats.lines + 1
 			stats.max_line_bytes = math.max(stats.max_line_bytes, #line)
-			local payload = line:match("^data:%s*(.+)$")
-			if payload then
-				stats.data_lines = stats.data_lines + 1
-				stats.last_payload_sample = compact_sample(payload, 500)
-				local event_type = json.field(payload, "type")
-				if event_type then
-					note_event_type(stats, event_type)
-				else
-					stats.json_type_missing = stats.json_type_missing + 1
-					local ok = pcall(json.decode, payload)
-					if not ok then
-						stats.json_payload_errors = stats.json_payload_errors + 1
+				local payload = line:match("^data:%s*(.+)$")
+				if payload then
+					stats.data_lines = stats.data_lines + 1
+					local processed = process_event_payload(payload, on_delta, on_usage, stats)
+					if processed == false then
+						return false
 					end
-					note_event_type(stats, "(missing)")
+				elseif line ~= "" then
+					stats.non_data_lines = stats.non_data_lines + 1
 				end
-				if on_usage then
-					local usage = usage_from_payload(payload)
-					if usage then
-						stats.usage_events = stats.usage_events + 1
-						on_usage(usage)
-					end
-				end
-				if event_type == "response.output_text.delta" then
-					local delta = json.field(payload, "delta")
-					if delta and delta ~= "" then
-						stats.output_deltas = stats.output_deltas + 1
-						stats.output_delta_bytes = stats.output_delta_bytes + #delta
-						if on_delta(delta) == false then
-							return false
-						end
-					end
-				end
-			elseif line ~= "" then
-				stats.non_data_lines = stats.non_data_lines + 1
-			end
 		end
 	end
 end
@@ -727,6 +759,248 @@ local function log_sse_stats(prefix, stats, body_tail)
 	)
 end
 
+local function websocket_body(body)
+	return body:gsub("^{", '{"type":"response.create",', 1)
+end
+
+local function websocket_deadlines(request)
+	local deadlines = default_deadlines(request)
+	deadlines.first_byte = WEBSOCKET_UPGRADE_TIMEOUT_SEC
+	return deadlines
+end
+
+local function websocket_http_fallback_request(request)
+	local fallback = {}
+	for key, value in pairs(request) do
+		fallback[key] = value
+	end
+	local deadlines = {}
+	for key, value in pairs(request.deadlines or {}) do
+		deadlines[key] = value
+	end
+	if not deadlines.first_byte or deadlines.first_byte > WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC then
+		deadlines.first_byte = WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC
+	end
+	fallback.deadlines = deadlines
+	return fallback
+end
+
+local function websocket_connection_key(request)
+	local affinity_id = cache_affinity_id(request) or "no-affinity"
+	return table.concat({
+		tostring(request.host or CODEX_HOST),
+		tostring(request.port or 443),
+		tostring(request.path or CODEX_PATH),
+		affinity_id,
+	}, "|")
+end
+
+local function close_websocket_connection(key)
+	local conn = websocket_connections_by_key[key]
+	websocket_connections_by_key[key] = nil
+	if conn and conn.close then
+		pcall(function() conn:close() end)
+	end
+end
+
+local function do_complete_websocket(request, credentials, body, on_token)
+	local chunks = {}
+	local sse_stats = new_sse_stats()
+	local full_stream = ""
+	local tool_call_seen = false
+	local tool_call_closed = false
+	local last_tool_call_end = 0
+	local cutoff = false
+	local abort_reason = nil
+	local usage = nil
+	local completed = false
+
+	local function on_delta(delta)
+		chunks[#chunks + 1] = delta
+		full_stream = full_stream .. delta
+		if #full_stream > MAX_OUTPUT_TEXT_CHARS then
+			abort_reason = "output_text_too_large"
+			debug_log("[codex] websocket stream cutoff reason=%s response_chars=%d threshold=%d",
+				abort_reason,
+				#full_stream,
+				MAX_OUTPUT_TEXT_CHARS
+			)
+			return false
+		end
+		if on_token then
+			on_token(delta)
+		end
+		if not tool_call_seen and full_stream:find("<tool_call") then
+			tool_call_seen = true
+		end
+		if tool_call_seen then
+			local close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
+			while close_pos do
+				last_tool_call_end = close_pos + CLOSE_TOOL_CALL_LEN - 1
+				tool_call_closed = true
+				close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
+			end
+		end
+		if tool_call_closed then
+			local after = full_stream:sub(last_tool_call_end + 1)
+			local tail_kind = post_tool_tail_kind(after)
+			if should_cut_after_tool(tail_kind, #after) then
+				cutoff = true
+				debug_log("[codex] websocket early tool-call cutoff reason=%s post_tool_chars=%d response_chars=%d threshold=%d",
+					tail_kind,
+					#after,
+					#full_stream,
+					POST_TOOL_THRESHOLD
+				)
+				return false
+			end
+		end
+	end
+
+	local function websocket_options()
+		return {
+			host = request.host or CODEX_HOST,
+			port = request.port or 443,
+			path = request.path or CODEX_PATH,
+			user_agent = "lca-codex/websocket",
+			body = websocket_body(body),
+			deadlines = websocket_deadlines(request),
+			cancelled = function()
+				return request.cancelled and request.cancelled() or cancel_requested()
+			end,
+			headers = codex_websocket_headers(credentials, request),
+		}
+	end
+
+	local function on_websocket_text(payload)
+				sse_stats.body_chunks = sse_stats.body_chunks + 1
+				sse_stats.body_bytes = sse_stats.body_bytes + #payload
+				sse_stats.lines = sse_stats.lines + 1
+				sse_stats.data_lines = sse_stats.data_lines + 1
+				sse_stats.max_line_bytes = math.max(sse_stats.max_line_bytes, #payload)
+				local event_type = process_event_payload(payload, on_delta, function(next_usage)
+					usage = next_usage
+				end, sse_stats)
+				if event_type == "response.completed" then
+					completed = true
+					return false
+				end
+				if abort_reason or cutoff then
+					return false
+				end
+	end
+
+	local function websocket_request(use_reuse)
+		local opts = websocket_options()
+		opts.on_text = on_websocket_text
+		if not use_reuse then
+			return websocket_transport.request(opts)
+		end
+
+		local key = websocket_connection_key(request)
+		local conn = websocket_connections_by_key[key]
+		local reused = conn ~= nil
+		if not conn then
+			local connect_err
+			conn, connect_err = websocket_transport.connect(opts)
+			if not conn then
+				return nil, connect_err
+			end
+			websocket_connections_by_key[key] = conn
+		end
+
+		local ok, result = pcall(function()
+			return conn:request(websocket_body(body), on_websocket_text)
+		end)
+		if ok then
+			if reused then
+				result.websocket_reused = true
+			end
+			return result
+		end
+		close_websocket_connection(key)
+		if type(result) == "table" and result._transport_error then
+			result.websocket_reused = reused
+			return nil, result
+		end
+		error(result)
+	end
+
+	local result, err
+	local connect_attempts = math.max(1, WEBSOCKET_CONNECT_ATTEMPTS)
+	for ws_attempt = 1, connect_attempts do
+		result, err = websocket_request(WEBSOCKET_REUSE)
+		if result then
+			err = nil
+			break
+		end
+		local retryable_upgrade_timeout = err
+			and err.kind == "timeout"
+			and err.phase == "headers"
+			and (err.response_bytes or 0) == 0
+			and #chunks == 0
+		local retryable_stale_reused_socket = err
+			and err.websocket_reused
+			and #chunks == 0
+			and (err.kind == "stream" or err.kind == "write" or err.kind == "timeout")
+		if not (retryable_upgrade_timeout or retryable_stale_reused_socket) or ws_attempt >= connect_attempts then
+			break
+		end
+		debug_log("[codex] websocket attempt %d/%d failed: %s/%s %s; retrying",
+			ws_attempt,
+			connect_attempts,
+			tostring(err.kind),
+			tostring(err.phase or "unknown"),
+			tostring(err.detail)
+		)
+	end
+
+	if err then
+		local salvaged_text, salvaged_calls = salvage_partial_tool_response(chunks, err)
+		if salvaged_text then
+			return {
+				status = err.status or 101,
+				text = salvaged_text,
+				response_bytes = err.response_bytes or 0,
+				body_tail = err.body_tail or "",
+				timings = err.timings,
+				usage = usage,
+				early_cutoff = true,
+				partial_salvage = true,
+				partial_salvaged_calls = salvaged_calls,
+				sse_stats = sse_stats,
+				transport = "websocket",
+			}
+		end
+		err.text_chunks = chunks
+		err.sse_stats = sse_stats
+		return nil, err
+	end
+	result.sse_stats = sse_stats
+	result.text = table.concat(chunks)
+	if cutoff or tool_call_seen then
+		local canonical = canonical_tool_text(result.text)
+		if canonical ~= result.text then
+			debug_log("[codex] websocket canonicalized tool response chars=%d->%d",
+				#result.text,
+				#canonical
+			)
+			result.text = canonical
+		end
+	end
+	result.usage = usage
+	result.early_cutoff = cutoff
+	result.abort_reason = abort_reason
+	result.transport = "websocket"
+	if not completed and not cutoff and not abort_reason then
+		result.abort_reason = "websocket_closed_before_completed"
+	end
+	if result.websocket_reused then
+		debug_log("[codex] websocket reused cached connection")
+	end
+	return result
+end
+
 local function do_complete(request, credentials, body, on_token)
 	local chunks = {}
 	local sse_stats = new_sse_stats()
@@ -835,6 +1109,7 @@ local function do_complete(request, credentials, body, on_token)
 	result.usage = usage
 	result.early_cutoff = cutoff
 	result.abort_reason = abort_reason
+	result.transport = "http"
 	return result
 end
 
@@ -855,10 +1130,29 @@ function codex.complete(request, on_token)
 		if attempt == 0 then
 			log_prefix_stability(summary)
 		end
-		local result, err = do_complete(request, credentials, body, on_token)
+		local result, err
+		if WEBSOCKET_ENABLED then
+			debug_log("[codex] attempt %d using websocket transport", attempt + 1)
+			result, err = do_complete_websocket(request, credentials, body, on_token)
+			if err then
+				debug_log("[codex] attempt %d websocket failed; falling back to http: %s/%s %s",
+					attempt + 1,
+					tostring(err.kind),
+					tostring(err.phase or "unknown"),
+					tostring(err.detail)
+				)
+				result, err = do_complete(websocket_http_fallback_request(request), credentials, body, on_token)
+				if result then
+					result.websocket_fallback = true
+				end
+			end
+		else
+			result, err = do_complete(request, credentials, body, on_token)
+		end
 		if result then
-			debug_log("[codex] attempt %d succeeded http_status=%s response_chars=%d response_bytes=%d timing=%s",
+			debug_log("[codex] attempt %d succeeded transport=%s http_status=%s response_chars=%d response_bytes=%d timing=%s",
 				attempt + 1,
+				tostring(result.transport or "http"),
 				tostring(result.status or "unknown"),
 				#(result.text or ""),
 				result.response_bytes or 0,
@@ -938,6 +1232,9 @@ function codex.complete(request, on_token)
 					_response_bytes = result.response_bytes,
 					_partial_salvage = result.partial_salvage or nil,
 					_partial_salvaged_calls = result.partial_salvaged_calls,
+					_transport = result.transport,
+					_transport_reused = result.websocket_reused or nil,
+					_transport_fallback = result.websocket_fallback or nil,
 				}
 			end
 		else

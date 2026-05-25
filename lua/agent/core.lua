@@ -262,7 +262,19 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	local total_tool_executions = 0
 	local consecutive_read_only_batches = 0
 	local read_only_guard_used = false
+	local last_response_meta = nil
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
+
+	local function response_meta(response)
+		if not response then return last_response_meta end
+		return {
+			_transport = response._transport,
+			_transport_reused = response._transport_reused,
+			_transport_fallback = response._transport_fallback,
+			_response_bytes = response._response_bytes,
+			_http_status = response._http_status,
+		}
+	end
 
 	for step = 1, MAX_TOOL_STEPS do
 		-- Check for cancellation
@@ -271,6 +283,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			return {
 				text = "",
 				events = events,
+				_response_meta = last_response_meta,
 			}
 		end
 
@@ -357,6 +370,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 			messages = session.messages,
 		}, on_token)
+		last_response_meta = response_meta(response)
 
 		-- Check for cancellation after LLM call
 		if repl_ok and repl_mod.cancelled then
@@ -364,6 +378,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			return {
 				text = response.text or "",
 				events = events,
+				_response_meta = last_response_meta,
 			}
 		end
 
@@ -421,6 +436,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			return {
 				text = text,
 				events = events,
+				_response_meta = last_response_meta,
 			}
 		end
 		if #tool_calls == 0 then
@@ -432,6 +448,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			return {
 				text = text,
 				events = events,
+				_response_meta = last_response_meta,
 			}
 		end
 
@@ -497,6 +514,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				return {
 					text = text,
 					events = events,
+					_response_meta = last_response_meta,
 				}
 			end
 			read_only_guard_used = true
@@ -575,6 +593,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				return {
 					text = direct_text,
 					events = events,
+					_response_meta = last_response_meta,
 				}
 			end
 
@@ -584,6 +603,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				return {
 					text = "",
 					events = events,
+					_response_meta = last_response_meta,
 				}
 			end
 		end
@@ -604,6 +624,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 		messages = session.messages,
 	}, on_token)
+	last_response_meta = response_meta(response)
 	local text = clean_assistant_text(response.text)
 	if session.record_usage then
 		session:record_usage(response._usage, #session.messages)
@@ -615,6 +636,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	return {
 		text = text ~= "" and text or "Stopped after " .. MAX_TOOL_STEPS .. " tool steps.",
 		events = events,
+		_response_meta = last_response_meta,
 	}
 end
 

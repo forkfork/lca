@@ -56,6 +56,13 @@ lca repl
 Useful REPL commands: `/help`, `/status`, `/model`, `/reasoning`, `/clear`,
 `/exit`.
 
+Codex/OpenAI uses the Responses WebSocket transport by default, with HTTPS/SSE
+fallback on transport failure. To force the old HTTPS/SSE path:
+
+```bash
+LCA_CODEX_WEBSOCKET=0 lca
+```
+
 ## Local Development
 
 Run directly from the checkout:

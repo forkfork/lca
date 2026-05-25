@@ -40,6 +40,7 @@ build = {
 		["agent.login"] = "lua/agent/login.lua",
 		["agent.mcp"] = "lua/agent/mcp.lua",
 		["agent.net.http_transport"] = "lua/agent/net/http_transport.lua",
+		["agent.net.websocket_transport"] = "lua/agent/net/websocket_transport.lua",
 		["agent.parallel"] = "lua/agent/parallel.lua",
 		["agent.project_context"] = "lua/agent/project_context.lua",
 		["agent.project_index"] = "lua/agent/project_index.lua",
