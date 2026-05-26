@@ -135,14 +135,14 @@ test("ui exposes active plan reference", function()
 	assert_eq(ui.plan_ref(index), "②")
 end)
 
-test("ui plan progress prefers last completed task", function()
+test("ui plan progress shows completed task and next task", function()
 	local plan = {
 		{ step = "Inspect target", status = "completed" },
 		{ step = "Draft app structure", status = "completed" },
 		{ step = "Write scripts", status = "in_progress" },
 	}
 
-	assert_eq(ui.plan_progress_label(plan), "Draft app structure")
+	assert_eq(ui.plan_progress_label(plan), "Draft app structure → next: Write scripts")
 end)
 
 test("ui plan progress falls back to current task before completion", function()

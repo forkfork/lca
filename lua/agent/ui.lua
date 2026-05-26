@@ -726,7 +726,12 @@ local function plan_last_completed(plan)
 end
 
 function ui.plan_progress_label(plan)
-	return plan_last_completed(plan) or ui.plan_current(plan)
+	local completed = plan_last_completed(plan)
+	local current = ui.plan_current(plan)
+	if completed and current then
+		return completed .. " → next: " .. current
+	end
+	return completed or current
 end
 
 function ui.plan_ref(index)
