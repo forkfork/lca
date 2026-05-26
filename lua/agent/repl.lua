@@ -736,7 +736,7 @@ function repl.run(options)
 					end
 					if info and info.status then
 						ui.clear_model_progress()
-						ui.model_progress(label_with_current_plan(info.status))
+						ui.model_progress(info.status)
 					end
 					local tool_count_text = "tool results"
 					if info and info.tools and info.tools >= 4 then
