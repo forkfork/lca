@@ -671,6 +671,13 @@ local function plan_marker(status)
 	return "○", "dim"
 end
 
+local function plan_progress_marker(status)
+	if status == "completed" then
+		return "✓", "green"
+	end
+	return "○", "dim"
+end
+
 local CIRCLED_NUMBERS = {
 	"①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
 	"⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳",
@@ -770,7 +777,7 @@ function ui.plan_progress(plan)
 	local highlight_step = ui.plan_progress_label(plan)
 	io.write("  " .. color("magenta", "▣") .. " " .. color("magenta", pad_right("plan", 12)))
 	for i, item in ipairs(plan) do
-		local marker, marker_color = plan_marker(item.status)
+		local marker, marker_color = plan_progress_marker(item.status)
 		io.write(color(marker_color, plan_number(i) .. marker))
 		if i < #plan then
 			io.write(color("dim", " "))

@@ -145,6 +145,15 @@ test("ui plan progress prefers last completed task", function()
 	assert_eq(ui.plan_progress_label(plan), "Draft app structure")
 end)
 
+test("ui plan progress falls back to current task before completion", function()
+	local plan = {
+		{ step = "Inspect target", status = "in_progress" },
+		{ step = "Draft app structure", status = "pending" },
+	}
+
+	assert_eq(ui.plan_progress_label(plan), "Inspect target")
+end)
+
 test("ui lists only fresh plans by default", function()
 	local fresh = {
 		{ step = "Inspect target", status = "in_progress" },
