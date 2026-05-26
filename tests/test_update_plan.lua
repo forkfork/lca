@@ -10,6 +10,7 @@ local registry = require("agent.tool_registry")
 local session_mod = require("agent.session")
 local protocol = require("agent.tool_protocol")
 local commands = require("agent.commands")
+local ui = require("agent.ui")
 
 local passed = 0
 local failed = 0
@@ -156,6 +157,20 @@ test("plan command handles empty plan", function()
 	commands.dispatch("/plan", s, fake_ui)
 
 	assert_eq(message, "empty")
+end)
+
+test("ui exposes active plan reference", function()
+	local plan = {
+		{ step = "Inspect target", status = "completed" },
+		{ step = "Implement compact progress", status = "in_progress" },
+		{ step = "Run checks", status = "pending" },
+	}
+
+	local step, index = ui.plan_current(plan)
+
+	assert_eq(step, "Implement compact progress")
+	assert_eq(index, 2)
+	assert_eq(ui.plan_ref(index), "②")
 end)
 
 test("tool is advertised with usage guidance", function()

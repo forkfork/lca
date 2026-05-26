@@ -645,21 +645,35 @@ local function plan_marker(status)
 	if status == "completed" then
 		return "✓", "green"
 	elseif status == "in_progress" then
-		return "▶", "cyan"
+		return "◉", "cyan"
 	end
-	return "·", "dim"
+	return "○", "dim"
+end
+
+local CIRCLED_NUMBERS = {
+	"①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
+	"⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳",
+}
+
+local function plan_number(index)
+	return CIRCLED_NUMBERS[index] or tostring(index)
 end
 
 function ui.plan_current(plan)
 	if type(plan) ~= "table" then
 		return nil
 	end
-	for _, item in ipairs(plan) do
+	for i, item in ipairs(plan) do
 		if item.status == "in_progress" and item.step and item.step ~= "" then
-			return item.step
+			return item.step, i
 		end
 	end
 	return nil
+end
+
+function ui.plan_ref(index)
+	if not index then return "" end
+	return plan_number(index)
 end
 
 function ui.plan(plan)
@@ -671,13 +685,42 @@ function ui.plan(plan)
 	for i, item in ipairs(plan) do
 		local marker, marker_color = plan_marker(item.status)
 		local step = tostring(item.step or "")
-		local prefix = tostring(i) .. ". " .. marker .. " "
+		local prefix = plan_number(i) .. " " .. marker .. " "
 		local lines = limited_lines(step, { max_lines = 2, max_width = 96, max_bytes = 300 })
 		io.write("  " .. color("dim", "┆ " .. pad_right("", 8)) .. color(marker_color, prefix) .. color("dim", lines[1] or "") .. "\n")
 		for j = 2, #lines do
 			io.write("  " .. color("dim", "┆ " .. pad_right("", 8) .. (" "):rep(#prefix)) .. color("dim", lines[j]) .. "\n")
 		end
 	end
+end
+
+function ui.plan_progress(plan)
+	if type(plan) ~= "table" or #plan == 0 then
+		rail_line("▣", "magenta", "plan", "cleared")
+		return
+	end
+	local completed = 0
+	local current_step, current_index = ui.plan_current(plan)
+	io.write("  " .. color("magenta", "▣") .. " " .. color("magenta", pad_right("plan", 12)))
+	for i, item in ipairs(plan) do
+		local marker, marker_color = plan_marker(item.status)
+		if item.status == "completed" then
+			completed = completed + 1
+		end
+		io.write(color(marker_color, plan_number(i) .. marker))
+		if i < #plan then
+			io.write(color("dim", " "))
+		end
+	end
+	local suffix = "  " .. tostring(completed) .. "/" .. tostring(#plan)
+	if current_step then
+		local compact = tostring(current_step):gsub("%s+", " ")
+		if #compact > 72 then
+			compact = compact:sub(1, 69) .. "..."
+		end
+		suffix = suffix .. " · " .. plan_number(current_index) .. " " .. compact
+	end
+	io.write(color("dim", suffix) .. "\n")
 end
 
 local active_tool_timer = nil
@@ -905,7 +948,7 @@ function ui.tool(event)
 				end
 				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
-					ui.plan(event.result.plan)
+					ui.plan_progress(event.result.plan)
 				elseif event.name == "update_plan" and event.result and event.result.content then
 					rail_block("plan", event.result.content, { max_lines = 12, max_width = 120, max_bytes = 1600 })
 				elseif event.name == "run" and event.result and event.result.content then
