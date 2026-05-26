@@ -86,12 +86,15 @@ function update_plan.execute(args, context)
 		}
 	end
 
+	local previous_plan = session.plan
+	local replaces_empty_plan = type(previous_plan) ~= "table" or #previous_plan == 0
 	session.plan = normalized
 
 	return {
 		is_error = false,
 		content = plan_text(normalized),
 		plan = normalized,
+		plan_fresh = replaces_empty_plan and #normalized > 0,
 		summary = #normalized == 0 and "cleared plan" or ("updated " .. tostring(#normalized) .. " steps"),
 	}
 end

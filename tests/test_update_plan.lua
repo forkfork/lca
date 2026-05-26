@@ -45,10 +45,31 @@ test("stores normalized plan on session", function()
 
 	assert_eq(result.is_error, false)
 	assert_eq(result.summary, "updated 3 steps")
+	assert_eq(result.plan_fresh, true)
 	assert_eq(#s.plan, 3)
 	assert_eq(s.plan[2].step, "Implement tool")
 	assert_eq(s.plan[2].status, "in_progress")
 	assert(result.content:find("2. %[in_progress%] Implement tool"), "missing rendered plan content")
+end)
+
+test("marks only the first plan after empty state as fresh", function()
+	local s = session_mod.create({})
+	local first = update_plan.execute({
+		plan = {
+			{ step = "Previous cycle", status = "completed" },
+			{ step = "Next cycle", status = "in_progress" },
+		},
+	}, { session = s })
+	local second = update_plan.execute({
+		plan = {
+			{ step = "Previous cycle", status = "completed" },
+			{ step = "Next cycle", status = "completed" },
+			{ step = "Verify", status = "in_progress" },
+		},
+	}, { session = s })
+
+	assert_eq(first.plan_fresh, true)
+	assert_eq(second.plan_fresh, false)
 end)
 
 test("insanitywolf prompt stays compact", function()

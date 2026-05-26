@@ -1085,7 +1085,7 @@ function ui.tool(event)
 				end
 				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
-					if ui.plan_should_list(event.result.plan) then
+					if event.result.plan_fresh or ui.plan_should_list(event.result.plan) then
 						ui.plan_outline(event.result.plan)
 					else
 						ui.plan_progress(event.result.plan)

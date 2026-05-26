@@ -151,10 +151,30 @@ test("request body uses session-specific prompt cache key", function()
 	end
 end)
 
-test("codex total timeout default allows long active streams", function()
+test("codex timeout defaults allow long active streams", function()
 	local deadlines = codex._default_deadlines({})
+	assert_eq(deadlines.first_byte, 25)
 	assert_eq(deadlines.total, 600)
 	assert_eq(deadlines.idle, 60)
+end)
+
+test("codex first byte timeout stays long for large context", function()
+	local deadlines = codex._default_deadlines({
+		system_prompt = string.rep("s", 12000),
+		messages = {
+			{ role = "user", text = string.rep("m", 12000) },
+		},
+	})
+	assert_eq(deadlines.first_byte, 180)
+end)
+
+test("codex explicit first byte timeout override wins", function()
+	local deadlines = codex._default_deadlines({
+		deadlines = {
+			first_byte = 12,
+		},
+	})
+	assert_eq(deadlines.first_byte, 12)
 end)
 
 test("request body defaults codex service tier to priority", function()

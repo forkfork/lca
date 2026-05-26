@@ -8,14 +8,14 @@ local codex = {}
 local CODEX_HOST = "chatgpt.com"
 local CODEX_PATH = "/backend-api/codex/responses"
 
-local MAX_RETRIES = tonumber(os.getenv("LCA_CODEX_MAX_RETRIES") or "") or 2
+local MAX_RETRIES = 2
 local INITIAL_BACKOFF_SEC = 1
-local FIRST_BYTE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_FIRST_BYTE_TIMEOUT") or "") or 180
-local IDLE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_IDLE_TIMEOUT") or "") or 60
-local TOTAL_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_TOTAL_TIMEOUT") or "") or 600
-local POST_TOOL_THRESHOLD = tonumber(os.getenv("LCA_CODEX_POST_TOOL_THRESHOLD") or "") or 800
-local MAX_OUTPUT_TEXT_CHARS = tonumber(os.getenv("LCA_CODEX_MAX_OUTPUT_TEXT_CHARS") or "") or 200000
-local MAX_SSE_LINE_BYTES = tonumber(os.getenv("LCA_CODEX_MAX_SSE_LINE_BYTES") or "") or 262144
+local FIRST_BYTE_TIMEOUT_SEC = 180
+local IDLE_TIMEOUT_SEC = 60
+local TOTAL_TIMEOUT_SEC = 600
+local POST_TOOL_THRESHOLD = 800
+local MAX_OUTPUT_TEXT_CHARS = 200000
+local MAX_SSE_LINE_BYTES = 262144
 local PROMPT_CACHE_KEY_OVERRIDE = os.getenv("LCA_CODEX_PROMPT_CACHE_KEY")
 local DEFAULT_SERVICE_TIER = os.getenv("LCA_CODEX_DEFAULT_SERVICE_TIER") or "priority"
 local DUMP_REQUEST_DIR = os.getenv("LCA_CODEX_DUMP_REQUEST_DIR")
@@ -370,6 +370,14 @@ local function is_retryable_http(status, body)
 		or body:find("overloaded") ~= nil
 end
 
+local function estimate_request_tokens(request)
+	local chars = #(request.system_prompt or "")
+	for _, message in ipairs(request.messages or {}) do
+		chars = chars + #(message.text or "")
+	end
+	return math.ceil(chars / 4)
+end
+
 local function default_deadlines(request)
 	local deadlines = {
 		connect = 15,
@@ -379,6 +387,9 @@ local function default_deadlines(request)
 		idle = IDLE_TIMEOUT_SEC,
 		total = TOTAL_TIMEOUT_SEC,
 	}
+	if estimate_request_tokens(request or {}) <= 5000 then
+		deadlines.first_byte = math.min(deadlines.first_byte, 25)
+	end
 	for key, value in pairs(request.deadlines or {}) do
 		deadlines[key] = value
 	end
