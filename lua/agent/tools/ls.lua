@@ -8,6 +8,14 @@ function ls.execute(args, context)
 	local command = "ls -1 " .. shell.quote(target) .. " 2>/dev/null"
 	local ok, output = pcall(shell.capture, command)
 	if not ok then
+		local exists_ok, _, exists_code = os.execute("test -e " .. shell.quote(target))
+		if not (exists_ok == true or exists_ok == 0 or exists_code == 0) then
+			return {
+				is_error = false,
+				content = target .. " does not exist",
+				summary = "missing",
+			}
+		end
 		return {
 			is_error = true,
 			content = tostring(output),

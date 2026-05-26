@@ -311,6 +311,17 @@ run_test("deduplicates identical shell tool calls in one batch", function()
 	assert_eq(#events, 2)
 end)
 
+run_test("missing ls target is non-error context", function()
+	local missing = tmp_dir .. "/does-not-exist"
+	local calls = {
+		{ name = "ls", args = { path = missing } },
+		{ name = "grep", args = { path = tmp_dir, pattern = "nothing" } },
+	}
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir })
+	assert_eq(results[1].is_error, false, "missing ls target should be context, not failure")
+	assert_eq(results[1].summary, "missing")
+end)
+
 run_test("deduplicates identical read tool calls in one batch", function()
 	local path = tmp_dir .. "/dedupe-read.txt"
 	write_file(path, "one\ntwo\nthree\n")

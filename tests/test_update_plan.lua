@@ -125,6 +125,7 @@ test("tool is advertised with usage guidance", function()
 	local prompt = registry.system_prompt()
 	assert(prompt:find("- update_plan:", 1, true), "missing tool listing")
 	assert(prompt:find("For substantial multi-step implementation work", 1, true), "missing usage guidance")
+	assert(prompt:find("6 calls or fewer", 1, true), "missing batch cap guidance")
 end)
 
 if failed > 0 then

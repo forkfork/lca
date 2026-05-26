@@ -99,7 +99,7 @@ function registry.mcp_prompt_section()
 end
 function registry.system_prompt()
 	local base = [[
-You have access to tools. You may include multiple tool calls in a single message — all will be executed in parallel.
+You have access to tools. You may include multiple tool calls in a single message — up to 6 will be executed per batch.
 
 ## Tool call format
 
@@ -183,6 +183,7 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - Use edit/write for file changes. Do not use run with ad hoc scripts to modify files unless edit/write is unavailable or blocked by a tool bug.
 - You may batch multiple edits to the same file only when the line ranges are non-overlapping and all edits use tags from a previous read output already visible in this conversation. They are applied bottom-to-top so line numbers stay valid. If edits overlap or depend on earlier edits, make one edit, re-read, then continue.
 - Batch independent tool calls in one message — they run in parallel.
+- Keep each tool-call batch to 6 calls or fewer. If a task needs more, emit the first coherent batch, wait for results, then continue.
 - Do NOT batch read with edit/write for the same file. Same-message tool results are unavailable to other tool calls, so read first, wait for the result, then edit in the next turn.
 - Use run for short commands that should block until completion. Use job_start for long-running commands such as dev servers, watchers, slow test suites, or commands you may need to inspect or stop later.
 - If the user asked you to run tests/check/verify and a run tool completes successfully, report the result instead of reading unrelated files.

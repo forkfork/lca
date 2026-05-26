@@ -219,7 +219,7 @@ local function count_lines(output)
 	return count
 end
 
-local function format_result(name, _args, output, exit_code)
+local function format_result(name, args, output, exit_code)
 	if exit_code == 127 then
 		return {
 			is_error = true,
@@ -233,6 +233,14 @@ local function format_result(name, _args, output, exit_code)
 	local count = count_lines(output)
 
 	if name == "ls" then
+		if exit_code ~= 0 then
+			local target = args and args.path or "path"
+			return {
+				is_error = false,
+				content = tostring(target) .. " does not exist",
+				summary = "missing",
+			}
+		end
 		return {
 			is_error = false,
 			content = output ~= "" and output or "(empty directory)",
