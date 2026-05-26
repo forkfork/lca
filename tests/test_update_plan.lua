@@ -187,6 +187,11 @@ test("ui lists only fresh plans by default", function()
 	assert_eq(ui.plan_should_list(active), false)
 end)
 
+test("ui has a separate fresh plan outline renderer", function()
+	assert_eq(type(ui.plan_outline), "function")
+	assert_eq(type(ui.plan_progress), "function")
+end)
+
 test("tool is advertised with usage guidance", function()
 	assert_eq(registry.is_valid("update_plan"), true)
 	local prompt = registry.system_prompt()

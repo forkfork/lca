@@ -707,6 +707,23 @@ function ui.plan(plan)
 	end
 end
 
+function ui.plan_outline(plan)
+	if type(plan) ~= "table" or #plan == 0 then
+		ui.muted("  no active plan")
+		return
+	end
+	rail_line("▣", "magenta", "plan", tostring(#plan) .. " steps")
+	for i, item in ipairs(plan) do
+		local step = tostring(item.step or "")
+		local prefix = plan_number(i) .. " "
+		local lines = limited_lines(step, { max_lines = 2, max_width = 96, max_bytes = 300 })
+		io.write("  " .. color("dim", "┆ " .. pad_right("", 8)) .. color("magenta", prefix) .. color("cyan", lines[1] or "") .. "\n")
+		for j = 2, #lines do
+			io.write("  " .. color("dim", "┆ " .. pad_right("", 8) .. (" "):rep(#prefix)) .. color("cyan", lines[j]) .. "\n")
+		end
+	end
+end
+
 function ui.plan_progress(plan)
 	if type(plan) ~= "table" or #plan == 0 then
 		rail_line("▣", "magenta", "plan", "cleared")
@@ -963,7 +980,7 @@ function ui.tool(event)
 				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
 					if ui.plan_should_list(event.result.plan) then
-						ui.plan(event.result.plan)
+						ui.plan_outline(event.result.plan)
 					else
 						ui.plan_progress(event.result.plan)
 					end
