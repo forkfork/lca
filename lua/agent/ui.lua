@@ -1193,7 +1193,7 @@ function ui.status(session)
 		"model: " .. session.model,
 		"reasoning: " .. (session.reasoning_effort or "default"),
 		"service tier: " .. (session.service_tier or "default"),
-		"flow: " .. (session.flow or "off"),
+		"mode: " .. ((session.flow == "insanitywolf") and "insanitywolf" or "normal"),
 		"cwd: " .. session.cwd,
 		"credentials: " .. session.credentials_path,
 		"turns: " .. session:turn_count(),

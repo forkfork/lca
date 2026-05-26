@@ -222,7 +222,7 @@ run_test("flow mode is saved and loaded", function()
 	assert_eq(second.flow, "insanitywolf")
 end)
 
-run_test("flow command invalidates cached system prompt", function()
+run_test("insanitywolf command invalidates cached system prompt", function()
 	local commands = require("agent.commands")
 	local ui = {
 		muted = function() end,
@@ -235,7 +235,7 @@ run_test("flow command invalidates cached system prompt", function()
 		error("expected cached prompt")
 	end
 
-	commands.dispatch("/flow insanitywolf", s, ui)
+	commands.dispatch("/insanitywolf on", s, ui)
 
 	assert_eq(s.flow, "insanitywolf")
 	assert_eq(s.system_prompt, nil)
@@ -246,19 +246,27 @@ run_test("flow command invalidates cached system prompt", function()
 	end
 end)
 
-run_test("flow on is rejected", function()
+run_test("insanitywolf command toggles and validates args", function()
 	local commands = require("agent.commands")
 	local errors = {}
+	local muted = {}
 	local ui = {
-		muted = function() end,
+		muted = function(message) muted[#muted + 1] = message end,
 		error = function(message) errors[#errors + 1] = message end,
 	}
 	local s = session_module.create({ session_id = "lca-test-session", flow = "off" })
 
-	commands.dispatch("/flow on", s, ui)
+	commands.dispatch("/insanitywolf", s, ui)
+	assert_eq(s.flow, "insanitywolf")
+	assert_eq(muted[1], "insanitywolf: on")
 
+	commands.dispatch("/insanitywolf", s, ui)
 	assert_eq(s.flow, "off")
-	assert_eq(errors[1], "usage: /flow off|insanitywolf")
+	assert_eq(muted[2], "insanitywolf: off")
+
+	commands.dispatch("/insanitywolf maybe", s, ui)
+	assert_eq(s.flow, "off")
+	assert_eq(errors[1], "usage: /insanitywolf [on|off]")
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))

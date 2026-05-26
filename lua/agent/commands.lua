@@ -15,7 +15,7 @@ local HELP = [[
 /model <id>           change model
 /reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
 /service-tier <tier>  set service tier: auto, default, flex, priority
-/flow [mode]          show or set flow mode: off, insanitywolf
+/insanitywolf [on|off] toggle bounded aggressive improvement cycles
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
 /save [path]          save session to file (default: .lca-session.json)
@@ -382,22 +382,22 @@ function commands.dispatch(line, session, ui)
 				ui.muted("service tier: " .. session.service_tier)
 			end
 		end
-	elseif name == "flow" then
+	elseif name == "insanitywolf" then
+		local value
 		if rest == "" then
-			ui.muted("flow: " .. (session.flow or "off"))
+			value = session.flow == "insanitywolf" and "off" or "insanitywolf"
+		elseif rest == "on" then
+			value = "insanitywolf"
+		elseif rest == "off" then
+			value = "off"
 		else
-			local ok, value = pcall(function()
-				return require("agent.session").resolve_flow(rest)
-			end)
-			if not ok then
-				ui.error("usage: /flow off|insanitywolf")
-			else
-				session.flow = value
-				session.system_prompt = nil
-				session.system_prompt_version = nil
-				ui.muted("flow: " .. session.flow)
-			end
+			ui.error("usage: /insanitywolf [on|off]")
+			return
 		end
+		session.flow = value
+		session.system_prompt = nil
+		session.system_prompt_version = nil
+		ui.muted("insanitywolf: " .. (session.flow == "insanitywolf" and "on" or "off"))
 	elseif name == "credentials" then
 		if rest == "" then
 			ui.error("usage: /credentials <path>")
