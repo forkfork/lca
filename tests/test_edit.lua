@@ -6,6 +6,7 @@ package.path = project_dir .. "/lua/?.lua;" .. project_dir .. "/lua/?/init.lua;"
 pcall(require, "luarocks.loader")
 
 local edit_tool = require("agent.tools.edit")
+local lint = require("agent.lint")
 local read_tool = require("agent.tools.read")
 local shell = require("agent.util.shell")
 
@@ -91,6 +92,26 @@ run_test("accepts runtime Lua syntax newer than system luac", function()
 
 	if result.is_error then
 		error(result.content)
+	end
+end)
+
+run_test("lua lint parses candidate without executing it", function()
+	local marker = tmp_dir .. "/lint_executed"
+	local target = tmp_dir .. "/side_effect.lua"
+	write_file(target, "assert(io.open(" .. string.format("%q", marker) .. ", \"w\")):write(\"ran\")\n")
+
+	local file = assert(io.open(target, "r"))
+	local content = file:read("*a")
+	file:close()
+
+	local lint_output = lint.check_content(target, content)
+	if lint_output then
+		error(lint_output)
+	end
+	local f = io.open(marker, "r")
+	if f then
+		f:close()
+		error("lua syntax checker executed candidate file")
 	end
 end)
 

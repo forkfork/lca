@@ -77,7 +77,7 @@ local function checker_command(ext, file_path)
 	if ext == "lua" then
 		local lua = lua_checker()
 		if not lua then return nil end
-		return shell.quote(lua) .. " -e " .. shell.quote("assert(loadfile(arg[1]))") .. " " .. shell.quote(file_path) .. " 2>&1"
+		return "LCA_LINT_FILE=" .. shell.quote(file_path) .. " " .. shell.quote(lua) .. " -e " .. shell.quote("assert(loadfile(os.getenv('LCA_LINT_FILE')))") .. " 2>&1"
 	end
 
 	local checker = CHECKERS[ext]
