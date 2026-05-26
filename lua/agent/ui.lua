@@ -1028,14 +1028,14 @@ function ui.tool(event)
 				end
 			else
 				local elapsed = mark_tool_finished(event)
-				local status = hint and ("ok  " .. hint) or "ok"
 				local target = render_result_target(event)
+				local status = hint or ""
 				if target then
-					status = target .. "  " .. status
+					status = status ~= "" and (target .. "  " .. status) or target
 				end
 				local elapsed_text = format_elapsed(elapsed)
 				if elapsed_text then
-					status = status .. "  " .. elapsed_text
+					status = status ~= "" and (status .. "  " .. elapsed_text) or elapsed_text
 				end
 				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
@@ -1074,17 +1074,20 @@ function ui.tool_summary()
 		local ok_count = math.max(0, tool_count - tool_failures - tool_blocked)
 		local outcome
 		if tool_failures == 0 and tool_blocked == 0 then
-			outcome = "ok"
+			outcome = nil
 		elseif tool_failures == 0 then
-			outcome = tostring(ok_count) .. " ok, " .. tostring(tool_blocked) .. " blocked"
+			outcome = tostring(tool_blocked) .. " blocked"
 		elseif tool_blocked == 0 then
-			outcome = tostring(ok_count) .. " ok, " .. tostring(tool_failures) .. " failed"
+			outcome = tostring(tool_failures) .. " failed"
 		else
-			outcome = tostring(ok_count) .. " ok, " .. tostring(tool_blocked) .. " blocked, " .. tostring(tool_failures) .. " failed"
+			outcome = tostring(tool_blocked) .. " blocked, " .. tostring(tool_failures) .. " failed"
 		end
 		local elapsed = tool_batch_started_at and format_elapsed(now_seconds() - tool_batch_started_at) or nil
 		if tool_count > 1 then
-			local text = label .. "  " .. outcome
+			local text = label
+			if outcome then
+				text = text .. "  " .. outcome
+			end
 			if elapsed then
 				text = text .. "  " .. elapsed
 			end
