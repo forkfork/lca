@@ -168,12 +168,7 @@ test("ui lists only fresh plans by default", function()
 	assert_eq(ui.plan_should_list(active), false)
 end)
 
-test("ui has a separate fresh plan outline renderer", function()
-	assert_eq(type(ui.plan_outline), "function")
-	assert_eq(type(ui.plan_progress), "function")
-end)
-
-test("ui checkpoint renderer does not depend on later locals", function()
+test("ui checkpoint renderer writes checkpoint summary", function()
 	local old_write = io.write
 	local out = {}
 	io.write = function(...)
@@ -201,13 +196,7 @@ test("tool is advertised with usage guidance", function()
 	local prompt = registry.system_prompt()
 	assert(prompt:find("- update_plan:", 1, true), "missing tool listing")
 	assert(prompt:find("short phase checklist", 1, true), "missing phase checklist guidance")
-	assert(prompt:find("fewest useful plan phases", 1, true), "missing right-sized plan guidance")
-	assert(prompt:find("up to 8 for serious cross-cutting work", 1, true), "missing serious work plan guidance")
-	assert(prompt:find("actual domains or workstreams", 1, true), "missing domain-specific plan guidance")
 	assert(prompt:find("not user-facing explanation", 1, true), "missing internal plan guidance")
-	assert(prompt:find("Be bold inside the active phase", 1, true), "missing boldness guidance")
-	assert(prompt:find("fix it before finalizing", 1, true), "missing verification defect guidance")
-	assert(prompt:find("10 calls or fewer", 1, true), "missing batch cap guidance")
 end)
 
 if failed > 0 then

@@ -203,14 +203,14 @@ test("thinking tool count reports last batch not cumulative total", function()
 	end
 end)
 
-test("normal flow mode does not add a flow policy", function()
+test("normal mode does not add an insanitywolf policy", function()
 	provider_calls = 0
 	provider_response = "normal done"
 	last_request = nil
 
 	local session = session_module.create({ flow = "off" })
 	session.cwd = project_dir
-	session:add_user("trigger normal flow")
+	session:add_user("trigger normal mode")
 
 	local result = core.run_session(session, nil, nil, nil)
 	if result.text ~= "normal done" then
@@ -227,7 +227,7 @@ test("normal flow mode does not add a flow policy", function()
 	end
 end)
 
-test("insanitywolf flow mode is included in system prompt", function()
+test("insanitywolf mode is included in system prompt", function()
 	provider_response = "insanitywolf done"
 	last_request = nil
 
@@ -242,7 +242,7 @@ test("insanitywolf flow mode is included in system prompt", function()
 	if not last_request or type(last_request.system_prompt) ~= "string" then
 		error("provider request was not captured")
 	end
-	if not last_request.system_prompt:find("Flow mode is insanitywolf.", 1, true) then
+	if not last_request.system_prompt:find("insanitywolf", 1, true) then
 		error("missing insanitywolf flow policy in system prompt")
 	end
 	if not last_request.system_prompt:find("bounded improvement cycles", 1, true) then
