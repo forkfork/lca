@@ -498,8 +498,9 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 Additional insanitywolf checkpoint rules:
 - Compact prior execution details aggressively.
 - Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
-- Include concrete next improvements, expected impact, exact files/commands/resources involved, and why each next step is worth doing.
-- If the next step is ambiguous or needs user judgment, state that explicitly as the blocker.]]
+- In "Next Steps", put only high-impact implementation improvements that justify another cycle. Include expected impact, exact files/commands/resources involved, and why each next step is worth doing.
+- Do not list inventory checks, rereads, final tree listings, optional lint probes, or already-passed verification as next-cycle work. Put those in Critical Context only if they matter.
+- If the remaining work is only final verification, optional polish, deeper lifecycle semantics, or anything needing user/product judgment, state that no further autonomous cycle is warranted and name the blocker.]]
 	end
 
 	local provider = providers.load(session.credentials_path)

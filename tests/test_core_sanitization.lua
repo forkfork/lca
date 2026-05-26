@@ -294,7 +294,7 @@ test("insanitywolf checkpoints compact cycle context", function()
 	end
 	local found_continue = false
 	for _, message in ipairs(session.messages) do
-		if message.role == "user" and tostring(message.text or ""):find("Continue with the next improvement cycle", 1, true) then
+		if message.role == "user" and tostring(message.text or ""):find("concrete high%-impact implementation improvement") then
 			found_continue = true
 			break
 		end

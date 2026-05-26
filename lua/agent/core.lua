@@ -673,9 +673,10 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 					)
 					session:add_user(table.concat({
 						"Insanitywolf checkpoint complete.",
-						"Continue with the next improvement cycle using the checkpoint summary's Next Steps and Critical Context.",
-						"First update the plan for the next concrete cycle, then implement and verify it.",
-						"If the checkpoint says the next step is ambiguous, blocked, destructive, credential-dependent, or requires user/product judgment, stop and explain that blocker instead of continuing.",
+						"Continue only if the checkpoint summary's Next Steps contain a concrete high-impact implementation improvement.",
+						"Do not start a new cycle for inventory checks, rereads, final tree listings, optional lint probes, or verification that already passed.",
+						"If continuing, first update the plan for the next implementation cycle, then implement and verify it.",
+						"If the checkpoint says no further autonomous cycle is warranted, or the next work is ambiguous, blocked, destructive, credential-dependent, deeper lifecycle semantics, or requires user/product judgment, stop and explain that blocker instead of continuing.",
 					}, "\n"))
 					if on_thinking then
 						on_thinking({
