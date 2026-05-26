@@ -7,7 +7,7 @@ local config = require("agent.config")
 local DEFAULT_SESSION_FILE = ".lca-session.json"
 local DEFAULT_HANDOFF_FILE = "HANDOFF.txt"
 local USAGE_HISTORY_LIMIT = tonumber(os.getenv("LCA_USAGE_HISTORY_LIMIT") or "") or 50
-local SYSTEM_PROMPT_VERSION = 5
+local SYSTEM_PROMPT_VERSION = 6
 
 local function fnv1a32(text)
 	local hash = 2166136261
