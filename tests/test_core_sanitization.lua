@@ -219,11 +219,11 @@ test("normal mode does not add an insanitywolf policy", function()
 	if not last_request or type(last_request.system_prompt) ~= "string" then
 		error("provider request was not captured")
 	end
-	if last_request.system_prompt:find("Flow Mode", 1, true) then
-		error("normal mode should not include a flow policy")
+	if last_request.system_prompt:find("## Mode", 1, true) then
+		error("normal mode should not include a mode policy")
 	end
 	if #last_request.messages ~= 1 then
-		error("flow policy should not be appended as a session message")
+		error("mode policy should not be appended as a session message")
 	end
 end)
 
@@ -243,7 +243,7 @@ test("insanitywolf mode is included in system prompt", function()
 		error("provider request was not captured")
 	end
 	if not last_request.system_prompt:find("insanitywolf", 1, true) then
-		error("missing insanitywolf flow policy in system prompt")
+		error("missing insanitywolf mode policy in system prompt")
 	end
 	if not last_request.system_prompt:find("bounded improvement cycles", 1, true) then
 		error("missing insanitywolf cycle policy in system prompt")

@@ -207,7 +207,7 @@ run_test("loaded session remaps stale codex model for deepseek credentials", fun
 	assert_eq(loaded_session.model, "deepseek-v4-flash")
 end)
 run_test("insanitywolf mode is not persisted", function()
-	local path = tmp_dir .. "/session-flow.json"
+	local path = tmp_dir .. "/session-mode.json"
 	local first = session_module.create({ session_id = "lca-test-session", flow = "insanitywolf" })
 	local ok, err = first:save(path)
 	if not ok then
@@ -245,8 +245,8 @@ run_test("insanitywolf command invalidates cached system prompt", function()
 	assert_eq(s.system_prompt, nil)
 	assert_eq(s.system_prompt_version, nil)
 	local prompt_after = s:get_system_prompt()
-	if not prompt_after:find("Flow mode is insanitywolf.", 1, true) then
-		error("rebuilt prompt did not include flow policy")
+	if not prompt_after:find("Mode is insanitywolf.", 1, true) then
+		error("rebuilt prompt did not include insanitywolf mode policy")
 	end
 end)
 

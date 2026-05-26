@@ -47,11 +47,11 @@ local function brave_search_section()
 	}, "\n")
 end
 
-local function flow_section(mode)
+local function mode_section(mode)
 	if mode == "insanitywolf" then
 		return table.concat({
-			"## Flow Mode",
-			"- Flow mode is insanitywolf.",
+			"## Mode",
+			"- Mode is insanitywolf.",
 			"- Aggressively continue through obvious, local, evidence-backed follow-through until completion or a guardrail.",
 			"- Work in bounded improvement cycles: plan, implement, verify or exercise, assess impact and next improvements, then update the plan for the next cycle.",
 			"- After each cycle, pursue the highest-impact directly-related improvement while the next step is clear and evidence-backed.",
@@ -90,7 +90,7 @@ function system_prompt.build(options)
 		"- NEVER claim a file was read, changed, or tested unless a tool_result for that action is in the conversation.",
 		"- If a tool returns an error, acknowledge it. Do NOT pretend the operation succeeded.",
 		"- GROUNDING RULE: Every file path, line number, function name, and code snippet you cite MUST appear verbatim in a tool_result above. If you cannot find it in a tool_result, do not reference it. Do not cite paths like 'src/foo.lua' unless 'src/foo.lua' literally appeared in a find/ls/read result. When quoting code, copy-paste from the tool_result — never reconstruct from memory.",
-		flow_section(options.flow),
+		mode_section(options.flow),
 		context_section(files),
 		brave_search_section(),
 		index ~= "" and ("\n" .. index) or "",

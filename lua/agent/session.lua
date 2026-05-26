@@ -7,7 +7,7 @@ local config = require("agent.config")
 local DEFAULT_SESSION_FILE = ".lca-session.json"
 local DEFAULT_HANDOFF_FILE = "HANDOFF.txt"
 local USAGE_HISTORY_LIMIT = tonumber(os.getenv("LCA_USAGE_HISTORY_LIMIT") or "") or 50
-local SYSTEM_PROMPT_VERSION = 10
+local SYSTEM_PROMPT_VERSION = 11
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -108,7 +108,7 @@ local function resolve_flow(value)
 	end
 	value = tostring(value):lower()
 	if not VALID_FLOW_MODES[value] then
-		error("invalid flow mode: " .. tostring(value))
+		error("invalid mode: " .. tostring(value))
 	end
 	return value
 end
@@ -484,10 +484,6 @@ function session:load(path)
 		self.service_tier = resolve_service_tier(data.service_tier)
 	end
 	self.flow = "off"
-	if data.flow and data.flow ~= require("cjson").null and resolve_flow(data.flow) ~= "off" then
-		self.system_prompt = nil
-		self.system_prompt_version = nil
-	end
 	return true
 end
 
