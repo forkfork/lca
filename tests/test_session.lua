@@ -206,12 +206,16 @@ run_test("loaded session remaps stale codex model for deepseek credentials", fun
 	end
 	assert_eq(loaded_session.model, "deepseek-v4-flash")
 end)
-run_test("flow mode is saved and loaded", function()
+run_test("insanitywolf mode is not persisted", function()
 	local path = tmp_dir .. "/session-flow.json"
 	local first = session_module.create({ session_id = "lca-test-session", flow = "insanitywolf" })
 	local ok, err = first:save(path)
 	if not ok then
 		error(err)
+	end
+	local saved = assert(io.open(path, "r")):read("*a")
+	if saved:find('"flow"', 1, true) then
+		error("runtime insanitywolf mode should not be serialized")
 	end
 
 	local second = session_module.create({})
@@ -219,7 +223,23 @@ run_test("flow mode is saved and loaded", function()
 	if not loaded then
 		error(load_err)
 	end
-	assert_eq(second.flow, "insanitywolf")
+	assert_eq(second.flow, "off")
+end)
+
+run_test("stale saved insanitywolf mode is ignored", function()
+	local path = tmp_dir .. "/session-stale-flow.json"
+	local f = assert(io.open(path, "w"))
+	f:write([[{"id":"lca-test-session","flow":"insanitywolf","system_prompt":"old","system_prompt_version":10,"messages":[]}]])
+	f:close()
+
+	local s = session_module.create({})
+	local loaded, load_err = s:load(path)
+	if not loaded then
+		error(load_err)
+	end
+	assert_eq(s.flow, "off")
+	assert_eq(s.system_prompt, nil)
+	assert_eq(s.system_prompt_version, nil)
 end)
 
 run_test("insanitywolf command invalidates cached system prompt", function()

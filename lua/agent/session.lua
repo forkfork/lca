@@ -7,7 +7,7 @@ local config = require("agent.config")
 local DEFAULT_SESSION_FILE = ".lca-session.json"
 local DEFAULT_HANDOFF_FILE = "HANDOFF.txt"
 local USAGE_HISTORY_LIMIT = tonumber(os.getenv("LCA_USAGE_HISTORY_LIMIT") or "") or 50
-local SYSTEM_PROMPT_VERSION = 9
+local SYSTEM_PROMPT_VERSION = 10
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -371,7 +371,6 @@ function session:serialize()
 		model = self.model,
 		reasoning_effort = self.reasoning_effort,
 		service_tier = self.service_tier,
-		flow = resolve_flow(self.flow),
 		cwd = self.cwd,
 		messages = self.messages,
 		system_prompt = self.system_prompt,
@@ -484,10 +483,10 @@ function session:load(path)
 	if data.service_tier and data.service_tier ~= require("cjson").null then
 		self.service_tier = resolve_service_tier(data.service_tier)
 	end
-	if data.flow and data.flow ~= require("cjson").null then
-		self.flow = resolve_flow(data.flow)
-	else
-		self.flow = "off"
+	self.flow = "off"
+	if data.flow and data.flow ~= require("cjson").null and resolve_flow(data.flow) ~= "off" then
+		self.system_prompt = nil
+		self.system_prompt_version = nil
 	end
 	return true
 end
