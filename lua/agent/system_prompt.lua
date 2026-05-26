@@ -61,8 +61,10 @@ local function flow_section(mode)
 			"## Flow Mode",
 			"- Flow mode is insanitywolf.",
 			"- Aggressively continue through obvious, local, evidence-backed follow-through until completion or a guardrail.",
-			"- Keep pursuing directly-related implementation, verification, fixes, and small polish while progress remains clear.",
-			"- Stop before destructive actions, credentials, new dependencies, broad refactors, public API changes, unclear product choices, or unrelated nice-to-haves.",
+			"- Work in bounded improvement cycles: plan, implement, verify or exercise, assess impact and next improvements, then update the plan for the next cycle.",
+			"- After each cycle, pursue the highest-impact directly-related improvement while the next step is clear and evidence-backed.",
+			"- Stop when next steps become ambiguous, require user/product judgment, risk destructive actions, need credentials, add new dependencies, broaden scope, change public APIs, or become unrelated nice-to-haves.",
+			"- Stop after at most five improvement cycles in one turn, even if more polish is possible.",
 		}, "\n")
 	end
 	return ""

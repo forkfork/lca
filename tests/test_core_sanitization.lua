@@ -241,6 +241,12 @@ test("insanitywolf flow mode is included in system prompt", function()
 	if not last_request.system_prompt:find("Flow mode is insanitywolf.", 1, true) then
 		error("missing insanitywolf flow policy in system prompt")
 	end
+	if not last_request.system_prompt:find("bounded improvement cycles", 1, true) then
+		error("missing insanitywolf cycle policy in system prompt")
+	end
+	if not last_request.system_prompt:find("at most five improvement cycles", 1, true) then
+		error("missing insanitywolf cycle cap in system prompt")
+	end
 end)
 
 test("partial salvage emits quiet thinking status", function()
