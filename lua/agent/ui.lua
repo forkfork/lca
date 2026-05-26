@@ -750,8 +750,7 @@ function ui.plan_progress(plan)
 		rail_line("▣", "magenta", "plan", "cleared")
 		return
 	end
-	local completed = plan_completed_count(plan)
-	local _, current_index = ui.plan_current(plan)
+	local current_step = ui.plan_current(plan)
 	io.write("  " .. color("magenta", "▣") .. " " .. color("magenta", pad_right("plan", 12)))
 	for i, item in ipairs(plan) do
 		local marker, marker_color = plan_marker(item.status)
@@ -760,9 +759,13 @@ function ui.plan_progress(plan)
 			io.write(color("dim", " "))
 		end
 	end
-	local suffix = "  " .. tostring(completed) .. "/" .. tostring(#plan)
-	if current_index then
-		suffix = suffix .. " · " .. plan_number(current_index)
+	local suffix = ""
+	if current_step then
+		local compact = tostring(current_step):gsub("%s+", " ")
+		if #compact > 72 then
+			compact = compact:sub(1, 69) .. "..."
+		end
+		suffix = "  " .. compact
 	end
 	io.write(color("dim", suffix) .. "\n")
 end
