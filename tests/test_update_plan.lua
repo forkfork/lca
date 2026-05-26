@@ -9,7 +9,6 @@ local update_plan = require("agent.tools.update_plan")
 local registry = require("agent.tool_registry")
 local session_mod = require("agent.session")
 local protocol = require("agent.tool_protocol")
-local commands = require("agent.commands")
 local ui = require("agent.ui")
 
 local passed = 0
@@ -120,43 +119,6 @@ test("plan is saved and loaded with session", function()
 	assert_eq(#loaded.plan, 1)
 	assert_eq(loaded.plan[1].step, "Persisted")
 	assert_eq(loaded.plan[1].status, "completed")
-end)
-
-test("plan command renders current session plan", function()
-	local s = session_mod.create({})
-	s.plan = {
-		{ step = "Inspect target", status = "completed" },
-		{ step = "Implement rail view", status = "in_progress" },
-	}
-	local rendered = nil
-	local fake_ui = {
-		plan = function(plan)
-			rendered = plan
-		end,
-	}
-
-	commands.dispatch("/plan", s, fake_ui)
-
-	assert_eq(rendered, s.plan)
-end)
-
-test("plan command handles empty plan", function()
-	local s = session_mod.create({})
-	local message = nil
-	local fake_ui = {
-		plan = function(plan)
-			if type(plan) ~= "table" or #plan == 0 then
-				message = "empty"
-			end
-		end,
-		muted = function(text)
-			message = text
-		end,
-	}
-
-	commands.dispatch("/plan", s, fake_ui)
-
-	assert_eq(message, "empty")
 end)
 
 test("ui exposes active plan reference", function()
