@@ -481,7 +481,8 @@ local function serialize_messages(messages)
 	return table.concat(parts, "\n\n")
 end
 
-function compaction.generate_summary(messages_to_summarize, previous_summary, session)
+function compaction.generate_summary(messages_to_summarize, previous_summary, session, opts)
+	opts = opts or {}
 	local conversation_text = serialize_messages(messages_to_summarize)
 
 	local prompt_text = "<conversation>\n" .. conversation_text .. "\n</conversation>\n\n"
@@ -490,6 +491,15 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 		prompt_text = prompt_text .. UPDATE_SUMMARIZATION_PROMPT
 	else
 		prompt_text = prompt_text .. SUMMARIZATION_PROMPT
+	end
+	if opts.preserve_next_improvements then
+		prompt_text = prompt_text .. [[
+
+Additional insanitywolf checkpoint rules:
+- Compact prior execution details aggressively.
+- Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
+- Include concrete next improvements, expected impact, exact files/commands/resources involved, and why each next step is worth doing.
+- If the next step is ambiguous or needs user judgment, state that explicitly as the blocker.]]
 	end
 
 	local provider = providers.load(session.credentials_path)
@@ -505,6 +515,17 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 	})
 
 	return response.text
+end
+
+local function append_current_plan(text, session)
+	if type(session) ~= "table" or type(session.plan) ~= "table" or #session.plan == 0 then
+		return text
+	end
+	local lines = { tostring(text or ""), "", "## Current Plan" }
+	for i, item in ipairs(session.plan) do
+		lines[#lines + 1] = tostring(i) .. ". [" .. tostring(item.status or "pending") .. "] " .. tostring(item.step or "")
+	end
+	return table.concat(lines, "\n")
 end
 
 function compaction.compact(session, opts)
@@ -537,8 +558,12 @@ function compaction.compact(session, opts)
 	local summary = compaction.generate_summary(
 		messages_to_summarize,
 		session.compaction_summary,
-		session
+		session,
+		opts
 	)
+	if opts.preserve_current_plan then
+		summary = append_current_plan(summary, session)
+	end
 	summary = append_file_operations(summary, file_details)
 
 	-- Store summary for iterative updates

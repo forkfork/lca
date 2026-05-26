@@ -264,6 +264,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	local consecutive_read_only_batches = 0
 	local read_only_guard_used = false
 	local last_response_meta = nil
+	local insanitywolf_checkpoints = 0
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
 
 	local function response_meta(response)
@@ -617,6 +618,35 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 					events = events,
 					_response_meta = last_response_meta,
 				}
+			end
+
+			if session.flow == "insanitywolf" and insanitywolf_checkpoints < 5 then
+				insanitywolf_checkpoints = insanitywolf_checkpoints + 1
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "checkpointing insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/5",
+					})
+				end
+				local ok, compacted, msgs_removed, new_tokens = pcall(function()
+					return compaction.compact(session, {
+						force = true,
+						preserve_next_improvements = true,
+						preserve_current_plan = true,
+					})
+				end)
+				if not ok then
+					log("[context] insanitywolf checkpoint failed: %s", tostring(compacted))
+				elseif compacted then
+					log("[context] insanitywolf checkpoint cycle=%d messages=%d remaining_tokens=%d",
+						insanitywolf_checkpoints,
+						tonumber(msgs_removed) or 0,
+						tonumber(new_tokens) or 0
+					)
+				end
 			end
 
 			-- Check for cancellation after tool execution

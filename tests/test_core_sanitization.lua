@@ -13,6 +13,7 @@ local provider_response = table.concat({
 	"After",
 }, "\n")
 local last_request = nil
+local summary_request = nil
 local provider_calls = 0
 
 package.loaded["agent.providers"] = {
@@ -21,6 +22,9 @@ package.loaded["agent.providers"] = {
 			complete = function(request)
 				provider_calls = provider_calls + 1
 				last_request = request
+				if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
+					summary_request = request
+				end
 				if type(provider_response) == "table" then
 					return provider_response
 				end
@@ -246,6 +250,47 @@ test("insanitywolf flow mode is included in system prompt", function()
 	end
 	if not last_request.system_prompt:find("at most five improvement cycles", 1, true) then
 		error("missing insanitywolf cycle cap in system prompt")
+	end
+end)
+
+test("insanitywolf checkpoints compact cycle context", function()
+	provider_calls = 0
+	last_request = nil
+	summary_request = nil
+	local main_calls = 0
+	provider_response = function(request)
+		if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
+			return "## Goal\ncheckpoint\n\n## Next Steps\n1. Keep detailed next improvement.\n\n## Critical Context\n- exact next detail"
+		end
+		main_calls = main_calls + 1
+		if main_calls == 1 then
+			return table.concat({
+				'<tool_call name="update_plan">',
+				'{"plan":[{"step":"First cycle","status":"in_progress"},{"step":"Next improvement","status":"pending"}]}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "done"
+	end
+
+	local session = session_module.create({ flow = "insanitywolf" })
+	session.cwd = project_dir
+	session:add_user("trigger insanitywolf checkpoint")
+
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "done" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if not summary_request then
+		error("expected insanitywolf checkpoint summarization request")
+	end
+	local prompt = summary_request.messages[1].text or ""
+	if not prompt:find("Additional insanitywolf checkpoint rules", 1, true) then
+		error("missing checkpoint summary instructions")
+	end
+	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
+		error("checkpoint summary did not retain current plan")
 	end
 end)
 
