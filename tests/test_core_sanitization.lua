@@ -266,7 +266,7 @@ test("insanitywolf checkpoints compact cycle context", function()
 		if main_calls == 1 then
 			return table.concat({
 				'<tool_call name="update_plan">',
-				'{"plan":[{"step":"First cycle","status":"in_progress"},{"step":"Next improvement","status":"pending"}]}',
+				'{"plan":[{"step":"First cycle","status":"completed"}]}',
 				"</tool_call>",
 			}, "\n")
 		end
@@ -291,6 +291,40 @@ test("insanitywolf checkpoints compact cycle context", function()
 	end
 	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
 		error("checkpoint summary did not retain current plan")
+	end
+end)
+
+test("insanitywolf does not checkpoint before plan completion", function()
+	provider_calls = 0
+	last_request = nil
+	summary_request = nil
+	local main_calls = 0
+	provider_response = function(request)
+		if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
+			return "unexpected summary"
+		end
+		main_calls = main_calls + 1
+		if main_calls == 1 then
+			return table.concat({
+				'<tool_call name="update_plan">',
+				'{"plan":[{"step":"First cycle","status":"in_progress"},{"step":"Next improvement","status":"pending"}]}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "done"
+	end
+
+	local session = session_module.create({ flow = "insanitywolf" })
+	session.cwd = project_dir
+	session:add_user("trigger incomplete insanitywolf plan")
+
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "done" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if summary_request then
+		error("checkpoint should not run before plan completion")
 	end
 end)
 

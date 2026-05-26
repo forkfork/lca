@@ -66,6 +66,27 @@ local function batch_is_read_only(batch)
 	return true
 end
 
+local function plan_is_complete(plan)
+	if type(plan) ~= "table" or #plan == 0 then
+		return false
+	end
+	for _, item in ipairs(plan) do
+		if item.status ~= "completed" then
+			return false
+		end
+	end
+	return true
+end
+
+local function batch_updates_plan(batch)
+	for _, tc in ipairs(batch or {}) do
+		if tc.name == "update_plan" then
+			return true
+		end
+	end
+	return false
+end
+
 local function get_provider(credentials_path)
 	local provider = providers.load(credentials_path)
 	return provider
@@ -620,7 +641,11 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				}
 			end
 
-			if session.flow == "insanitywolf" and insanitywolf_checkpoints < 5 then
+			if session.flow == "insanitywolf"
+				and insanitywolf_checkpoints < 5
+				and batch_updates_plan(batch)
+				and plan_is_complete(session.plan)
+			then
 				insanitywolf_checkpoints = insanitywolf_checkpoints + 1
 				if on_thinking then
 					on_thinking({
