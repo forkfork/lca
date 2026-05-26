@@ -623,7 +623,7 @@ local function limited_lines(value, opts)
 end
 
 local function rail_line(glyph, glyph_color, name, text)
-	local label = name and pad_right(name, 10) or ""
+	local label = name and pad_right(name, 12) or ""
 	io.write("  " .. color(glyph_color, glyph) .. " " .. color(glyph_color, label))
 	if text and text ~= "" then
 		io.write(color("dim", text))

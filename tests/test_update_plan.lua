@@ -8,6 +8,7 @@ pcall(require, "luarocks.loader")
 local update_plan = require("agent.tools.update_plan")
 local registry = require("agent.tool_registry")
 local session_mod = require("agent.session")
+local protocol = require("agent.tool_protocol")
 
 local passed = 0
 local failed = 0
@@ -47,6 +48,24 @@ test("stores normalized plan on session", function()
 	assert_eq(s.plan[2].step, "Implement tool")
 	assert_eq(s.plan[2].status, "in_progress")
 	assert(result.content:find("2. %[in_progress%] Implement tool"), "missing rendered plan content")
+end)
+
+test("accepts plan array from parsed tool call", function()
+	local text = table.concat({
+		'<tool_call name="update_plan">',
+		'{"plan":[{"step":"Create scaffold","status":"in_progress"},{"step":"Run checks","status":"pending"}]}',
+		"</tool_call>",
+	}, "\n")
+	local calls = protocol.extract_all_tool_calls(text)
+	assert_eq(#calls, 1)
+
+	local s = session_mod.create({})
+	local result = update_plan.execute(calls[1].args, { session = s })
+
+	assert_eq(result.is_error, false)
+	assert_eq(#s.plan, 2)
+	assert_eq(s.plan[1].step, "Create scaffold")
+	assert_eq(s.plan[1].status, "in_progress")
 end)
 
 test("rejects multiple in progress steps", function()

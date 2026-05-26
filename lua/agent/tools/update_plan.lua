@@ -1,4 +1,5 @@
 local update_plan = {}
+local json = require("agent.util.json")
 
 local VALID_STATUSES = {
 	pending = true,
@@ -11,6 +12,12 @@ local function trim(value)
 end
 
 local function normalize_plan(plan)
+	if type(plan) == "string" then
+		local ok, decoded = pcall(json.decode, plan)
+		if ok then
+			plan = decoded
+		end
+	end
 	if type(plan) ~= "table" then
 		return nil, "plan array is required"
 	end
