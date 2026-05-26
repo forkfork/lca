@@ -394,6 +394,7 @@ function commands.dispatch(line, session, ui)
 			else
 				session.flow = value
 				session.system_prompt = nil
+				session.system_prompt_version = nil
 				ui.muted("flow: " .. session.flow)
 			end
 		end

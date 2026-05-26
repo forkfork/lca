@@ -157,6 +157,32 @@ run_test("system prompt is frozen for cache stability", function()
 	assert_eq(second:get_system_prompt(), prompt_before)
 end)
 
+run_test("old saved system prompt is rebuilt after prompt version changes", function()
+	local path = tmp_dir .. "/session-old-system-prompt.json"
+	write_file(path, [[{
+		"id": "lca-test-session",
+		"model": "gpt-5.5",
+		"messages": [],
+		"system_prompt": "old prompt without new tools",
+		"system_prompt_version": 1
+	}]])
+
+	local loaded_session = session_module.create({})
+	local loaded, load_err = loaded_session:load(path)
+	if not loaded then
+		error(load_err)
+	end
+	assert_eq(loaded_session.system_prompt, nil)
+	local rebuilt = loaded_session:get_system_prompt()
+	if rebuilt == "old prompt without new tools" then
+		error("old prompt was not rebuilt")
+	end
+	if not rebuilt:find("update_plan", 1, true) then
+		error("rebuilt prompt does not include update_plan")
+	end
+	assert_eq(loaded_session.system_prompt_version, session_module.SYSTEM_PROMPT_VERSION)
+end)
+
 run_test("loaded session remaps stale codex model for deepseek credentials", function()
 	local credentials_path = tmp_dir .. "/deepseek-credentials.json"
 	write_file(credentials_path, [[{
@@ -213,6 +239,7 @@ run_test("flow command invalidates cached system prompt", function()
 
 	assert_eq(s.flow, "on")
 	assert_eq(s.system_prompt, nil)
+	assert_eq(s.system_prompt_version, nil)
 	local prompt_after = s:get_system_prompt()
 	if not prompt_after:find("Flow mode is on.", 1, true) then
 		error("rebuilt prompt did not include flow policy")

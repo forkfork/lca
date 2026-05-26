@@ -7,6 +7,7 @@ local config = require("agent.config")
 local DEFAULT_SESSION_FILE = ".lca-session.json"
 local DEFAULT_HANDOFF_FILE = "HANDOFF.txt"
 local USAGE_HISTORY_LIMIT = tonumber(os.getenv("LCA_USAGE_HISTORY_LIMIT") or "") or 50
+local SYSTEM_PROMPT_VERSION = 2
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -147,6 +148,7 @@ function session.create(options)
 		cwd = cwd,
 		messages = {},
 		system_prompt = nil,
+		system_prompt_version = nil,
 		compaction_summary = nil,
 		compaction_details = nil,
 		plan = nil,
@@ -180,6 +182,7 @@ end
 function session:clear()
 	self.messages = {}
 	self.system_prompt = nil
+	self.system_prompt_version = nil
 	self.compaction_summary = nil
 	self.compaction_details = nil
 	self.plan = nil
@@ -188,9 +191,10 @@ function session:clear()
 end
 
 function session:get_system_prompt()
-	if type(self.system_prompt) ~= "string" or self.system_prompt == "" then
+	if type(self.system_prompt) ~= "string" or self.system_prompt == "" or self.system_prompt_version ~= SYSTEM_PROMPT_VERSION then
 		local system_prompt = require("agent.system_prompt")
 		self.system_prompt = system_prompt.build({ cwd = self.cwd, flow = self.flow })
+		self.system_prompt_version = SYSTEM_PROMPT_VERSION
 	end
 	return self.system_prompt
 end
@@ -372,6 +376,7 @@ function session:serialize()
 		cwd = self.cwd,
 		messages = self.messages,
 		system_prompt = self.system_prompt,
+		system_prompt_version = self.system_prompt_version,
 		compaction_summary = self.compaction_summary,
 		compaction_details = self.compaction_details,
 		plan = self.plan,
@@ -433,10 +438,12 @@ function session:load(path)
 	if type(data.messages) == "table" then
 		self.messages = data.messages
 	end
-	if type(data.system_prompt) == "string" and data.system_prompt ~= "" then
+	if data.system_prompt_version == SYSTEM_PROMPT_VERSION and type(data.system_prompt) == "string" and data.system_prompt ~= "" then
 		self.system_prompt = data.system_prompt
+		self.system_prompt_version = data.system_prompt_version
 	else
 		self.system_prompt = nil
+		self.system_prompt_version = nil
 	end
 	-- Restore compaction summary
 	if data.compaction_summary and data.compaction_summary ~= require("cjson").null then
@@ -536,4 +543,5 @@ session.DEFAULT_HANDOFF_FILE = DEFAULT_HANDOFF_FILE
 session.resolve_reasoning_effort = resolve_reasoning_effort
 session.resolve_service_tier = resolve_service_tier
 session.resolve_flow = resolve_flow
+session.SYSTEM_PROMPT_VERSION = SYSTEM_PROMPT_VERSION
 return session
