@@ -260,6 +260,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	log("Messages in context: %d", #session.messages)
 
 	local total_tool_executions = 0
+	local last_batch_tool_executions = 0
 	local consecutive_read_only_batches = 0
 	local read_only_guard_used = false
 	local last_response_meta = nil
@@ -291,7 +292,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			on_thinking({
 				step = step,
 				messages = #session.messages,
-				tools = total_tool_executions,
+				tools = last_batch_tool_executions,
+				total_tools = total_tool_executions,
 			})
 		end
 
@@ -332,7 +334,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 					on_thinking({
 						step = step,
 						messages = #session.messages,
-						tools = total_tool_executions,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
 						status = "slimmed context  " .. tostring(changed) .. " messages",
 					})
 				end
@@ -351,7 +354,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 					on_thinking({
 						step = step,
 						messages = #session.messages,
-						tools = total_tool_executions,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
 						status = "coalesced context  " .. tostring(coalesced_count) .. " messages",
 					})
 				end
@@ -394,7 +398,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				on_thinking({
 					step = step,
 					messages = #session.messages,
-					tools = total_tool_executions,
+					tools = last_batch_tool_executions,
+					total_tools = total_tool_executions,
 					status = "salvaged partial response  " .. tostring(salvaged_calls) .. " tools",
 				})
 			end
@@ -529,7 +534,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				on_thinking({
 					step = step,
 					messages = #session.messages,
-					tools = total_tool_executions,
+					tools = #batch,
+					total_tools = total_tool_executions,
 					status = "read-only loop guard",
 				})
 			end
@@ -580,6 +586,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				session = session,
 				recent_read_keys = recent_read_keys(session),
 			}, batch_on_tool)
+			last_batch_tool_executions = #batch
 
 			for i, tc in ipairs(batch) do
 				local result = batch_results[i]
@@ -594,7 +601,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 					on_thinking({
 						step = step,
 						messages = #session.messages,
-						tools = total_tool_executions,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
 						status = "batch cap deferred  " .. tostring(dropped_for_batch_cap) .. " tools",
 					})
 				end

@@ -154,6 +154,51 @@ test("batch cap is surfaced to next model turn", function()
 	end
 end)
 
+test("thinking tool count reports last batch not cumulative total", function()
+	provider_calls = 0
+	provider_response = function()
+		if provider_calls == 1 then
+			return table.concat({
+				'<tool_call name="ls">',
+				'{"path":"missing-a"}',
+				"</tool_call>",
+				'<tool_call name="ls">',
+				'{"path":"missing-b"}',
+				"</tool_call>",
+			}, "\n")
+		elseif provider_calls == 2 then
+			return table.concat({
+				'<tool_call name="ls">',
+				'{"path":"missing-c"}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "done"
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger two batches")
+	local tool_counts = {}
+	local total_counts = {}
+	local result = core.run_session(session, nil, nil, function(info)
+		if not info.status then
+			tool_counts[#tool_counts + 1] = info.tools
+			total_counts[#total_counts + 1] = info.total_tools
+		end
+	end)
+
+	if result.text ~= "done" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if tool_counts[1] ~= 2 or tool_counts[2] ~= 1 then
+		error("expected last-batch counts 2,1 got " .. tostring(tool_counts[1]) .. "," .. tostring(tool_counts[2]))
+	end
+	if total_counts[1] ~= 2 or total_counts[2] ~= 3 then
+		error("expected cumulative counts 2,3 got " .. tostring(total_counts[1]) .. "," .. tostring(total_counts[2]))
+	end
+end)
+
 test("flow mode is included in system prompt", function()
 	provider_calls = 0
 	provider_response = "flow done"
