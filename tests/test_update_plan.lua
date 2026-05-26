@@ -135,6 +135,16 @@ test("ui exposes active plan reference", function()
 	assert_eq(ui.plan_ref(index), "②")
 end)
 
+test("ui plan progress prefers last completed task", function()
+	local plan = {
+		{ step = "Inspect target", status = "completed" },
+		{ step = "Draft app structure", status = "completed" },
+		{ step = "Write scripts", status = "in_progress" },
+	}
+
+	assert_eq(ui.plan_progress_label(plan), "Draft app structure")
+end)
+
 test("ui lists only fresh plans by default", function()
 	local fresh = {
 		{ step = "Inspect target", status = "in_progress" },

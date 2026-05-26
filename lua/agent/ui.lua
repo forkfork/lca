@@ -705,6 +705,23 @@ function ui.plan_current(plan)
 	return nil
 end
 
+local function plan_last_completed(plan)
+	if type(plan) ~= "table" then
+		return nil
+	end
+	for i = #plan, 1, -1 do
+		local item = plan[i]
+		if item.status == "completed" and item.step and item.step ~= "" then
+			return item.step, i
+		end
+	end
+	return nil
+end
+
+function ui.plan_progress_label(plan)
+	return plan_last_completed(plan) or ui.plan_current(plan)
+end
+
 function ui.plan_ref(index)
 	if not index then return "" end
 	return plan_number(index)
@@ -750,7 +767,7 @@ function ui.plan_progress(plan)
 		rail_line("▣", "magenta", "plan", "cleared")
 		return
 	end
-	local current_step = ui.plan_current(plan)
+	local highlight_step = ui.plan_progress_label(plan)
 	io.write("  " .. color("magenta", "▣") .. " " .. color("magenta", pad_right("plan", 12)))
 	for i, item in ipairs(plan) do
 		local marker, marker_color = plan_marker(item.status)
@@ -760,8 +777,8 @@ function ui.plan_progress(plan)
 		end
 	end
 	local suffix = ""
-	if current_step then
-		local compact = tostring(current_step):gsub("%s+", " ")
+	if highlight_step then
+		local compact = tostring(highlight_step):gsub("%s+", " ")
 		if #compact > 72 then
 			compact = compact:sub(1, 69) .. "..."
 		end
