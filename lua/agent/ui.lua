@@ -332,6 +332,44 @@ function ui.compaction(msgs_removed, new_tokens)
 	io.write(color("dim", string.format("  [compacted: %d messages summarized, ~%dk tokens retained]", msgs_removed, math.floor(new_tokens / 1000))) .. "\n")
 end
 
+local function extract_summary_section(text, heading)
+	local source = tostring(text or "")
+	local escaped = heading:gsub("([^%w])", "%%%1")
+	local start_pos = source:find("\n## " .. escaped, 1, false)
+	if not start_pos and source:sub(1, #heading + 3) == "## " .. heading then
+		start_pos = 1
+	end
+	if not start_pos then
+		return nil
+	end
+	local content_start = source:find("\n", start_pos, true)
+	if not content_start then
+		return nil
+	end
+	content_start = content_start + 1
+	local next_heading = source:find("\n## ", content_start, true)
+	local section = next_heading and source:sub(content_start, next_heading - 1) or source:sub(content_start)
+	section = section:gsub("^%s+", ""):gsub("%s+$", "")
+	return section ~= "" and section or nil
+end
+
+function ui.checkpoint(summary, opts)
+	opts = opts or {}
+	local label = "insanitywolf"
+	if opts.cycle then
+		label = label .. " " .. tostring(opts.cycle) .. "/5"
+	end
+	rail_line("◌", "magenta", "checkpoint", label)
+	local next_steps = extract_summary_section(summary, "Next Steps")
+	local critical = extract_summary_section(summary, "Critical Context")
+	if next_steps then
+		rail_block("next", next_steps, { max_lines = 8, max_width = 120, max_bytes = 1800 })
+	end
+	if critical then
+		rail_block("context", critical, { max_lines = 5, max_width = 120, max_bytes = 1000 })
+	end
+end
+
 -- ─── Assistant Output ───────────────────────────────────────────────────────
 
 function ui.assistant(text)

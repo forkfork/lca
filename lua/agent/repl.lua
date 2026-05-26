@@ -738,6 +738,9 @@ function repl.run(options)
 						ui.clear_model_progress()
 						ui.model_progress(info.status)
 					end
+					if info and info.checkpoint_summary and ui.checkpoint then
+						ui.checkpoint(info.checkpoint_summary, { cycle = info.checkpoint_cycle })
+					end
 					local tool_count_text = "tool results"
 					if info and info.tools and info.tools >= 4 then
 						tool_count_text = tostring(info.tools) .. " tool results"

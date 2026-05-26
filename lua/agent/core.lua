@@ -671,6 +671,17 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 						tonumber(msgs_removed) or 0,
 						tonumber(new_tokens) or 0
 					)
+					if on_thinking then
+						on_thinking({
+							step = step,
+							messages = #session.messages,
+							tools = last_batch_tool_executions,
+							total_tools = total_tool_executions,
+							status = "checkpointed insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/5",
+							checkpoint_summary = session.compaction_summary,
+							checkpoint_cycle = insanitywolf_checkpoints,
+						})
+					end
 				end
 			end
 
