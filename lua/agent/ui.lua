@@ -751,7 +751,7 @@ function ui.plan_progress(plan)
 		return
 	end
 	local completed = plan_completed_count(plan)
-	local current_step, current_index = ui.plan_current(plan)
+	local _, current_index = ui.plan_current(plan)
 	io.write("  " .. color("magenta", "▣") .. " " .. color("magenta", pad_right("plan", 12)))
 	for i, item in ipairs(plan) do
 		local marker, marker_color = plan_marker(item.status)
@@ -761,12 +761,8 @@ function ui.plan_progress(plan)
 		end
 	end
 	local suffix = "  " .. tostring(completed) .. "/" .. tostring(#plan)
-	if current_step then
-		local compact = tostring(current_step):gsub("%s+", " ")
-		if #compact > 72 then
-			compact = compact:sub(1, 69) .. "..."
-		end
-		suffix = suffix .. " · " .. plan_number(current_index) .. " " .. compact
+	if current_index then
+		suffix = suffix .. " · " .. plan_number(current_index)
 	end
 	io.write(color("dim", suffix) .. "\n")
 end
@@ -792,6 +788,14 @@ local function format_duration(seconds)
 		return string.format("%.1fs", seconds)
 	end
 	return tostring(math.floor(seconds + 0.5)) .. "s"
+end
+
+local function format_elapsed(seconds)
+	seconds = tonumber(seconds)
+	if not seconds or seconds < 1 then
+		return nil
+	end
+	return format_duration(seconds)
 end
 
 local function tool_event_key(event)
@@ -825,10 +829,13 @@ local function render_active_tools()
 	active_tool_frame = active_tool_frame + 1
 	local glyph = ACTIVE_GLYPHS[(active_tool_frame % #ACTIVE_GLYPHS) + 1]
 	local first = active_tool_by_id[active_tool_order[1]]
-	local elapsed = first and format_duration(now_seconds() - first.started_at) or "0.0s"
+	local elapsed = first and format_duration(now_seconds() - first.started_at) or nil
 	local text
 	if count == 1 and first then
-		text = first.name .. "  " .. first.desc .. "  " .. elapsed
+		text = first.name .. "  " .. first.desc
+		if elapsed then
+			text = text .. "  " .. elapsed
+		end
 	else
 		local names = {}
 		local seen = {}
@@ -839,7 +846,10 @@ local function render_active_tools()
 				names[#names + 1] = item.name
 			end
 		end
-		text = tostring(count) .. " tools running  " .. table.concat(names, ", ") .. "  " .. elapsed
+		text = tostring(count) .. " tools running  " .. table.concat(names, ", ")
+		if elapsed then
+			text = text .. "  " .. elapsed
+		end
 	end
 	io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("dim", text))
 	io.flush()
@@ -976,15 +986,16 @@ function ui.tool(event)
 			local elapsed = mark_tool_finished(event)
 			local msg = event.result.content or ""
 			local summary = event.result.summary and ("  " .. event.result.summary) or ""
-			if elapsed then
-				summary = summary .. "  " .. format_duration(elapsed)
+			local elapsed_text = format_elapsed(elapsed)
+			if elapsed_text then
+				summary = summary .. "  " .. elapsed_text
 			end
 			rail_line("✗", "red", event.name, desc .. summary)
 			rail_block("error", msg, { max_lines = 6, max_width = 120, max_bytes = 1200 })
 		else
 			if event.phase == "start" then
 				mark_tool_started(event, desc)
-				rail_line("◉", tc, event.name, desc .. "  started")
+				rail_line("◉", tc, event.name, desc)
 				if event.name == "run" and event.args and event.args.command then
 					rail_block("command", event.args.command, { max_lines = 6, max_width = 120, max_bytes = 1200 })
 				end
@@ -995,8 +1006,9 @@ function ui.tool(event)
 				if target then
 					status = target .. "  " .. status
 				end
-				if elapsed then
-					status = status .. "  " .. format_duration(elapsed)
+				local elapsed_text = format_elapsed(elapsed)
+				if elapsed_text then
+					status = status .. "  " .. elapsed_text
 				end
 				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
@@ -1043,7 +1055,7 @@ function ui.tool_summary()
 		else
 			outcome = tostring(ok_count) .. " ok, " .. tostring(tool_blocked) .. " blocked, " .. tostring(tool_failures) .. " failed"
 		end
-		local elapsed = tool_batch_started_at and format_duration(now_seconds() - tool_batch_started_at) or nil
+		local elapsed = tool_batch_started_at and format_elapsed(now_seconds() - tool_batch_started_at) or nil
 		if tool_count > 1 then
 			local text = label .. "  " .. outcome
 			if elapsed then
