@@ -372,8 +372,8 @@ function repl.run(options)
 						prefix = ((ui.plan_ref and ui.plan_ref(current_index)) or ("#" .. tostring(current_index))) .. " "
 					end
 					return {
-						before = tostring(base or "") .. " · ",
 						highlight = prefix .. current_plan,
+						after = " · " .. tostring(base or ""),
 					}
 				end
 
