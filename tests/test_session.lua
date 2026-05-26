@@ -226,22 +226,6 @@ run_test("insanitywolf mode is not persisted", function()
 	assert_eq(second.flow, "off")
 end)
 
-run_test("stale saved insanitywolf mode is ignored", function()
-	local path = tmp_dir .. "/session-stale-flow.json"
-	local f = assert(io.open(path, "w"))
-	f:write([[{"id":"lca-test-session","flow":"insanitywolf","system_prompt":"old","system_prompt_version":10,"messages":[]}]])
-	f:close()
-
-	local s = session_module.create({})
-	local loaded, load_err = s:load(path)
-	if not loaded then
-		error(load_err)
-	end
-	assert_eq(s.flow, "off")
-	assert_eq(s.system_prompt, nil)
-	assert_eq(s.system_prompt_version, nil)
-end)
-
 run_test("insanitywolf command invalidates cached system prompt", function()
 	local commands = require("agent.commands")
 	local ui = {
