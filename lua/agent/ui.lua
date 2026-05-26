@@ -328,6 +328,9 @@ end
 
 -- ─── Compaction ─────────────────────────────────────────────────────────────
 
+local rail_line
+local rail_block
+
 function ui.compaction(msgs_removed, new_tokens)
 	io.write(color("dim", string.format("  [compacted: %d messages summarized, ~%dk tokens retained]", msgs_removed, math.floor(new_tokens / 1000))) .. "\n")
 end
@@ -390,8 +393,6 @@ function ui.block(text)
 		io.write("\n")
 	end
 end
-
-local rail_block
 
 function ui.jobs(list)
 	local jobs = require("agent.jobs")
@@ -685,7 +686,7 @@ local function limited_lines(value, opts)
 	return lines
 end
 
-local function rail_line(glyph, glyph_color, name, text)
+rail_line = function(glyph, glyph_color, name, text)
 	local label = name and pad_right(name, 12) or ""
 	io.write("  " .. color(glyph_color, glyph) .. " " .. color(glyph_color, label))
 	if text and text ~= "" then

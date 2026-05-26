@@ -173,6 +173,29 @@ test("ui has a separate fresh plan outline renderer", function()
 	assert_eq(type(ui.plan_progress), "function")
 end)
 
+test("ui checkpoint renderer does not depend on later locals", function()
+	local old_write = io.write
+	local out = {}
+	io.write = function(...)
+		for i = 1, select("#", ...) do
+			out[#out + 1] = tostring(select(i, ...))
+		end
+	end
+	local ok, err = pcall(function()
+		ui.checkpoint("## Next Steps\n1. Improve docs\n\n## Critical Context\n- Keep dry-run safe", {
+			cycle = 1,
+			tokens = 1461,
+		})
+	end)
+	io.write = old_write
+	if not ok then
+		error(err)
+	end
+	local text = table.concat(out)
+	assert(text:find("checkpoint", 1, true), "missing checkpoint rail")
+	assert(text:find("Improve docs", 1, true), "missing next steps")
+end)
+
 test("tool is advertised with usage guidance", function()
 	assert_eq(registry.is_valid("update_plan"), true)
 	local prompt = registry.system_prompt()
