@@ -149,6 +149,7 @@ function session.create(options)
 		system_prompt = nil,
 		compaction_summary = nil,
 		compaction_details = nil,
+		plan = nil,
 		last_usage = nil,
 		usage_history = {},
 	}, session)
@@ -181,6 +182,7 @@ function session:clear()
 	self.system_prompt = nil
 	self.compaction_summary = nil
 	self.compaction_details = nil
+	self.plan = nil
 	self.last_usage = nil
 	self.usage_history = {}
 end
@@ -372,6 +374,7 @@ function session:serialize()
 		system_prompt = self.system_prompt,
 		compaction_summary = self.compaction_summary,
 		compaction_details = self.compaction_details,
+		plan = self.plan,
 		last_usage = self.last_usage,
 		usage_history = self.usage_history,
 	}
@@ -445,6 +448,11 @@ function session:load(path)
 		self.compaction_details = data.compaction_details
 	else
 		self.compaction_details = nil
+	end
+	if type(data.plan) == "table" then
+		self.plan = data.plan
+	else
+		self.plan = nil
 	end
 	if type(data.last_usage) == "table" then
 		self.last_usage = data.last_usage

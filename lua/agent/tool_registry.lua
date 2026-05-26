@@ -9,6 +9,7 @@ local job_status = require("agent.tools.job_status")
 local job_stop = require("agent.tools.job_stop")
 local job_wait = require("agent.tools.job_wait")
 local run = require("agent.tools.run")
+local update_plan = require("agent.tools.update_plan")
 local write = require("agent.tools.write")
 local mcp = require("agent.mcp")
 
@@ -26,6 +27,7 @@ local tools = {
 	ls = ls,
 	read = read,
 	run = run,
+	update_plan = update_plan,
 	write = write,
 }
 
@@ -50,7 +52,7 @@ function registry.is_valid(name)
 end
 
 function registry.names()
-	local names = { "ls", "read", "find", "grep", "edit", "write", "run", "job_start", "job_status", "job_output", "job_stop", "job_wait" }
+	local names = { "ls", "read", "find", "grep", "edit", "write", "run", "job_start", "job_status", "job_output", "job_stop", "job_wait", "update_plan" }
 	for _, t in ipairs(mcp_tools) do
 		names[#names + 1] = "mcp__" .. t._server .. "__" .. t.name
 	end
@@ -156,7 +158,7 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - read: read a focused text-file slice. Args: path (required), offset (optional, 1-indexed line), limit (optional, line count, default 160, max 300). For larger files, read targeted chunks instead of the whole file.
 - find: list files recursively. Args: path (optional), maxDepth (optional), pattern (optional, e.g. "*.lua").
 - grep: search file contents. Args: pattern (required), path (optional), glob (optional).
-- edit: replace lines in a file. JSON args: path, start_line, start_tag, end_line, end_tag. Raw content after JSON replaces all lines in the range. Tags are the 4-char CAS codes from read output (e.g. "10:Q8fA: code here") — they verify the file hasn't changed.
+- edit: replace lines in a file. JSON args: path, start_line, start_tag, end_line, end_tag. Raw content after JSON replaces all lines in the range. Tags are the 4-char CAS codes from read output (e.g. "10:Q8fA") — they verify the file hasn't changed.
 - write: create or overwrite a file. JSON args: path. Raw content after JSON becomes the file. Parent directories are created automatically.
 - run: execute a shell command. Args: command, timeout (optional, milliseconds, default 120000). stdout+stderr captured.
 - job_start: start a long-running shell command as a durable job. Args: command (required), cwd (optional), timeout (optional, milliseconds), temporary (optional boolean). Returns a job id immediately. Do not set timeout for servers, watchers, or dev processes unless the user explicitly asks for one.
@@ -164,12 +166,14 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - job_output: read bounded job output. Args: id (required), stream (optional stdout/stderr), tail (optional lines), offset (optional byte offset), limit (optional bytes), search (optional literal text).
 - job_stop: stop a durable job's process group. Args: id (required).
 - job_wait: wait briefly for a durable job. Args: id (required), timeout or timeout_ms (optional, milliseconds, default 1000), tail (optional stdout lines).
+- update_plan: replace the visible execution checklist. Args: plan array of {step,status}; status is pending, in_progress, or completed. Use at most one in_progress item.
 
 ## Strategy
 
 - Prefer targeted reads. Use grep/find first, then read only relevant ranges with `offset` and `limit`. For files likely under ~300 lines, a default read is fine. For larger files, read narrow sections unless the user explicitly asks for the whole file.
 - For "describe/explain this project": find to see the tree, then read key manifests/docs first. Read large source files in focused sections.
 - For "how does X work": use grep to locate relevant symbols, then read the specific nearby section(s).
+- For substantial multi-step implementation work, call update_plan with a short checklist and keep it current as steps complete. Skip it for trivial one-step tasks.
 - For small targeted edits: search only enough to locate the target, read the relevant range, edit the smallest range, then run the narrowest relevant verification. Once the target file is known, avoid broad repeated greps unless the change clearly crosses files.
 - For edits: read the target file, make the change. Don't read unrelated files.
 - Prefer existing project patterns, helper APIs, and style over introducing a new approach.

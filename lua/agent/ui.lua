@@ -91,6 +91,7 @@ local TOOL_COLORS = {
 	job_output = "blue",
 	job_stop = "blue",
 	job_wait = "blue",
+	update_plan = "magenta",
 }
 
 local TOOL_VERBS = {
@@ -102,6 +103,7 @@ local TOOL_VERBS = {
 	write  = "writing",
 	run    = "running",
 	shell  = "executing",
+	update_plan = "planning",
 }
 
 local function tool_color(name)
@@ -863,7 +865,9 @@ function ui.tool(event)
 					status = status .. "  " .. format_duration(elapsed)
 				end
 				rail_line("◆", tc, event.name, status)
-				if event.name == "run" and event.result and event.result.content then
+				if event.name == "update_plan" and event.result and event.result.content then
+					rail_block("plan", event.result.content, { max_lines = 12, max_width = 120, max_bytes = 1600 })
+				elseif event.name == "run" and event.result and event.result.content then
 					rail_block("output", event.result.content, { max_lines = 6, max_width = 120, max_bytes = 1200 })
 				elseif event.name == "grep" and event.result and event.result.content then
 					rail_block("matches", event.result.content, { max_lines = 4, max_width = 120, max_bytes = 800 })
@@ -929,11 +933,32 @@ local function context_bar(tokens, max_tokens)
 	return color(bar_color, bars[idx])
 end
 
+local function plan_status(plan)
+	if type(plan) ~= "table" or #plan == 0 then
+		return nil
+	end
+	local completed = 0
+	local current = nil
+	for _, item in ipairs(plan) do
+		if item.status == "completed" then
+			completed = completed + 1
+		elseif item.status == "in_progress" and not current then
+			current = item.step
+		end
+	end
+	local text = tostring(completed) .. "/" .. tostring(#plan) .. " completed"
+	if current and current ~= "" then
+		text = text .. ", current: " .. current
+	end
+	return text
+end
+
 function ui.status(session)
 	local compaction_mod = require("agent.compaction")
 	local tokens = compaction_mod.estimate_total(session.messages)
 	refresh_term_size()
 	local w = math.min(term_width, 60)
+	local plan_line = plan_status(session.plan)
 
 	io.write(color("dim", box.tl .. hrule(w - 2, "status") .. box.tr) .. "\n")
 	local lines = {
@@ -947,6 +972,9 @@ function ui.status(session)
 		"context: ~" .. math.floor(tokens / 1000) .. "k tokens (" .. #session.messages .. " messages) " .. context_bar(tokens, 200000),
 		"compacted: " .. (session.compaction_summary and "yes" or "no"),
 	}
+	if plan_line then
+		table.insert(lines, 5, "plan: " .. plan_line)
+	end
 	for _, l in ipairs(lines) do
 		io.write(color("dim", box.v) .. " " .. l .. "\n")
 	end

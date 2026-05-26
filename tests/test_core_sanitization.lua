@@ -129,6 +129,26 @@ test("flow mode is included in system prompt", function()
 	end
 end)
 
+test("insanitywolf flow mode is included in system prompt", function()
+	provider_response = "insanitywolf done"
+	last_request = nil
+
+	local session = session_module.create({ flow = "insanitywolf" })
+	session.cwd = project_dir
+	session:add_user("trigger insanitywolf")
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "insanitywolf done" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if not last_request or type(last_request.system_prompt) ~= "string" then
+		error("provider request was not captured")
+	end
+	if not last_request.system_prompt:find("Flow mode is insanitywolf.", 1, true) then
+		error("missing insanitywolf flow policy in system prompt")
+	end
+end)
+
 test("partial salvage emits quiet thinking status", function()
 	provider_response = {
 		text = table.concat({

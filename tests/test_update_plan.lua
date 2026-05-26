@@ -1,0 +1,115 @@
+#!/usr/bin/env lua
+
+local script_dir = arg[0]:match("^(.*)/[^/]+$") or "."
+local project_dir = script_dir .. "/.."
+package.path = project_dir .. "/lua/?.lua;" .. project_dir .. "/lua/?/init.lua;" .. project_dir .. "/lua/?/?.lua;" .. package.path
+pcall(require, "luarocks.loader")
+
+local update_plan = require("agent.tools.update_plan")
+local registry = require("agent.tool_registry")
+local session_mod = require("agent.session")
+
+local passed = 0
+local failed = 0
+
+local function test(name, fn)
+	io.write("  " .. name .. " ")
+	io.flush()
+	local ok, err = pcall(fn)
+	if ok then
+		passed = passed + 1
+		io.write("PASS\n")
+	else
+		failed = failed + 1
+		io.write("FAIL (" .. tostring(err) .. ")\n")
+	end
+end
+
+local function assert_eq(actual, expected, msg)
+	if actual ~= expected then
+		error((msg or "") .. " expected: " .. tostring(expected) .. ", got: " .. tostring(actual))
+	end
+end
+
+test("stores normalized plan on session", function()
+	local s = session_mod.create({})
+	local result = update_plan.execute({
+		plan = {
+			{ step = "Read files", status = "completed" },
+			{ step = "Implement tool", status = "in_progress" },
+			{ step = "Run tests", status = "pending" },
+		},
+	}, { session = s })
+
+	assert_eq(result.is_error, false)
+	assert_eq(result.summary, "updated 3 steps")
+	assert_eq(#s.plan, 3)
+	assert_eq(s.plan[2].step, "Implement tool")
+	assert_eq(s.plan[2].status, "in_progress")
+	assert(result.content:find("2. %[in_progress%] Implement tool"), "missing rendered plan content")
+end)
+
+test("rejects multiple in progress steps", function()
+	local s = session_mod.create({})
+	local result = update_plan.execute({
+		plan = {
+			{ step = "One", status = "in_progress" },
+			{ step = "Two", status = "in_progress" },
+		},
+	}, { session = s })
+
+	assert_eq(result.is_error, true)
+	assert(result.content:find("at most one", 1, true), "expected in_progress validation")
+	assert_eq(s.plan, nil)
+end)
+
+test("clears plan with empty array", function()
+	local s = session_mod.create({})
+	s.plan = {
+		{ step = "Existing", status = "pending" },
+	}
+
+	local result = update_plan.execute({ plan = {} }, { session = s })
+
+	assert_eq(result.is_error, false)
+	assert_eq(result.summary, "cleared plan")
+	assert_eq(#s.plan, 0)
+	assert_eq(result.content, "Plan cleared.")
+end)
+
+test("plan is saved and loaded with session", function()
+	local path = os.tmpname()
+	local s = session_mod.create({})
+	s.plan = {
+		{ step = "Persisted", status = "completed" },
+	}
+
+	local ok, err = s:save(path)
+	if not ok then
+		error(err)
+	end
+
+	local loaded = session_mod.create({})
+	local loaded_ok, loaded_err = loaded:load(path)
+	os.remove(path)
+	if not loaded_ok then
+		error(loaded_err)
+	end
+
+	assert_eq(#loaded.plan, 1)
+	assert_eq(loaded.plan[1].step, "Persisted")
+	assert_eq(loaded.plan[1].status, "completed")
+end)
+
+test("tool is advertised with usage guidance", function()
+	assert_eq(registry.is_valid("update_plan"), true)
+	local prompt = registry.system_prompt()
+	assert(prompt:find("- update_plan:", 1, true), "missing tool listing")
+	assert(prompt:find("For substantial multi-step implementation work", 1, true), "missing usage guidance")
+end)
+
+if failed > 0 then
+	error(tostring(failed) .. " test(s) failed")
+end
+
+io.write("\n" .. tostring(passed) .. " test(s) passed\n")

@@ -33,6 +33,7 @@ local START_EVENT_TOOLS = {
 	ls = true,
 	run = true,
 	shell = true,
+	update_plan = true,
 	write = true,
 }
 

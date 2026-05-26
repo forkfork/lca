@@ -575,6 +575,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 
 			local batch_results = parallel.execute_batch(batch, {
 				cwd = session.cwd,
+				session = session,
 				recent_read_keys = recent_read_keys(session),
 			}, batch_on_tool)
 
