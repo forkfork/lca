@@ -659,6 +659,19 @@ local function plan_number(index)
 	return CIRCLED_NUMBERS[index] or tostring(index)
 end
 
+local function plan_completed_count(plan)
+	if type(plan) ~= "table" then
+		return 0
+	end
+	local completed = 0
+	for _, item in ipairs(plan) do
+		if item.status == "completed" then
+			completed = completed + 1
+		end
+	end
+	return completed
+end
+
 function ui.plan_current(plan)
 	if type(plan) ~= "table" then
 		return nil
@@ -699,14 +712,11 @@ function ui.plan_progress(plan)
 		rail_line("▣", "magenta", "plan", "cleared")
 		return
 	end
-	local completed = 0
+	local completed = plan_completed_count(plan)
 	local current_step, current_index = ui.plan_current(plan)
 	io.write("  " .. color("magenta", "▣") .. " " .. color("magenta", pad_right("plan", 12)))
 	for i, item in ipairs(plan) do
 		local marker, marker_color = plan_marker(item.status)
-		if item.status == "completed" then
-			completed = completed + 1
-		end
 		io.write(color(marker_color, plan_number(i) .. marker))
 		if i < #plan then
 			io.write(color("dim", " "))
@@ -721,6 +731,10 @@ function ui.plan_progress(plan)
 		suffix = suffix .. " · " .. plan_number(current_index) .. " " .. compact
 	end
 	io.write(color("dim", suffix) .. "\n")
+end
+
+function ui.plan_should_list(plan)
+	return type(plan) == "table" and #plan > 0 and plan_completed_count(plan) == 0
 end
 
 local active_tool_timer = nil
@@ -948,7 +962,11 @@ function ui.tool(event)
 				end
 				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
-					ui.plan_progress(event.result.plan)
+					if ui.plan_should_list(event.result.plan) then
+						ui.plan(event.result.plan)
+					else
+						ui.plan_progress(event.result.plan)
+					end
 				elseif event.name == "update_plan" and event.result and event.result.content then
 					rail_block("plan", event.result.content, { max_lines = 12, max_width = 120, max_bytes = 1600 })
 				elseif event.name == "run" and event.result and event.result.content then

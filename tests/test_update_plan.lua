@@ -173,6 +173,20 @@ test("ui exposes active plan reference", function()
 	assert_eq(ui.plan_ref(index), "②")
 end)
 
+test("ui lists only fresh plans by default", function()
+	local fresh = {
+		{ step = "Inspect target", status = "in_progress" },
+		{ step = "Implement compact progress", status = "pending" },
+	}
+	local active = {
+		{ step = "Inspect target", status = "completed" },
+		{ step = "Implement compact progress", status = "in_progress" },
+	}
+
+	assert_eq(ui.plan_should_list(fresh), true)
+	assert_eq(ui.plan_should_list(active), false)
+end)
+
 test("tool is advertised with usage guidance", function()
 	assert_eq(registry.is_valid("update_plan"), true)
 	local prompt = registry.system_prompt()
