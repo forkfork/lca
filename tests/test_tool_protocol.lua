@@ -194,6 +194,25 @@ test("extra close tags and trailing prose after raw edit are ignored", function(
 	end
 end)
 
+test("malformed prose after raw write does not poison raw content", function()
+	local text = table.concat({
+		'<tool_call name="write">',
+		'{"path":"log.sh"}',
+		'#!/usr/bin/env bash',
+		'echo ok',
+		'</tool_call>',
+		'</tool_call>... Wait accidental extra close? I included another <tool_call name="write"> marker in prose.',
+	}, "\n")
+	local calls = protocol.extract_all_tool_calls(text)
+	assert_eq(#calls, 1)
+	assert_eq(calls[1].name, "write")
+	assert_eq(calls[1].args._raw_content, "#!/usr/bin/env bash\necho ok")
+	local ok, err = protocol.validate_tool_calls(calls)
+	if not ok then
+		error("expected malformed trailing prose to be ignored, got: " .. tostring(err))
+	end
+end)
+
 -- Test: strip_tool_calls with </tool_call> in content
 test("strip_tool_calls preserves text around calls with literals", function()
 	local text = 'Before\n<tool_call name="write">\n{"path":"a.lua"}\nlocal x = s:find("</tool_call>")\n</tool_call>\nAfter'

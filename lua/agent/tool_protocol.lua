@@ -89,6 +89,13 @@ local function find_close_tag_before_boundary(text, after_pos, boundary)
 			return found
 		end
 	end
+	for _, found in ipairs(closes) do
+		local before = found == 1 and "\n" or text:sub(found - 1, found - 1)
+		local after = text:sub(found + 12, found + 12)
+		if (before == "\n" or before == "\r") and (after == "" or after == "\n" or after == "\r") then
+			return found
+		end
+	end
 	return closes[#closes]
 end
 
