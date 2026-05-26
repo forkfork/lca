@@ -671,6 +671,12 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 						tonumber(msgs_removed) or 0,
 						tonumber(new_tokens) or 0
 					)
+					session:add_user(table.concat({
+						"Insanitywolf checkpoint complete.",
+						"Continue with the next improvement cycle using the checkpoint summary's Next Steps and Critical Context.",
+						"First update the plan for the next concrete cycle, then implement and verify it.",
+						"If the checkpoint says the next step is ambiguous, blocked, destructive, credential-dependent, or requires user/product judgment, stop and explain that blocker instead of continuing.",
+					}, "\n"))
 					if on_thinking then
 						on_thinking({
 							step = step,

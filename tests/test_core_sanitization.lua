@@ -292,6 +292,16 @@ test("insanitywolf checkpoints compact cycle context", function()
 	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
 		error("checkpoint summary did not retain current plan")
 	end
+	local found_continue = false
+	for _, message in ipairs(session.messages) do
+		if message.role == "user" and tostring(message.text or ""):find("Continue with the next improvement cycle", 1, true) then
+			found_continue = true
+			break
+		end
+	end
+	if not found_continue then
+		error("checkpoint did not add a continuation instruction")
+	end
 end)
 
 test("insanitywolf does not checkpoint before plan completion", function()
