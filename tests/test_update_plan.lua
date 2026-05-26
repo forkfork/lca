@@ -51,6 +51,11 @@ test("stores normalized plan on session", function()
 	assert(result.content:find("2. %[in_progress%] Implement tool"), "missing rendered plan content")
 end)
 
+test("insanitywolf prompt stays compact", function()
+	assert_eq(ui.plain_prompt({ flow = "off" }), "lca > ")
+	assert_eq(ui.plain_prompt({ flow = "insanitywolf" }), "lca ! > ")
+end)
+
 test("accepts plan array from parsed tool call", function()
 	local text = table.concat({
 		'<tool_call name="update_plan">',

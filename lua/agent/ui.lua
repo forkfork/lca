@@ -192,7 +192,7 @@ function ui.plain_prompt(session)
 	-- positions drift, so keep the editable prompt ASCII-only.
 	local flow = session and session.flow or "off"
 	if flow == "insanitywolf" then
-		return "lca insanitywolf > "
+		return "lca ! > "
 	end
 	return "lca > "
 end
