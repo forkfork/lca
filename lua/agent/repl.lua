@@ -356,12 +356,13 @@ function repl.run(options)
 				end
 
 				local function label_with_current_plan(base)
+					local wolf = session.flow == "insanitywolf" and "🐺 " or ""
 					local current_plan, current_index
 					if ui.plan_current then
 						current_plan, current_index = ui.plan_current(session.plan)
 					end
 					if not current_plan then
-						return base
+						return wolf .. tostring(base or "")
 					end
 					current_plan = tostring(current_plan):gsub("%s+", " ")
 					if #current_plan > 48 then
@@ -372,7 +373,7 @@ function repl.run(options)
 						prefix = ((ui.plan_ref and ui.plan_ref(current_index)) or ("#" .. tostring(current_index))) .. " "
 					end
 					return {
-						highlight = prefix .. current_plan,
+						highlight = wolf .. prefix .. current_plan,
 						after = " · " .. tostring(base or ""),
 					}
 				end

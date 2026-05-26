@@ -15,7 +15,7 @@ local HELP = [[
 /model <id>           change model
 /reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
 /service-tier <tier>  set service tier: auto, default, flex, priority
-/flow [mode]          show or set flow mode: off, on, insanitywolf
+/flow [mode]          show or set flow mode: off, insanitywolf
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
 /save [path]          save session to file (default: .lca-session.json)
@@ -390,7 +390,7 @@ function commands.dispatch(line, session, ui)
 				return require("agent.session").resolve_flow(rest)
 			end)
 			if not ok then
-				ui.error("usage: /flow off|on|insanitywolf")
+				ui.error("usage: /flow off|insanitywolf")
 			else
 				session.flow = value
 				session.system_prompt = nil

@@ -48,15 +48,7 @@ local function brave_search_section()
 end
 
 local function flow_section(mode)
-	if mode == "on" then
-		return table.concat({
-			"## Flow Mode",
-			"- Flow mode is on.",
-			"- Continue only through obvious, local, evidence-backed follow-through.",
-			"- You may take up to two small follow-through cycles after the requested implementation, such as fixing directly-related verification failures or polishing issues found while exercising the result.",
-			"- Stop before ambiguity, scope expansion, destructive actions, new dependencies, credentials, broad refactors, public API changes, or unclear product choices.",
-		}, "\n")
-	elseif mode == "insanitywolf" then
+	if mode == "insanitywolf" then
 		return table.concat({
 			"## Flow Mode",
 			"- Flow mode is insanitywolf.",

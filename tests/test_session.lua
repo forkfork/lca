@@ -235,15 +235,30 @@ run_test("flow command invalidates cached system prompt", function()
 		error("expected cached prompt")
 	end
 
-	commands.dispatch("/flow on", s, ui)
+	commands.dispatch("/flow insanitywolf", s, ui)
 
-	assert_eq(s.flow, "on")
+	assert_eq(s.flow, "insanitywolf")
 	assert_eq(s.system_prompt, nil)
 	assert_eq(s.system_prompt_version, nil)
 	local prompt_after = s:get_system_prompt()
-	if not prompt_after:find("Flow mode is on.", 1, true) then
+	if not prompt_after:find("Flow mode is insanitywolf.", 1, true) then
 		error("rebuilt prompt did not include flow policy")
 	end
+end)
+
+run_test("flow on is rejected", function()
+	local commands = require("agent.commands")
+	local errors = {}
+	local ui = {
+		muted = function() end,
+		error = function(message) errors[#errors + 1] = message end,
+	}
+	local s = session_module.create({ session_id = "lca-test-session", flow = "off" })
+
+	commands.dispatch("/flow on", s, ui)
+
+	assert_eq(s.flow, "off")
+	assert_eq(errors[1], "usage: /flow off|insanitywolf")
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))

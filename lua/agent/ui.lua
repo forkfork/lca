@@ -191,9 +191,7 @@ function ui.plain_prompt(session)
 	-- Multibyte Unicode prompts (for example "☽ ") make cursor redraw/backspace
 	-- positions drift, so keep the editable prompt ASCII-only.
 	local flow = session and session.flow or "off"
-	if flow == "on" then
-		return "lca flow > "
-	elseif flow == "insanitywolf" then
+	if flow == "insanitywolf" then
 		return "lca insanitywolf > "
 	end
 	return "lca > "

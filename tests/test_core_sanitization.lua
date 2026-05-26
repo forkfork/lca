@@ -203,24 +203,24 @@ test("thinking tool count reports last batch not cumulative total", function()
 	end
 end)
 
-test("flow mode is included in system prompt", function()
+test("normal flow mode does not add a flow policy", function()
 	provider_calls = 0
-	provider_response = "flow done"
+	provider_response = "normal done"
 	last_request = nil
 
-	local session = session_module.create({ flow = "on" })
+	local session = session_module.create({ flow = "off" })
 	session.cwd = project_dir
-	session:add_user("trigger flow")
+	session:add_user("trigger normal flow")
 
 	local result = core.run_session(session, nil, nil, nil)
-	if result.text ~= "flow done" then
+	if result.text ~= "normal done" then
 		error("unexpected result: " .. tostring(result.text))
 	end
 	if not last_request or type(last_request.system_prompt) ~= "string" then
 		error("provider request was not captured")
 	end
-	if not last_request.system_prompt:find("Flow mode is on.", 1, true) then
-		error("missing flow policy in system prompt")
+	if last_request.system_prompt:find("Flow Mode", 1, true) then
+		error("normal mode should not include a flow policy")
 	end
 	if #last_request.messages ~= 1 then
 		error("flow policy should not be appended as a session message")
