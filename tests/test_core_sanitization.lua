@@ -292,6 +292,9 @@ test("insanitywolf checkpoints compact cycle context", function()
 	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
 		error("checkpoint summary did not retain current plan")
 	end
+	if session.plan ~= nil then
+		error("completed plan should be cleared before the next insanitywolf cycle")
+	end
 	local found_continue = false
 	for _, message in ipairs(session.messages) do
 		if message.role == "user" and tostring(message.text or ""):find("concrete high%-impact implementation improvement") then

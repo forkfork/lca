@@ -671,6 +671,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 						tonumber(msgs_removed) or 0,
 						tonumber(new_tokens) or 0
 					)
+					session.plan = nil
 					session:add_user(table.concat({
 						"Insanitywolf checkpoint complete.",
 						"Continue only if the checkpoint summary's Next Steps contain a concrete high-impact implementation improvement.",
