@@ -355,6 +355,28 @@ function repl.run(options)
 					return "orange"
 				end
 
+				local function label_with_current_plan(base)
+					local current_plan, current_index
+					if ui.plan_current then
+						current_plan, current_index = ui.plan_current(session.plan)
+					end
+					if not current_plan then
+						return base
+					end
+					current_plan = tostring(current_plan):gsub("%s+", " ")
+					if #current_plan > 48 then
+						current_plan = current_plan:sub(1, 45) .. "..."
+					end
+					local prefix = ""
+					if current_index then
+						prefix = ((ui.plan_ref and ui.plan_ref(current_index)) or ("#" .. tostring(current_index))) .. " "
+					end
+					return {
+						before = tostring(base or "") .. " · ",
+						highlight = prefix .. current_plan,
+					}
+				end
+
 				local function stop_live_model_progress_timer()
 					if not live_model_progress_timer then return end
 					if not live_model_progress_timer:is_closing() then
@@ -372,13 +394,13 @@ function repl.run(options)
 							stop_live_model_progress_timer()
 							return
 						end
-						ui.model_progress_live(live_model_progress_text, live_model_progress_color())
+						ui.model_progress_live(label_with_current_plan(live_model_progress_text), live_model_progress_color())
 					end)
 				end
 
 				local function show_model_progress_live(text)
 					live_model_progress_text = text
-					ui.model_progress_live(text, live_model_progress_color())
+					ui.model_progress_live(label_with_current_plan(text), live_model_progress_color())
 					live_model_progress = true
 					ensure_live_model_progress_timer()
 				end
@@ -714,35 +736,13 @@ function repl.run(options)
 					end
 					if info and info.status then
 						ui.clear_model_progress()
-						ui.model_progress(info.status)
+						ui.model_progress(label_with_current_plan(info.status))
 					end
 					local tool_count_text = "tool results"
 					if info and info.tools and info.tools >= 4 then
 						tool_count_text = tostring(info.tools) .. " tool results"
 					end
-					local label = "reviewing " .. tool_count_text
-					local label_highlight = nil
-					local current_plan, current_index
-					if ui.plan_current then
-						current_plan, current_index = ui.plan_current(session.plan)
-					end
-					if current_plan then
-						current_plan = tostring(current_plan):gsub("%s+", " ")
-						if #current_plan > 48 then
-							current_plan = current_plan:sub(1, 45) .. "..."
-						end
-						local prefix = ""
-						if current_index then
-							prefix = ((ui.plan_ref and ui.plan_ref(current_index)) or ("#" .. tostring(current_index))) .. " "
-						end
-						label = label .. " · "
-						label_highlight = prefix .. current_plan
-					end
-					if label_highlight then
-						ui.thinking(#session.messages, { before = label, highlight = label_highlight })
-					else
-						ui.thinking(#session.messages, label)
-					end
+					ui.thinking(#session.messages, label_with_current_plan("reviewing " .. tool_count_text))
 					spinner_active = true
 					in_tool_call = false
 					in_thinking = false

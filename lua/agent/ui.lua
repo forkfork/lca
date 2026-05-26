@@ -230,14 +230,14 @@ local spinner_active_flag = false
 local last_token_time = 0
 local STALL_THRESHOLD = 3.0
 
-local function render_spinner_label()
-	if type(spinner_label) ~= "table" then
-		return color("dim", tostring(spinner_label or "thinking"))
+local function render_label(label)
+	if type(label) ~= "table" then
+		return color("dim", tostring(label or ""))
 	end
-	local before = tostring(spinner_label.before or "")
-	local highlight = tostring(spinner_label.highlight or "")
-	local after = tostring(spinner_label.after or "")
-	return color("dim", before) .. styled({ "bold", "cyan" }, highlight) .. color("dim", after)
+	local before = tostring(label.before or "")
+	local highlight = tostring(label.highlight or "")
+	local after = tostring(label.after or "")
+	return color("dim", before) .. styled({ "bold", "white" }, highlight) .. color("dim", after)
 end
 
 function ui.thinking(_message_count, label)
@@ -278,7 +278,7 @@ function ui.thinking(_message_count, label)
 
 		local glyph = ACTIVE_GLYPHS[(spinner_frame % #ACTIVE_GLYPHS) + 1]
 		local elapsed = uv.hrtime() / 1e9 - spinner_started_at
-		io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("cyan", pad_right("model", 10)) .. render_spinner_label() .. color("dim", "  " .. string.format("%.1fs", elapsed)))
+		io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("cyan", pad_right("model", 10)) .. render_label(spinner_label) .. color("dim", "  " .. string.format("%.1fs", elapsed)))
 		io.flush()
 	end)
 end
@@ -490,7 +490,7 @@ function ui.muted(text)
 end
 
 function ui.model_progress(text)
-	io.write("  " .. color("cyan", "◌") .. " " .. color("cyan", pad_right("model", 10)) .. color("dim", text) .. "\n")
+	io.write("  " .. color("cyan", "◌") .. " " .. color("cyan", pad_right("model", 10)) .. render_label(text) .. "\n")
 	io.flush()
 end
 
@@ -498,7 +498,7 @@ function ui.model_progress_live(text, glyph_color)
 	local glyph = ACTIVE_GLYPHS and ACTIVE_GLYPHS[(spinner_frame % #ACTIVE_GLYPHS) + 1] or "◐"
 	spinner_frame = spinner_frame + 1
 	glyph_color = glyph_color or "cyan"
-	io.write("\r\27[K  " .. color(glyph_color, glyph) .. " " .. color(glyph_color, pad_right("model", 10)) .. color("dim", text))
+	io.write("\r\27[K  " .. color(glyph_color, glyph) .. " " .. color(glyph_color, pad_right("model", 10)) .. render_label(text))
 	io.flush()
 end
 
@@ -738,9 +738,9 @@ function ui.plan_outline(plan)
 		local step = tostring(item.step or "")
 		local prefix = plan_number(i) .. " "
 		local lines = limited_lines(step, { max_lines = 2, max_width = 96, max_bytes = 300 })
-		io.write("  " .. color("dim", "┆ " .. pad_right("", 8)) .. color("magenta", prefix) .. color("cyan", lines[1] or "") .. "\n")
+		io.write("  " .. color("dim", "┆ " .. pad_right("", 8)) .. color("cyan", prefix) .. styled({ "bold", "white" }, lines[1] or "") .. "\n")
 		for j = 2, #lines do
-			io.write("  " .. color("dim", "┆ " .. pad_right("", 8) .. (" "):rep(#prefix)) .. color("cyan", lines[j]) .. "\n")
+			io.write("  " .. color("dim", "┆ " .. pad_right("", 8) .. (" "):rep(#prefix)) .. styled({ "bold", "white" }, lines[j]) .. "\n")
 		end
 	end
 end
