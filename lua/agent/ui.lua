@@ -32,6 +32,17 @@ local function color(name, text)
 	return colors[name] .. text .. colors.reset
 end
 
+local function styled(names, text)
+	if not supports_color() then
+		return text
+	end
+	local seq = {}
+	for _, name in ipairs(names) do
+		seq[#seq + 1] = colors[name] or ""
+	end
+	return table.concat(seq) .. text .. colors.reset
+end
+
 -- ─── Terminal Geometry ───────────────────────────────────────────────────────
 
 local term_width = 80
@@ -219,6 +230,16 @@ local spinner_active_flag = false
 local last_token_time = 0
 local STALL_THRESHOLD = 3.0
 
+local function render_spinner_label()
+	if type(spinner_label) ~= "table" then
+		return color("dim", tostring(spinner_label or "thinking"))
+	end
+	local before = tostring(spinner_label.before or "")
+	local highlight = tostring(spinner_label.highlight or "")
+	local after = tostring(spinner_label.after or "")
+	return color("dim", before) .. styled({ "bold", "cyan" }, highlight) .. color("dim", after)
+end
+
 function ui.thinking(_message_count, label)
 	spinner_frame = 0
 	streaming_text = false
@@ -257,7 +278,7 @@ function ui.thinking(_message_count, label)
 
 		local glyph = ACTIVE_GLYPHS[(spinner_frame % #ACTIVE_GLYPHS) + 1]
 		local elapsed = uv.hrtime() / 1e9 - spinner_started_at
-		io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("cyan", pad_right("model", 10)) .. color("dim", spinner_label .. "  " .. string.format("%.1fs", elapsed)))
+		io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("cyan", pad_right("model", 10)) .. render_spinner_label() .. color("dim", "  " .. string.format("%.1fs", elapsed)))
 		io.flush()
 	end)
 end

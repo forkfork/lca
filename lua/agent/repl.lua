@@ -721,6 +721,7 @@ function repl.run(options)
 						tool_count_text = tostring(info.tools) .. " tool results"
 					end
 					local label = "reviewing " .. tool_count_text
+					local label_highlight = nil
 					local current_plan, current_index
 					if ui.plan_current then
 						current_plan, current_index = ui.plan_current(session.plan)
@@ -734,9 +735,14 @@ function repl.run(options)
 						if current_index then
 							prefix = ((ui.plan_ref and ui.plan_ref(current_index)) or ("#" .. tostring(current_index))) .. " "
 						end
-						label = label .. " · " .. prefix .. current_plan
+						label = label .. " · "
+						label_highlight = prefix .. current_plan
 					end
-					ui.thinking(#session.messages, label)
+					if label_highlight then
+						ui.thinking(#session.messages, { before = label, highlight = label_highlight })
+					else
+						ui.thinking(#session.messages, label)
+					end
 					spinner_active = true
 					in_tool_call = false
 					in_thinking = false
