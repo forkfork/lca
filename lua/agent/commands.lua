@@ -5,6 +5,7 @@ local jobs = require("agent.jobs")
 local HELP = [[
 /help                 show commands
 /status               show cwd, model, credentials, and turn count
+/plan                 show current execution plan
 /context [n]          show context/token breakdown and largest messages
 /jobs [--all]         list background jobs
 /job <id>             show durable job status
@@ -341,6 +342,14 @@ function commands.dispatch(line, session, ui)
 		ui.block(HELP)
 	elseif name == "status" then
 		ui.status(session)
+	elseif name == "plan" then
+		if ui.plan then
+			ui.plan(session.plan)
+		elseif session.plan and #session.plan > 0 then
+			ui.block("plan: " .. tostring(#session.plan) .. " steps")
+		else
+			ui.muted("  no active plan")
+		end
 	elseif name == "context" then
 		ui.block(format_context_report(session, rest))
 	elseif name == "jobs" or name == "job" or name == "job-status" or name == "job-output" or name == "job-stop" or name == "job-wait" or name == "job-prune" then

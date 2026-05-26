@@ -641,6 +641,45 @@ rail_block = function(label, text, opts)
 	end
 end
 
+local function plan_marker(status)
+	if status == "completed" then
+		return "✓", "green"
+	elseif status == "in_progress" then
+		return "▶", "cyan"
+	end
+	return "·", "dim"
+end
+
+function ui.plan_current(plan)
+	if type(plan) ~= "table" then
+		return nil
+	end
+	for _, item in ipairs(plan) do
+		if item.status == "in_progress" and item.step and item.step ~= "" then
+			return item.step
+		end
+	end
+	return nil
+end
+
+function ui.plan(plan)
+	if type(plan) ~= "table" or #plan == 0 then
+		ui.muted("  no active plan")
+		return
+	end
+	rail_line("▣", "magenta", "plan", tostring(#plan) .. " steps")
+	for i, item in ipairs(plan) do
+		local marker, marker_color = plan_marker(item.status)
+		local step = tostring(item.step or "")
+		local prefix = tostring(i) .. ". " .. marker .. " "
+		local lines = limited_lines(step, { max_lines = 2, max_width = 96, max_bytes = 300 })
+		io.write("  " .. color("dim", "┆ " .. pad_right("", 8)) .. color(marker_color, prefix) .. color("dim", lines[1] or "") .. "\n")
+		for j = 2, #lines do
+			io.write("  " .. color("dim", "┆ " .. pad_right("", 8) .. (" "):rep(#prefix)) .. color("dim", lines[j]) .. "\n")
+		end
+	end
+end
+
 local active_tool_timer = nil
 local active_tool_frame = 0
 local active_tool_seq = 0
@@ -865,7 +904,9 @@ function ui.tool(event)
 					status = status .. "  " .. format_duration(elapsed)
 				end
 				rail_line("◆", tc, event.name, status)
-				if event.name == "update_plan" and event.result and event.result.content then
+				if event.name == "update_plan" and event.result and event.result.plan then
+					ui.plan(event.result.plan)
+				elseif event.name == "update_plan" and event.result and event.result.content then
 					rail_block("plan", event.result.content, { max_lines = 12, max_width = 120, max_bytes = 1600 })
 				elseif event.name == "run" and event.result and event.result.content then
 					rail_block("output", event.result.content, { max_lines = 6, max_width = 120, max_bytes = 1200 })

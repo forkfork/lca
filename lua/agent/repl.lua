@@ -720,7 +720,16 @@ function repl.run(options)
 					if info and info.tools and info.tools >= 4 then
 						tool_count_text = tostring(info.tools) .. " tool results"
 					end
-					ui.thinking(#session.messages, "reviewing " .. tool_count_text)
+					local label = "reviewing " .. tool_count_text
+					local current_plan = ui.plan_current and ui.plan_current(session.plan) or nil
+					if current_plan then
+						current_plan = tostring(current_plan):gsub("%s+", " ")
+						if #current_plan > 48 then
+							current_plan = current_plan:sub(1, 45) .. "..."
+						end
+						label = label .. " · " .. current_plan
+					end
+					ui.thinking(#session.messages, label)
 					spinner_active = true
 					in_tool_call = false
 					in_thinking = false
