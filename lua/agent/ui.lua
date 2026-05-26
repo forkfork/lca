@@ -355,9 +355,13 @@ end
 
 function ui.checkpoint(summary, opts)
 	opts = opts or {}
-	local label = "insanitywolf"
+	local label = "insanitywolf tucked the chaos away"
 	if opts.cycle then
-		label = label .. " " .. tostring(opts.cycle) .. "/5"
+		label = label .. "  " .. tostring(opts.cycle) .. "/5"
+	end
+	local tokens = tonumber(opts.tokens)
+	if tokens then
+		label = label .. "  ~" .. tostring(math.floor((tokens + 500) / 1000)) .. "k tokens kept"
 	end
 	rail_line("◌", "magenta", "checkpoint", label)
 	local next_steps = extract_summary_section(summary, "Next Steps")

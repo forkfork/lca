@@ -686,6 +686,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 							status = "checkpointed insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/5",
 							checkpoint_summary = session.compaction_summary,
 							checkpoint_cycle = insanitywolf_checkpoints,
+							checkpoint_tokens = new_tokens,
 						})
 					end
 				end
