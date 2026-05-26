@@ -10,7 +10,7 @@ local CODEX_PATH = "/backend-api/codex/responses"
 
 local MAX_RETRIES = tonumber(os.getenv("LCA_CODEX_MAX_RETRIES") or "") or 2
 local INITIAL_BACKOFF_SEC = 1
-local FIRST_BYTE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_FIRST_BYTE_TIMEOUT") or "") or 45
+local FIRST_BYTE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_FIRST_BYTE_TIMEOUT") or "") or 180
 local IDLE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_IDLE_TIMEOUT") or "") or 60
 local TOTAL_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_TOTAL_TIMEOUT") or "") or 600
 local POST_TOOL_THRESHOLD = tonumber(os.getenv("LCA_CODEX_POST_TOOL_THRESHOLD") or "") or 800
