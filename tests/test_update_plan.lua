@@ -129,7 +129,7 @@ test("tool is advertised with usage guidance", function()
 	assert(prompt:find("not user-facing explanation", 1, true), "missing internal plan guidance")
 	assert(prompt:find("Be bold inside the active phase", 1, true), "missing boldness guidance")
 	assert(prompt:find("fix it before finalizing", 1, true), "missing verification defect guidance")
-	assert(prompt:find("6 calls or fewer", 1, true), "missing batch cap guidance")
+	assert(prompt:find("10 calls or fewer", 1, true), "missing batch cap guidance")
 end)
 
 if failed > 0 then

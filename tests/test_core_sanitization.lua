@@ -13,14 +13,21 @@ local provider_response = table.concat({
 	"After",
 }, "\n")
 local last_request = nil
+local provider_calls = 0
 
 package.loaded["agent.providers"] = {
 	load = function()
 		return {
 			complete = function(request)
+				provider_calls = provider_calls + 1
 				last_request = request
 				if type(provider_response) == "table" then
 					return provider_response
+				end
+				if type(provider_response) == "function" then
+					return {
+						text = provider_response(request),
+					}
 				end
 				return {
 					text = provider_response,
@@ -73,6 +80,7 @@ test("strips model-emitted tool_result tags from assistant text", function()
 end)
 
 test("stores only deduped executed tool calls in assistant history", function()
+	provider_calls = 0
 	provider_response = table.concat({
 		'<tool_call name="ls">',
 		'{"path":"."}',
@@ -106,7 +114,48 @@ test("stores only deduped executed tool calls in assistant history", function()
 	end
 end)
 
+test("batch cap is surfaced to next model turn", function()
+	provider_calls = 0
+	local first_response = {}
+	for i = 1, 12 do
+		first_response[#first_response + 1] = '<tool_call name="ls">'
+		first_response[#first_response + 1] = '{"path":"missing-' .. tostring(i) .. '"}'
+		first_response[#first_response + 1] = "</tool_call>"
+	end
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("Batch cap reached", 1, true) then
+				return "done after cap"
+			end
+		end
+		return table.concat(first_response, "\n")
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger too many tools")
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "done after cap" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if provider_calls ~= 2 then
+		error("expected 2 provider calls, got " .. tostring(provider_calls))
+	end
+	local found = false
+	for _, message in ipairs(session.messages) do
+		if tostring(message.text or ""):find("only the first 10 tool calls ran", 1, true) then
+			found = true
+			break
+		end
+	end
+	if not found then
+		error("missing batch cap steering message")
+	end
+end)
+
 test("flow mode is included in system prompt", function()
+	provider_calls = 0
 	provider_response = "flow done"
 	last_request = nil
 

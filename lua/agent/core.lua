@@ -9,7 +9,7 @@ local json = require("agent.util.json")
 local core = {}
 
 local MAX_TOOL_STEPS = 40
-local MAX_BATCH_SIZE = 6
+local MAX_BATCH_SIZE = 10
 local SLIM_CONTEXT_TOKENS = tonumber(os.getenv("LCA_SLIM_CONTEXT_TOKENS") or "") or 60000
 local MAX_CONSECUTIVE_READ_ONLY_BATCHES = tonumber(os.getenv("LCA_MAX_READ_ONLY_BATCHES") or "") or 5
 
@@ -466,6 +466,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 
 		-- Enforce tool budget and per-batch cap
 		local batch = {}
+		local dropped_for_batch_cap = 0
 		local seen_tool_calls = {}
 		for i, tc in ipairs(tool_calls) do
 			local key = tool_call_key(tc)
@@ -476,13 +477,14 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			if key then
 				seen_tool_calls[key] = true
 			end
+			if #batch >= MAX_BATCH_SIZE then
+				dropped_for_batch_cap = #tool_calls - i + 1
+				log("BATCH CAP reached (%d), dropping remaining %d calls", MAX_BATCH_SIZE, dropped_for_batch_cap)
+				break
+			end
 			total_tool_executions = total_tool_executions + 1
 			if total_tool_executions > MAX_TOOL_STEPS then
 				log("TOOL BUDGET HIT mid-batch at call %d/%d", i, #tool_calls)
-				break
-			end
-			if #batch >= MAX_BATCH_SIZE then
-				log("BATCH CAP reached (%d), dropping remaining %d calls", MAX_BATCH_SIZE, #tool_calls - i + 1)
 				break
 			end
 			batch[#batch + 1] = tc
@@ -584,6 +586,17 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				if result then
 					local msg = protocol.tool_result_message(tc.name, result, tc.args)
 					session:add_tool_result(tc.name, msg)
+				end
+			end
+			if dropped_for_batch_cap > 0 then
+				session:add_user("Batch cap reached: only the first " .. tostring(MAX_BATCH_SIZE) .. " tool calls ran; " .. tostring(dropped_for_batch_cap) .. " later calls were deferred. Continue with at most " .. tostring(MAX_BATCH_SIZE) .. " tool calls in the next batch.")
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = total_tool_executions,
+						status = "batch cap deferred  " .. tostring(dropped_for_batch_cap) .. " tools",
+					})
 				end
 			end
 
