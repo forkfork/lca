@@ -162,10 +162,10 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - write: create or overwrite a file. JSON args: path. Raw content after JSON becomes the file. Parent directories are created automatically.
 - run: execute a shell command. Args: command, timeout (optional, milliseconds, default 120000). stdout+stderr captured.
 - job_start: start a long-running shell command as a durable job. Args: command (required), cwd (optional), timeout (optional, milliseconds), temporary (optional boolean). Returns a job id immediately. Do not set timeout for servers, watchers, or dev processes unless the user explicitly asks for one.
-- job_status: inspect a durable job. Args: id (required).
-- job_output: read bounded job output. Args: id (required), stream (optional stdout/stderr), tail (optional lines), offset (optional byte offset), limit (optional bytes), search (optional literal text).
-- job_stop: stop a durable job's process group. Args: id (required).
-- job_wait: wait briefly for a durable job. Args: id (required), timeout or timeout_ms (optional, milliseconds, default 1000), tail (optional stdout lines).
+- job_status: inspect a durable job. Args: id (required), cwd (optional, if the job was started in another directory).
+- job_output: read bounded job output. Args: id (required), cwd (optional), stream (optional stdout/stderr), tail (optional lines), offset (optional byte offset), limit (optional bytes), search (optional literal text).
+- job_stop: stop a durable job's process group. Args: id (required), cwd (optional).
+- job_wait: wait briefly for a durable job. Args: id (required), cwd (optional), timeout or timeout_ms (optional, milliseconds, default 1000), tail (optional stdout lines).
 - update_plan: replace the visible execution checklist. Args: plan array of {step,status}; status is pending, in_progress, or completed. Use at most one in_progress item.
 
 ## Strategy

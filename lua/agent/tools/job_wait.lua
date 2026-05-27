@@ -17,14 +17,15 @@ function job_wait.execute(args, context)
 	if not args.id or args.id == "" then
 		return { is_error = true, content = "id is required", summary = "missing id" }
 	end
-	local job, err = jobs.wait(context.cwd, args.id, args)
+	local cwd = args.cwd or context.cwd
+	local job, err = jobs.wait(cwd, args.id, args)
 	if not job then
 		return { is_error = true, content = err, summary = "unknown job" }
 	end
 
 	local content = format_job(job)
 	if args.tail then
-		local output = jobs.output(context.cwd, args.id, { stream = args.stream or "stdout", tail = args.tail })
+		local output = jobs.output(cwd, args.id, { stream = args.stream or "stdout", tail = args.tail })
 		if output and output ~= "" then
 			content = content .. "\n\n" .. output
 		end

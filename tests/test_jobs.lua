@@ -133,6 +133,44 @@ test("job_wait returns completed job output", function()
 	end
 end)
 
+test("job tools resolve jobs started in another cwd", function()
+	local caller_dir = tmp_dir .. "/caller"
+	local app_dir = tmp_dir .. "/app"
+	os.execute("mkdir -p " .. shell.quote(caller_dir) .. " " .. shell.quote(app_dir))
+
+	local result = job_start.execute({
+		command = "printf 'cross-cwd\\n'; sleep 30",
+		cwd = app_dir,
+	}, { cwd = caller_dir })
+	if result.is_error then error(result.content) end
+	local id = extract_id(result)
+	wait_for(app_dir, id, "running", 5)
+
+	local status = job_status.execute({ id = id }, { cwd = caller_dir })
+	if status.is_error then error(status.content) end
+	if not status.content:find("cwd: " .. app_dir, 1, true) then
+		error("status did not resolve original job cwd")
+	end
+
+	local output = job_output.execute({ id = id, tail = 1 }, { cwd = caller_dir })
+	if output.is_error then error(output.content) end
+	if not output.content:find("cross%-cwd") then
+		error("output did not resolve cross-cwd job")
+	end
+
+	local stopped = job_stop.execute({ id = id }, { cwd = caller_dir })
+	if stopped.is_error then error(stopped.content) end
+	if stopped.summary ~= "stopped" then
+		error("unexpected stop summary: " .. tostring(stopped.summary))
+	end
+
+	local waited = job_wait.execute({ id = id, timeout = 1000 }, { cwd = caller_dir })
+	if waited.is_error then error(waited.content) end
+	if waited.summary ~= "stopped" then
+		error("wait did not resolve stopped cross-cwd job")
+	end
+end)
+
 test("job slash commands inspect and stop jobs without model", function()
 	local result = job_start.execute({
 		command = "sleep 30",

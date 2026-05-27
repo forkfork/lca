@@ -6,7 +6,7 @@ function job_stop.execute(args, context)
 	if not args.id or args.id == "" then
 		return { is_error = true, content = "id is required", summary = "missing id" }
 	end
-	local job, err = jobs.stop(context.cwd, args.id)
+	local job, err = jobs.stop(args.cwd or context.cwd, args.id)
 	if not job then
 		return { is_error = true, content = err, summary = "unknown job" }
 	end

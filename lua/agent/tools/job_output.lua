@@ -6,7 +6,7 @@ function job_output.execute(args, context)
 	if not args.id or args.id == "" then
 		return { is_error = true, content = "id is required", summary = "missing id" }
 	end
-	local output, err, next_offset = jobs.output(context.cwd, args.id, args)
+	local output, err, next_offset = jobs.output(args.cwd or context.cwd, args.id, args)
 	if not output then
 		return { is_error = true, content = err, summary = "output failed" }
 	end

@@ -158,6 +158,38 @@ local function upsert_index_job(cwd, job)
 	return save_index(cwd, index)
 end
 
+local function remove_index_job(cwd, id)
+	local index = load_index(cwd)
+	local kept = {}
+	local changed = false
+	for _, item in ipairs(index.jobs) do
+		if item.id == id then
+			changed = true
+		else
+			kept[#kept + 1] = item
+		end
+	end
+	if not changed then return true end
+	index.jobs = kept
+	return save_index(cwd, index)
+end
+
+local function resolve_job(cwd, id)
+	local job = jobs.load(cwd, id)
+	if job then return job, cwd end
+
+	local index = load_index(cwd)
+	for _, item in ipairs(index.jobs) do
+		if item.id == id and item.cwd and item.cwd ~= cwd then
+			local resolved = jobs.load(item.cwd, id)
+			if resolved then
+				return resolved, item.cwd
+			end
+		end
+	end
+	return nil, cwd
+end
+
 local function process_alive(pid)
 	if not pid then return false end
 	local numeric_pid = tonumber(pid)
@@ -482,12 +514,15 @@ function jobs.start(args, context)
 	local current = jobs.load(cwd, id) or job
 	current.supervisor_pid = pid_or_err
 	jobs.save(cwd, current)
+	if cwd ~= base_cwd then
+		upsert_index_job(base_cwd, current)
+	end
 	handle:unref()
 	return job
 end
 
 function jobs.status(cwd, id)
-	local job = jobs.load(cwd, id)
+	local job = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
 	job.alive = job.status == "running" and process_alive(job.pid)
 	return job
@@ -618,30 +653,27 @@ end
 
 function jobs.remove(cwd, id, opts)
 	opts = opts or {}
-	local job = jobs.status(cwd, id)
+	local job, resolved_cwd = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
+	job.alive = job.status == "running" and process_alive(job.pid)
 	if job.status == "running" and job.alive and not opts.force then
 		return nil, "job is running: " .. tostring(id)
 	end
 	if job.status == "running" and job.alive and opts.stop then
-		jobs.stop(cwd, id)
+		jobs.stop(resolved_cwd, id)
 	end
 
-	local removed, remove_err = remove_tree(job_dir(cwd, id))
+	local removed, remove_err = remove_tree(job_dir(resolved_cwd, id))
 	if not removed then
 		return nil, remove_err
 	end
 
-	local index = load_index(cwd)
-	local kept = {}
-	for _, item in ipairs(index.jobs) do
-		if item.id ~= id then
-			kept[#kept + 1] = item
-		end
-	end
-	index.jobs = kept
-	local saved, save_err = save_index(cwd, index)
+	local saved, save_err = remove_index_job(resolved_cwd, id)
 	if not saved then return nil, save_err end
+	if resolved_cwd ~= cwd then
+		local ref_saved, ref_err = remove_index_job(cwd, id)
+		if not ref_saved then return nil, ref_err end
+	end
 	return true
 end
 
@@ -760,7 +792,7 @@ local function search_file(path, pattern, limit)
 end
 
 function jobs.output(cwd, id, args)
-	local job = jobs.load(cwd, id)
+	local job = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
 	local stream = args.stream or "stdout"
 	if stream ~= "stdout" and stream ~= "stderr" then
@@ -777,7 +809,7 @@ function jobs.output(cwd, id, args)
 end
 
 function jobs.stop(cwd, id)
-	local job = jobs.load(cwd, id)
+	local job, resolved_cwd = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
 	if job.status ~= "running" and job.status ~= "starting" then
 		return job
@@ -785,7 +817,10 @@ function jobs.stop(cwd, id)
 
 	job.status = "stopped"
 	job.finished_at = now_iso()
-	jobs.save(cwd, job)
+	jobs.save(resolved_cwd, job)
+	if resolved_cwd ~= cwd then
+		upsert_index_job(cwd, job)
+	end
 
 	local target = job.pgid or job.pid
 	if target then
