@@ -284,6 +284,12 @@ test("insanitywolf mode is included in system prompt", function()
 	then
 		error("missing insanitywolf boring defaults policy in system prompt")
 	end
+	if not last_request.system_prompt:find("standard password hashing", 1, true)
+		or not last_request.system_prompt:find("simple durable local job", 1, true)
+		or not last_request.system_prompt:find("Makefile", 1, true)
+	then
+		error("missing insanitywolf stronger technical defaults policy in system prompt")
+	end
 end)
 
 test("insanitywolf checkpoints compact cycle context", function()

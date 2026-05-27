@@ -279,6 +279,9 @@ test("tool is advertised with usage guidance", function()
 	assert(prompt:find("server%-rendered HTML"), "missing small web default")
 	assert(prompt:find("plain CSS", 1, true), "missing plain CSS default")
 	assert(prompt:find("no frontend framework", 1, true), "missing no-framework default")
+	assert(prompt:find("env vars", 1, true), "missing config default")
+	assert(prompt:find("health checks", 1, true), "missing HTTP API default")
+	assert(prompt:find("curl%-based smoke tests"), "missing API smoke test default")
 end)
 
 if failed > 0 then
