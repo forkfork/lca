@@ -12,6 +12,7 @@ local MAX_TOOL_STEPS = 40
 local MAX_BATCH_SIZE = 10
 local SLIM_CONTEXT_TOKENS = tonumber(os.getenv("LCA_SLIM_CONTEXT_TOKENS") or "") or 60000
 local MAX_CONSECUTIVE_READ_ONLY_BATCHES = tonumber(os.getenv("LCA_MAX_READ_ONLY_BATCHES") or "") or 5
+local INSANITYWOLF_TOOL_RESERVE = 8
 
 local DIRECT_RETURN_TOOLS = {
 	job_output = true,
@@ -286,6 +287,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	local read_only_guard_used = false
 	local last_response_meta = nil
 	local insanitywolf_checkpoints = 0
+	local insanitywolf_budget_warned = false
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
 
 	local function response_meta(response)
@@ -674,10 +676,15 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 					session.plan = nil
 					session:add_user(table.concat({
 						"Insanitywolf checkpoint complete.",
+						"Before continuing, write a short visible transition note for the user.",
+						"The transition note must explain what completed, the next autonomous direction, why it is directly related and evidence-backed, and why it does not require user/product judgment.",
 						"Continue only if the checkpoint summary's Next Steps contain a concrete high-impact implementation improvement.",
 						"Do not start a new cycle for inventory checks, rereads, final tree listings, optional lint probes, or verification that already passed.",
-						"If continuing, first update the plan for the next implementation cycle, then implement and verify it.",
-						"If the checkpoint says no further autonomous cycle is warranted, or the next work is ambiguous, blocked, destructive, credential-dependent, deeper lifecycle semantics, or requires user/product judgment, stop and explain that blocker instead of continuing.",
+						"Local hardening, including security hardening, may be a valid next cycle when it is evidence-backed and preserves the user's requested shape.",
+						"If continuing, write the transition note first, then immediately call update_plan for the next implementation cycle, then implement and verify it.",
+						"Do not ask permission, say you can continue, or wait for the user when a valid next cycle is present.",
+						"If the checkpoint says no further autonomous cycle is warranted, or the next work is ambiguous, blocked, destructive, requires external secrets or dependencies, broadens scope, or requires user/product judgment, stop and explain that blocker instead of continuing.",
+						"When stopping, also offer concise concrete directions the user may explicitly choose next, without starting them.",
 					}, "\n"))
 					if on_thinking then
 						on_thinking({
@@ -690,6 +697,14 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 							checkpoint_cycle = insanitywolf_checkpoints,
 							checkpoint_tokens = new_tokens,
 						})
+					end
+					if repl_ok and repl_mod.cancelled then
+						log_separator("CANCELLED BY USER")
+						return {
+							text = "",
+							events = events,
+							_response_meta = last_response_meta,
+						}
 					end
 				end
 			end
@@ -708,10 +723,40 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		if total_tool_executions >= MAX_TOOL_STEPS then
 			break
 		end
+
+		if session.flow == "insanitywolf"
+			and not insanitywolf_budget_warned
+			and total_tool_executions >= (MAX_TOOL_STEPS - INSANITYWOLF_TOOL_RESERVE)
+		then
+			insanitywolf_budget_warned = true
+			session:add_user(table.concat({
+				"Insanitywolf tool budget reserve reached.",
+				"Do not start broad new edits or exploratory reads in this turn.",
+				"Use the remaining tools only to finish the active cycle: make any small required fix, run the narrowest verification, update the plan truthfully, and then checkpoint or stop.",
+				"If verification cannot be completed inside the remaining tools, stop and clearly report the incomplete verification instead of continuing to edit.",
+			}, "\n"))
+			if on_thinking then
+				on_thinking({
+					step = step,
+					messages = #session.messages,
+					tools = last_batch_tool_executions,
+					total_tools = total_tool_executions,
+					status = "insanitywolf tool reserve",
+				})
+			end
+		end
 	end
 
 	log_separator("TOOL BUDGET EXHAUSTED")
-	session:add_user("Tool budget reached. Stop using tools now and answer from the information already gathered.")
+	if session.flow == "insanitywolf" then
+		session:add_user(table.concat({
+			"Tool budget reached in insanitywolf mode.",
+			"Stop using tools now and answer from the information already gathered.",
+			"Report exactly which verification or documentation work remains incomplete, and do not imply the active cycle is complete unless the plan was verified and marked completed.",
+		}, "\n"))
+	else
+		session:add_user("Tool budget reached. Stop using tools now and answer from the information already gathered.")
+	end
 	local response = provider.complete({
 		credentials_path = session.credentials_path,
 		session_id = session.id,

@@ -248,8 +248,29 @@ test("insanitywolf mode is included in system prompt", function()
 	if not last_request.system_prompt:find("bounded improvement cycles", 1, true) then
 		error("missing insanitywolf cycle policy in system prompt")
 	end
+	if not last_request.system_prompt:find("mark that cycle complete", 1, true) then
+		error("missing insanitywolf completion policy in system prompt")
+	end
+	if not last_request.system_prompt:find("do not merely mention it", 1, true) then
+		error("missing insanitywolf follow-up planning policy in system prompt")
+	end
+	if not last_request.system_prompt:find("do not ask permission", 1, true) then
+		error("missing insanitywolf continue-without-permission policy in system prompt")
+	end
+	if not last_request.system_prompt:find("budget reserve", 1, true) then
+		error("missing insanitywolf tool budget reserve policy in system prompt")
+	end
 	if not last_request.system_prompt:find("at most five improvement cycles", 1, true) then
 		error("missing insanitywolf cycle cap in system prompt")
+	end
+	if not last_request.system_prompt:find("visible transition note", 1, true) then
+		error("missing insanitywolf transition policy in system prompt")
+	end
+	if not last_request.system_prompt:find("user%-directed follow%-ups") then
+		error("missing insanitywolf stop offer policy in system prompt")
+	end
+	if not last_request.system_prompt:find("security hardening", 1, true) then
+		error("missing insanitywolf security hardening policy in system prompt")
 	end
 end)
 
@@ -297,7 +318,13 @@ test("insanitywolf checkpoints compact cycle context", function()
 	end
 	local found_continue = false
 	for _, message in ipairs(session.messages) do
-		if message.role == "user" and tostring(message.text or ""):find("concrete high%-impact implementation improvement") then
+		if message.role == "user"
+			and tostring(message.text or ""):find("concrete high%-impact implementation improvement")
+			and tostring(message.text or ""):find("visible transition note", 1, true)
+			and tostring(message.text or ""):find("offer concise concrete directions", 1, true)
+			and tostring(message.text or ""):find("security hardening", 1, true)
+			and tostring(message.text or ""):find("Do not ask permission", 1, true)
+		then
 			found_continue = true
 			break
 		end
@@ -373,6 +400,46 @@ test("partial salvage emits quiet thinking status", function()
 	end
 	if not found then
 		error("missing partial salvage thinking status")
+	end
+end)
+
+test("insanitywolf warns before tool budget exhaustion", function()
+	provider_calls = 0
+	last_request = nil
+	summary_request = nil
+	provider_response = function()
+		local n = tostring(provider_calls)
+		return table.concat({
+			'<tool_call name="run">',
+			'{"command":"true # budget-a-' .. n .. '"}',
+			"</tool_call>",
+			'<tool_call name="run">',
+			'{"command":"true # budget-b-' .. n .. '"}',
+			"</tool_call>",
+			'<tool_call name="run">',
+			'{"command":"true # budget-c-' .. n .. '"}',
+			"</tool_call>",
+			'<tool_call name="run">',
+			'{"command":"true # budget-d-' .. n .. '"}',
+			"</tool_call>",
+		}, "\n")
+	end
+
+	local session = session_module.create({ flow = "insanitywolf" })
+	session.cwd = project_dir
+	session:add_user("burn budget")
+
+	core.run_session(session, nil, nil, nil)
+
+	local found = false
+	for _, message in ipairs(session.messages) do
+		if message.role == "user" and tostring(message.text or ""):find("Insanitywolf tool budget reserve reached", 1, true) then
+			found = true
+			break
+		end
+	end
+	if not found then
+		error("missing insanitywolf tool budget reserve warning")
 	end
 end)
 

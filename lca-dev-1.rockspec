@@ -24,6 +24,7 @@ dependencies = {
 	"lua-cjson",
 	"luv",
 	"linenoise-luv >= 0.1.3",
+	"luaposix",
 }
 build = {
 	type = "builtin",

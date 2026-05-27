@@ -356,7 +356,7 @@ end
 
 function ui.checkpoint(summary, opts)
 	opts = opts or {}
-	local label = "insanitywolf tucked the chaos away"
+	local label = "insanitywolf transition"
 	if opts.cycle then
 		label = label .. "  " .. tostring(opts.cycle) .. "/5"
 	end
@@ -365,13 +365,18 @@ function ui.checkpoint(summary, opts)
 		label = label .. "  ~" .. tostring(math.floor((tokens + 500) / 1000)) .. "k tokens kept"
 	end
 	rail_line("◌", "magenta", "checkpoint", label)
+	rail_block("pause", table.concat({
+		"Requested cycle is complete.",
+		"Next autonomous cycle may start only after the assistant explains the proposed direction.",
+		"Press Ctrl-C now to stop before the next cycle.",
+	}, "\n"), { max_lines = 4, max_width = 120, max_bytes = 800 })
 	local next_steps = extract_summary_section(summary, "Next Steps")
 	local critical = extract_summary_section(summary, "Critical Context")
 	if next_steps then
-		rail_block("next", next_steps, { max_lines = 8, max_width = 120, max_bytes = 1800 })
+		rail_block("next", next_steps, { max_lines = 16, max_width = 120, max_bytes = 3200, wrap = true })
 	end
 	if critical then
-		rail_block("context", critical, { max_lines = 5, max_width = 120, max_bytes = 1000 })
+		rail_block("context", critical, { max_lines = 8, max_width = 120, max_bytes = 1800, wrap = true })
 	end
 end
 
@@ -671,7 +676,21 @@ local function limited_lines(value, opts)
 			break
 		end
 		local l = line:gsub("\t", "    ")
-		if #l > max_width then
+		if opts.wrap and #l > max_width then
+			while #l > max_width and #lines < max_lines do
+				local cut = max_width
+				local space = l:sub(1, max_width):match("^.*()%s")
+				if space and space > 24 then
+					cut = space - 1
+				end
+				lines[#lines + 1] = l:sub(1, cut)
+				l = l:sub(cut + 1):gsub("^%s+", "")
+			end
+			if #lines >= max_lines then
+				truncated = true
+				break
+			end
+		elseif #l > max_width then
 			l = l:sub(1, max_width - 3) .. "..."
 		end
 		lines[#lines + 1] = l
@@ -832,8 +851,10 @@ function ui.plan_progress(plan)
 	local suffix = ""
 	if highlight_step then
 		local compact = tostring(highlight_step):gsub("%s+", " ")
-		if #compact > 72 then
-			compact = compact:sub(1, 69) .. "..."
+		local used = 2 + 1 + 12 + (#plan * 3) + math.max(0, #plan - 1) + 2
+		local limit = math.max(96, term_width - used)
+		if #compact > limit then
+			compact = compact:sub(1, limit - 3) .. "..."
 		end
 		suffix = "  " .. compact
 	end

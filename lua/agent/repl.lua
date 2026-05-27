@@ -227,6 +227,7 @@ function repl.run(options)
 	end
 
 	local signal_handles = {}
+	local posix_signal_ok, posix_signal = pcall(require, "posix.signal")
 	local function close_signal_handles()
 		for _, handle in ipairs(signal_handles) do
 			if not handle:is_closing() then
@@ -264,17 +265,33 @@ function repl.run(options)
 		end
 	end
 
-	-- Install Ctrl-C and termination handlers. These are best-effort: hard kills
-	-- and some suspended SSH failures cannot run process cleanup.
-	install_signal("sigint", function()
+	local function handle_sigint()
 		if repl.busy then
-			-- Cancel the current operation, return to prompt
+			if repl.cancelled then
+				repl.cleanup_terminal()
+				os.exit(130)
+			end
+			-- Cancel the current operation, return to prompt. If the provider or
+			-- active tool cannot observe cancellation promptly, a second Ctrl-C exits.
 			repl.cancelled = true
+			pcall(function()
+				io.write("\n")
+				ui.muted("  ⏎ cancelling; press Ctrl-C again to exit")
+				io.flush()
+			end)
 		else
 			-- Not busy — exit the REPL
 			graceful_exit(0)
 		end
-	end)
+	end
+
+	-- Install Ctrl-C and termination handlers. These are best-effort: hard kills
+	-- and some suspended SSH failures cannot run process cleanup.
+	if posix_signal_ok and posix_signal and posix_signal.signal then
+		posix_signal.signal(posix_signal.SIGINT, handle_sigint)
+	else
+		install_signal("sigint", handle_sigint)
+	end
 	install_signal("sighup", function()
 		graceful_exit(0, true)
 	end)

@@ -263,10 +263,12 @@ run_test("insanitywolf command toggles and validates args", function()
 	commands.dispatch("/insanitywolf", s, ui)
 	assert_eq(s.flow, "insanitywolf")
 	assert_eq(muted[1], "insanitywolf: on")
+	assert(muted[2]:find("follow%-up implementation cycles"), "missing activation detail")
+	assert(muted[3]:find("Ctrl%-C"), "missing interrupt hint")
 
 	commands.dispatch("/insanitywolf", s, ui)
 	assert_eq(s.flow, "off")
-	assert_eq(muted[2], "insanitywolf: off")
+	assert_eq(muted[4], "insanitywolf: off")
 
 	commands.dispatch("/insanitywolf maybe", s, ui)
 	assert_eq(s.flow, "off")

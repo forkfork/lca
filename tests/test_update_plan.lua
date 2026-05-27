@@ -214,7 +214,56 @@ test("ui checkpoint renderer writes checkpoint summary", function()
 	end
 	local text = table.concat(out)
 	assert(text:find("checkpoint", 1, true), "missing checkpoint rail")
+	assert(text:find("insanitywolf transition", 1, true), "missing transition label")
+	assert(text:find("Ctrl%-C"), "missing interrupt hint")
 	assert(text:find("Improve docs", 1, true), "missing next steps")
+end)
+
+test("ui checkpoint renderer wraps long next steps", function()
+	local old_write = io.write
+	local out = {}
+	io.write = function(...)
+		for i = 1, select("#", ...) do
+			out[#out + 1] = tostring(select(i, ...))
+		end
+	end
+	local ok, err = pcall(function()
+		ui.checkpoint("## Next Steps\n1. No further autonomous cycle is warranted. Offer: add persistent storage with a file-backed adapter if the user wants state to survive restarts; add password hashing if the user wants real credential handling; add TLS guidance if the user wants production deployment.\n\n## Critical Context\n- Keep dry-run safe", {
+			cycle = 1,
+			tokens = 1461,
+		})
+	end)
+	io.write = old_write
+	if not ok then
+		error(err)
+	end
+	local text = table.concat(out)
+	assert(text:find("password hashing", 1, true), "missing wrapped offer detail")
+	assert(text:find("production deployment", 1, true), "missing wrapped ending detail")
+end)
+
+test("ui plan progress keeps useful next-step detail", function()
+	local old_write = io.write
+	local out = {}
+	io.write = function(...)
+		for i = 1, select("#", ...) do
+			out[#out + 1] = tostring(select(i, ...))
+		end
+	end
+	local ok, err = pcall(function()
+		ui.plan_progress({
+			{ step = "Scaffold app", status = "completed" },
+			{ step = "Exercise endpoints and harden obvious gaps", status = "completed" },
+			{ step = "Add admin CSRF protection and verify portal form behavior", status = "in_progress" },
+		})
+	end)
+	io.write = old_write
+	if not ok then
+		error(err)
+	end
+	local text = table.concat(out)
+	assert(text:find("Add admin CSRF protection", 1, true), "missing next-step detail")
+	assert(not text:find("Add admin CSRF p%.%.%."), "truncated too aggressively")
 end)
 
 test("tool is advertised with usage guidance", function()

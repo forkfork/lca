@@ -15,7 +15,7 @@ local HELP = [[
 /model <id>           change model
 /reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
 /service-tier <tier>  set service tier: auto, default, flex, priority
-/insanitywolf [on|off] toggle bounded aggressive improvement cycles
+/insanitywolf [on|off] bounded autonomous follow-up cycles after the requested task
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
 /save [path]          save session to file (default: .lca-session.json)
@@ -397,7 +397,13 @@ function commands.dispatch(line, session, ui)
 		session.flow = value
 		session.system_prompt = nil
 		session.system_prompt_version = nil
-		ui.muted("insanitywolf: " .. (session.flow == "insanitywolf" and "on" or "off"))
+		if session.flow == "insanitywolf" then
+			ui.muted("insanitywolf: on")
+			ui.muted("will continue through bounded follow-up implementation cycles after the first plan completes")
+			ui.muted("press Ctrl-C during a checkpoint if the next direction is not what you want")
+		else
+			ui.muted("insanitywolf: off")
+		end
 	elseif name == "credentials" then
 		if rest == "" then
 			ui.error("usage: /credentials <path>")

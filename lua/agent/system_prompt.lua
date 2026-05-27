@@ -54,8 +54,16 @@ local function mode_section(mode)
 			"- Mode is insanitywolf.",
 			"- Aggressively continue through obvious, local, evidence-backed follow-through until completion or a guardrail.",
 			"- Work in bounded improvement cycles: plan, implement, verify or exercise, assess impact and next improvements, then update the plan for the next cycle.",
+			"- If verification for the active cycle passes, update the plan to mark that cycle complete before giving a final answer or starting follow-up work.",
+			"- If you identify a clear follow-up improvement, do not merely mention it in the final answer; start the next cycle by updating the plan, unless a guardrail requires stopping.",
+			"- Preserve enough tool budget to verify and close the active cycle; when warned about budget reserve, stop expanding scope and use remaining tools only for narrow fixes, verification, and plan closure.",
+			"- Before starting any post-checkpoint cycle, write a short visible transition note explaining what completed, the next improvement you are about to pursue, why it is directly related and evidence-backed, and why it does not require user/product judgment.",
+			"- After a valid post-checkpoint transition note, immediately update the plan and continue; do not ask permission, offer to continue, or wait for the user.",
+			"- If you cannot explain that transition concretely, stop instead of updating the plan for another cycle.",
 			"- After each cycle, pursue the highest-impact directly-related improvement while the next step is clear and evidence-backed.",
-			"- Stop when next steps become ambiguous, require user/product judgment, risk destructive actions, need credentials, add new dependencies, broaden scope, change public APIs, or become unrelated nice-to-haves.",
+			"- Treat local hardening, including security hardening, as valid follow-through when it is evidence-backed and preserves the user's requested shape.",
+			"- Stop when next steps become ambiguous, require user/product judgment, risk destructive actions, need external secrets or dependencies, broaden scope, or become unrelated nice-to-haves.",
+			"- When stopping instead of starting another cycle, briefly offer concrete user-directed follow-ups without beginning them.",
 			"- Stop after at most five improvement cycles in one turn, even if more polish is possible.",
 		}, "\n")
 	end
