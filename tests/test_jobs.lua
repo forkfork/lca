@@ -171,6 +171,24 @@ test("job tools resolve jobs started in another cwd", function()
 	end
 end)
 
+test("job tools reject numeric ids as invalid arguments", function()
+	local waited = job_wait.execute({ id = 1.0, timeout = 1000 }, { cwd = tmp_dir })
+	if not waited.is_error then
+		error("numeric id should be rejected")
+	end
+	if waited.summary ~= "invalid id" then
+		error("unexpected summary: " .. tostring(waited.summary))
+	end
+	if not waited.content:find("job_1", 1, true) or not waited.content:find("timeout", 1, true) then
+		error("invalid id message should steer toward job id and timeout")
+	end
+
+	local status = job_status.execute({ id = 1.0 }, { cwd = tmp_dir })
+	if not status.is_error or status.summary ~= "invalid id" then
+		error("job_status should reject numeric id")
+	end
+end)
+
 test("job slash commands inspect and stop jobs without model", function()
 	local result = job_start.execute({
 		command = "sleep 30",

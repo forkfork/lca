@@ -1,12 +1,12 @@
 local jobs = require("agent.jobs")
+local job_args = require("agent.tools.job_args")
 
 local job_output = {}
 
 function job_output.execute(args, context)
-	if not args.id or args.id == "" then
-		return { is_error = true, content = "id is required", summary = "missing id" }
-	end
-	local output, err, next_offset = jobs.output(args.cwd or context.cwd, args.id, args)
+	local id, id_error = job_args.require_id(args)
+	if not id then return id_error end
+	local output, err, next_offset = jobs.output(args.cwd or context.cwd, id, args)
 	if not output then
 		return { is_error = true, content = err, summary = "output failed" }
 	end

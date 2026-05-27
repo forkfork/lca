@@ -1,4 +1,5 @@
 local jobs = require("agent.jobs")
+local job_args = require("agent.tools.job_args")
 
 local job_status = {}
 
@@ -21,10 +22,9 @@ local function format_job(job)
 end
 
 function job_status.execute(args, context)
-	if not args.id or args.id == "" then
-		return { is_error = true, content = "id is required", summary = "missing id" }
-	end
-	local job, err = jobs.status(args.cwd or context.cwd, args.id)
+	local id, id_error = job_args.require_id(args)
+	if not id then return id_error end
+	local job, err = jobs.status(args.cwd or context.cwd, id)
 	if not job then
 		return { is_error = true, content = err, summary = "unknown job" }
 	end

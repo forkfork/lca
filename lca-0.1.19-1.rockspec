@@ -55,6 +55,7 @@ build = {
 		["agent.providers.bedrock"] = "lua/agent/providers/bedrock.lua",
 		["agent.providers.codex"] = "lua/agent/providers/codex.lua",
 		["agent.providers.deepseek"] = "lua/agent/providers/deepseek.lua",
+		["agent.tools.job_args"] = "lua/agent/tools/job_args.lua",
 		["agent.tools.edit"] = "lua/agent/tools/edit.lua",
 		["agent.tools.find"] = "lua/agent/tools/find.lua",
 		["agent.tools.grep"] = "lua/agent/tools/grep.lua",
