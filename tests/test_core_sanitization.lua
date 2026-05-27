@@ -272,6 +272,12 @@ test("insanitywolf mode is included in system prompt", function()
 	if not last_request.system_prompt:find("security hardening", 1, true) then
 		error("missing insanitywolf security hardening policy in system prompt")
 	end
+	if not last_request.system_prompt:find("authentication", 1, true)
+		or not last_request.system_prompt:find("CSRF tokens", 1, true)
+		or not last_request.system_prompt:find("user%-directed offer")
+	then
+		error("missing insanitywolf auth/admin autonomous hardening policy in system prompt")
+	end
 end)
 
 test("insanitywolf checkpoints compact cycle context", function()
@@ -310,6 +316,12 @@ test("insanitywolf checkpoints compact cycle context", function()
 	if not prompt:find("Additional insanitywolf checkpoint rules", 1, true) then
 		error("missing checkpoint summary instructions")
 	end
+	if not prompt:find("authentication", 1, true)
+		or not prompt:find("CSRF tokens", 1, true)
+		or not prompt:find("Do not put these in user%-directed offers")
+	then
+		error("missing checkpoint auth/admin hardening classification rules")
+	end
 	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
 		error("checkpoint summary did not retain current plan")
 	end
@@ -323,6 +335,7 @@ test("insanitywolf checkpoints compact cycle context", function()
 			and tostring(message.text or ""):find("visible transition note", 1, true)
 			and tostring(message.text or ""):find("offer concise concrete directions", 1, true)
 			and tostring(message.text or ""):find("security hardening", 1, true)
+			and tostring(message.text or ""):find("auth/admin hardening", 1, true)
 			and tostring(message.text or ""):find("Do not ask permission", 1, true)
 		then
 			found_continue = true

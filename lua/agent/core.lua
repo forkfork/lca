@@ -9,6 +9,7 @@ local json = require("agent.util.json")
 local core = {}
 
 local MAX_TOOL_STEPS = 40
+local INSANITYWOLF_MAX_TOOL_STEPS = tonumber(os.getenv("LCA_INSANITYWOLF_MAX_TOOL_STEPS") or "") or 80
 local MAX_BATCH_SIZE = 10
 local SLIM_CONTEXT_TOKENS = tonumber(os.getenv("LCA_SLIM_CONTEXT_TOKENS") or "") or 60000
 local MAX_CONSECUTIVE_READ_ONLY_BATCHES = tonumber(os.getenv("LCA_MAX_READ_ONLY_BATCHES") or "") or 5
@@ -289,6 +290,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	local insanitywolf_checkpoints = 0
 	local insanitywolf_budget_warned = false
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
+	local max_tool_steps = session.flow == "insanitywolf" and INSANITYWOLF_MAX_TOOL_STEPS or MAX_TOOL_STEPS
 
 	local function response_meta(response)
 		if not response then return last_response_meta end
@@ -512,7 +514,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				break
 			end
 			total_tool_executions = total_tool_executions + 1
-			if total_tool_executions > MAX_TOOL_STEPS then
+			if total_tool_executions > max_tool_steps then
 				log("TOOL BUDGET HIT mid-batch at call %d/%d", i, #tool_calls)
 				break
 			end
@@ -681,6 +683,8 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 						"Continue only if the checkpoint summary's Next Steps contain a concrete high-impact implementation improvement.",
 						"Do not start a new cycle for inventory checks, rereads, final tree listings, optional lint probes, or verification that already passed.",
 						"Local hardening, including security hardening, may be a valid next cycle when it is evidence-backed and preserves the user's requested shape.",
+						"For authentication, authorization, admin portal, or session/cookie apps, local security hardening such as CSRF tokens, stronger session IDs, safer cookie flags, request caps, basic login throttling, and safer defaults is valid autonomous next-cycle work when it avoids new external services.",
+						"Do not treat that local auth/admin hardening as a user-directed offer; treat larger choices like SQLite persistence, Docker/systemd packaging, dependency swaps, or framework restructures as user-directed offers.",
 						"If continuing, write the transition note first, then immediately call update_plan for the next implementation cycle, then implement and verify it.",
 						"Do not ask permission, say you can continue, or wait for the user when a valid next cycle is present.",
 						"If the checkpoint says no further autonomous cycle is warranted, or the next work is ambiguous, blocked, destructive, requires external secrets or dependencies, broadens scope, or requires user/product judgment, stop and explain that blocker instead of continuing.",
@@ -720,13 +724,13 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			end
 		end
 
-		if total_tool_executions >= MAX_TOOL_STEPS then
+		if total_tool_executions >= max_tool_steps then
 			break
 		end
 
 		if session.flow == "insanitywolf"
 			and not insanitywolf_budget_warned
-			and total_tool_executions >= (MAX_TOOL_STEPS - INSANITYWOLF_TOOL_RESERVE)
+			and total_tool_executions >= (max_tool_steps - INSANITYWOLF_TOOL_RESERVE)
 		then
 			insanitywolf_budget_warned = true
 			session:add_user(table.concat({

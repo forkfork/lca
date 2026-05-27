@@ -500,6 +500,8 @@ Additional insanitywolf checkpoint rules:
 - Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
 - In "Next Steps", put only high-impact implementation improvements that justify another cycle. Include expected impact, exact files/commands/resources involved, and why each next step is worth doing.
 - Treat local hardening, including security hardening, as valid next-cycle work when it is evidence-backed and preserves the user's requested shape.
+- For authentication, authorization, admin portal, or session/cookie apps, classify local security hardening as autonomous next-cycle work when it avoids new external services and preserves the app shape. Examples: CSRF tokens, stronger session/token entropy, secure/HttpOnly/SameSite cookie flags, request/body size caps, basic login throttling, constant-time token comparison, and safer defaults. Do not put these in user-directed offers.
+- For those auth/admin apps, user-directed offers are only larger product or packaging choices such as SQLite persistence, Docker/systemd packaging, dependency swaps, routing/framework restructures, or new external services.
 - Do not list inventory checks, rereads, final tree listings, optional lint probes, or already-passed verification as next-cycle work. Put those in Critical Context only if they matter.
 - If any valid next-cycle work exists, do not say no further autonomous cycle is warranted; reserve that phrase for checkpoints with no valid autonomous work.
 - If the remaining work is only final verification, optional polish, external dependencies, scope expansion, or anything needing user/product judgment, state that no further autonomous cycle is warranted and name the blocker.

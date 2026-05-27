@@ -62,6 +62,8 @@ local function mode_section(mode)
 			"- If you cannot explain that transition concretely, stop instead of updating the plan for another cycle.",
 			"- After each cycle, pursue the highest-impact directly-related improvement while the next step is clear and evidence-backed.",
 			"- Treat local hardening, including security hardening, as valid follow-through when it is evidence-backed and preserves the user's requested shape.",
+			"- For authentication, authorization, admin portal, or session/cookie apps, local hardening such as CSRF tokens, stronger session IDs, safer cookie flags, request caps, basic login throttling, and safer defaults is valid autonomous follow-through when it avoids new external services.",
+			"- Do not downgrade local auth/admin hardening into a user-directed offer; reserve offers for larger product or packaging choices such as persistence, Docker/systemd packaging, dependency swaps, framework restructures, or external services.",
 			"- Stop when next steps become ambiguous, require user/product judgment, risk destructive actions, need external secrets or dependencies, broaden scope, or become unrelated nice-to-haves.",
 			"- When stopping instead of starting another cycle, briefly offer concrete user-directed follow-ups without beginning them.",
 			"- Stop after at most five improvement cycles in one turn, even if more polish is possible.",
