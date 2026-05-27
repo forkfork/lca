@@ -278,6 +278,12 @@ test("insanitywolf mode is included in system prompt", function()
 	then
 		error("missing insanitywolf auth/admin autonomous hardening policy in system prompt")
 	end
+	if not last_request.system_prompt:find("boring conventional default", 1, true)
+		or not last_request.system_prompt:find("SQLite", 1, true)
+		or not last_request.system_prompt:find("server%-rendered HTML")
+	then
+		error("missing insanitywolf boring defaults policy in system prompt")
+	end
 end)
 
 test("insanitywolf checkpoints compact cycle context", function()

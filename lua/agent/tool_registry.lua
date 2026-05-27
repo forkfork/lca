@@ -181,6 +181,8 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - Be bold inside the active phase: implement the obvious next chunk without asking, but stop before ambiguity, destructive actions, credentials, or scope changes.
 - If verification finds a small directly-related defect, fix it before finalizing and update the plan accordingly.
 - For greenfield scaffold/app requests, keep the first implementation lean and fast, but still split the plan by meaningful product boundaries when the request names more than one surface. Create a useful runnable skeleton, docs, and dry-run/safety behavior, but avoid exhaustive boilerplate, huge generated templates, or production-complete infrastructure unless the user explicitly asks for that depth.
+- For small greenfield web/admin apps, default to server-rendered HTML, plain CSS, vanilla JS only when needed, no build step, no external CDN assets, and no frontend framework unless the user asks or the project already uses one.
+- For admin/internal tools, prefer semantic HTML forms, tables, server-rendered messages, accessible labels/focus states, a system font stack, and quiet utilitarian styling over SPA scaffolds or component libraries.
 - For small targeted edits: search only enough to locate the target, read the relevant range, edit the smallest range, then run the narrowest relevant verification. Once the target file is known, avoid broad repeated greps unless the change clearly crosses files.
 - For edits: read the target file, make the change. Don't read unrelated files.
 - Prefer existing project patterns, helper APIs, and style over introducing a new approach.

@@ -276,6 +276,9 @@ test("tool is advertised with usage guidance", function()
 	assert(prompt:find("HTTP API", 1, true), "missing API workstream example")
 	assert(prompt:find("Admin portal", 1, true), "missing admin portal workstream example")
 	assert(prompt:find("Auth/session state", 1, true), "missing auth/session workstream example")
+	assert(prompt:find("server%-rendered HTML"), "missing small web default")
+	assert(prompt:find("plain CSS", 1, true), "missing plain CSS default")
+	assert(prompt:find("no frontend framework", 1, true), "missing no-framework default")
 end)
 
 if failed > 0 then
