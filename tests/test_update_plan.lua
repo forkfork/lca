@@ -272,6 +272,10 @@ test("tool is advertised with usage guidance", function()
 	assert(prompt:find("- update_plan:", 1, true), "missing tool listing")
 	assert(prompt:find("short phase checklist", 1, true), "missing phase checklist guidance")
 	assert(prompt:find("not user-facing explanation", 1, true), "missing internal plan guidance")
+	assert(prompt:find("multiple user%-facing surfaces"), "missing multi-surface planning guidance")
+	assert(prompt:find("HTTP API", 1, true), "missing API workstream example")
+	assert(prompt:find("Admin portal", 1, true), "missing admin portal workstream example")
+	assert(prompt:find("Auth/session state", 1, true), "missing auth/session workstream example")
 end)
 
 if failed > 0 then

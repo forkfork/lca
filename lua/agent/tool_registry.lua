@@ -174,12 +174,13 @@ To delete lines, leave the content empty (nothing after the JSON line):
 - For "describe/explain this project": find to see the tree, then read key manifests/docs first. Read large source files in focused sections.
 - For "how does X work": use grep to locate relevant symbols, then read the specific nearby section(s).
 - For substantial multi-step implementation work, call update_plan with a short phase checklist and keep it current as phases complete. Skip it for trivial one-step tasks.
-- Use the fewest useful plan phases: often 2-3 for small/greenfield scaffolds, 3-6 for normal implementation, and up to 8 for serious cross-cutting work. Avoid filler "review" or "polish" phases unless they represent real work, and avoid one item per file.
-- For complex domain-specific work, name phases after the actual domains or workstreams when useful, such as "Networking", "IAM", "ECS service", "Safety checks", or "Migration path", instead of forcing generic labels.
+- Use the fewest useful plan phases, but preserve meaningful work boundaries. Often 2-3 is enough for trivial scaffolds, 4-6 for apps with multiple surfaces/subsystems, and up to 8 for serious cross-cutting work. Avoid filler "review" or "polish" phases unless they represent real work, and avoid one item per file.
+- For greenfield apps with multiple user-facing surfaces or subsystems, do not collapse them into one vague scaffold phase. Split by major surface/workstream, such as "HTTP API", "Admin portal", "Auth/session state", "Persistence", "Safety checks", and "Verification", while keeping the plan short.
+- For complex domain-specific work, name phases after the actual domains or workstreams when useful, such as "Networking", "IAM", "ECS service", "Admin portal", "Auth API", "Safety checks", or "Migration path", instead of forcing generic labels.
 - Use the plan as execution state, not user-facing explanation. Do not print JSON plans as prose.
 - Be bold inside the active phase: implement the obvious next chunk without asking, but stop before ambiguity, destructive actions, credentials, or scope changes.
 - If verification finds a small directly-related defect, fix it before finalizing and update the plan accordingly.
-- For greenfield scaffold/app requests, keep the first implementation lean and fast: create a useful runnable skeleton, docs, and dry-run/safety behavior, but avoid exhaustive boilerplate, huge generated templates, or production-complete infrastructure unless the user explicitly asks for that depth.
+- For greenfield scaffold/app requests, keep the first implementation lean and fast, but still split the plan by meaningful product boundaries when the request names more than one surface. Create a useful runnable skeleton, docs, and dry-run/safety behavior, but avoid exhaustive boilerplate, huge generated templates, or production-complete infrastructure unless the user explicitly asks for that depth.
 - For small targeted edits: search only enough to locate the target, read the relevant range, edit the smallest range, then run the narrowest relevant verification. Once the target file is known, avoid broad repeated greps unless the change clearly crosses files.
 - For edits: read the target file, make the change. Don't read unrelated files.
 - Prefer existing project patterns, helper APIs, and style over introducing a new approach.
