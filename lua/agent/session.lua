@@ -153,6 +153,8 @@ function session.create(options)
 		plan = nil,
 		last_usage = nil,
 		usage_history = {},
+		last_turn_ast_summary = nil,
+		last_turn_ast_snapshot = nil,
 	}, session)
 end
 
@@ -187,6 +189,20 @@ function session:clear()
 	self.plan = nil
 	self.last_usage = nil
 	self.usage_history = {}
+	self.last_turn_ast_summary = nil
+	self.last_turn_ast_snapshot = nil
+end
+
+function session:record_turn_ast(state)
+	if type(state) ~= "table" then
+		self.last_turn_ast_summary = nil
+		self.last_turn_ast_snapshot = nil
+		return
+	end
+	local summary = type(state.summary) == "function" and state:summary() or nil
+	local snapshot = type(state.snapshot) == "function" and state:snapshot() or nil
+	self.last_turn_ast_summary = summary ~= "" and summary or nil
+	self.last_turn_ast_snapshot = snapshot
 end
 
 function session:get_system_prompt()
@@ -380,6 +396,8 @@ function session:serialize()
 		plan = self.plan,
 		last_usage = self.last_usage,
 		usage_history = self.usage_history,
+		last_turn_ast_summary = self.last_turn_ast_summary,
+		last_turn_ast_snapshot = self.last_turn_ast_snapshot,
 	}
 end
 
@@ -468,6 +486,16 @@ function session:load(path)
 		self.usage_history = data.usage_history
 	else
 		self.usage_history = {}
+	end
+	if type(data.last_turn_ast_summary) == "string" and data.last_turn_ast_summary ~= "" then
+		self.last_turn_ast_summary = data.last_turn_ast_summary
+	else
+		self.last_turn_ast_summary = nil
+	end
+	if type(data.last_turn_ast_snapshot) == "table" then
+		self.last_turn_ast_snapshot = data.last_turn_ast_snapshot
+	else
+		self.last_turn_ast_snapshot = nil
 	end
 	-- Optionally restore model/credentials if present
 	if data.model then

@@ -5,6 +5,7 @@ local core = require("agent.core")
 local jobs = require("agent.jobs")
 local protocol = require("agent.tool_protocol")
 local session_module = require("agent.session")
+local turn_state = require("agent.turn_state")
 local ui = require("agent.ui")
 local socket = require("socket")
 local uv = require("luv")
@@ -358,19 +359,17 @@ function repl.run(options)
 				local hidden_tool_displayed = false
 				local planned_tool_names = {}
 				local planned_tool_seen = {}
+				local planned_tool_counts = {}
+				local planned_tool_total = 0
+				local planned_tool_closed_count = 0
 				local planned_tool_scan_pos = 1
-				local live_model_progress = false
-				local live_model_progress_text = nil
-				local live_model_progress_timer = nil
-				local live_model_progress_last_token_at = 0
-				local LIVE_PROGRESS_STALE_AFTER = 0.6
-
-				local function live_model_progress_color()
-					if live_model_progress_last_token_at > 0 and socket.gettime() - live_model_progress_last_token_at <= LIVE_PROGRESS_STALE_AFTER then
-						return "green"
-					end
-					return "orange"
-				end
+				local planned_tool_close_scan_pos = 1
+				local planned_tool_last_open_pos = nil
+				local planned_tool_last_label = nil
+				local streamed_plan_scan_pos = 1
+				local streamed_plan_last_key = nil
+				local current_turn_state = turn_state.new({ intent = line })
+				local live_ast_last_render = nil
 
 				local function label_with_current_plan(base)
 					local wolf = session.flow == "insanitywolf" and "🐺 " or ""
@@ -395,64 +394,168 @@ function repl.run(options)
 					}
 				end
 
-				local function stop_live_model_progress_timer()
-					if not live_model_progress_timer then return end
-					if not live_model_progress_timer:is_closing() then
-						live_model_progress_timer:stop()
-						live_model_progress_timer:close()
+				local function render_live_ast(label, opts)
+					if not current_turn_state or not ui.live_ast then
+						return
 					end
-					live_model_progress_timer = nil
+					local rendered = current_turn_state:render((opts and opts.render_opts) or nil)
+					if rendered == live_ast_last_render and not (opts and opts.force) then
+						return
+					end
+					live_ast_last_render = rendered
+					ui.live_ast(current_turn_state, {
+						label = label or "ast",
+						render_opts = opts and opts.render_opts or nil,
+						live = not (opts and opts.final),
+						final = opts and opts.final or false,
+					})
 				end
 
-				local function ensure_live_model_progress_timer()
-					if live_model_progress_timer then return end
-					live_model_progress_timer = uv.new_timer()
-					live_model_progress_timer:start(120, 120, function()
-						if not live_model_progress or not live_model_progress_text then
-							stop_live_model_progress_timer()
-							return
-						end
-						ui.model_progress_live(label_with_current_plan(live_model_progress_text), live_model_progress_color())
-					end)
-				end
-
-				local function show_model_progress_live(text)
-					live_model_progress_text = text
-					ui.model_progress_live(label_with_current_plan(text), live_model_progress_color())
-					live_model_progress = true
-					ensure_live_model_progress_timer()
+				local function record_live_ast()
+					if current_turn_state and type(session.record_turn_ast) == "function" then
+						session:record_turn_ast(current_turn_state)
+					end
 				end
 
 				local function clear_live_model_progress()
-					if not live_model_progress then return end
-					stop_live_model_progress_timer()
 					ui.clear_model_progress()
-					live_model_progress = false
-					live_model_progress_text = nil
-					live_model_progress_last_token_at = 0
 				end
 
 				local function write_visible(text)
 					if not text or text == "" then return end
 					clear_live_model_progress()
+					if ui.clear_live_ast then
+						ui.clear_live_ast()
+					end
 					io.write(text)
 					io.flush()
 				end
 
-				local function planned_tool_label()
+				local unescape_json_fragment
+
+				local function planned_basename(value)
+					value = tostring(value or "")
+					return value:match("([^/]+)$") or value
+				end
+
+				local function planned_current_tool_label()
+					if not planned_tool_last_open_pos or planned_tool_total <= planned_tool_closed_count then
+						return nil
+					end
+					local text = stream_seen:sub(planned_tool_last_open_pos)
+					local name = text:match('<tool_call%s+name%s*=%s*"([^"]+)"')
+					if not name or name == "" then
+						return nil
+					end
+					local target = text:match('"path"%s*:%s*"([^"]+)"') or text:match('"command"%s*:%s*"([^"]+)"')
+					if target and target ~= "" then
+						target = planned_basename(unescape_json_fragment(target)):gsub("%s+", " ")
+						if #target > 34 then
+							target = target:sub(1, 31) .. "..."
+						end
+						return name .. " " .. target
+					end
+					return name
+				end
+
+				local function planned_tool_label(progress)
 					local limit = math.min(#planned_tool_names, 5)
 					local visible = {}
 					for i = 1, limit do
-						visible[#visible + 1] = planned_tool_names[i]
+						local name = planned_tool_names[i]
+						local count = planned_tool_counts[name] or 0
+						visible[#visible + 1] = count > 1 and (name .. " x" .. tostring(count)) or name
 					end
 					local text = table.concat(visible, ", ")
 					if #planned_tool_names > limit then
 						text = text .. ", +" .. tostring(#planned_tool_names - limit)
 					end
-					if #planned_tool_names == 1 then
-						return "planning tool: " .. text
+					local closed = planned_tool_closed_count > 0 and (", " .. tostring(planned_tool_closed_count) .. " closed") or ""
+					local label = "receiving tool batch: " .. tostring(planned_tool_total) .. " tool" .. (planned_tool_total == 1 and "" or "s") .. closed
+					if text ~= "" then
+						label = label .. " · " .. text
 					end
-					return "planning tools: " .. text
+					local current = progress or planned_current_tool_label()
+					if current and current ~= "" then
+						label = label .. " · now " .. current
+					end
+					return label
+				end
+
+				local function normalize_streamed_plan(plan)
+					if type(plan) == "string" then
+						local ok, decoded = pcall(function()
+							return require("agent.util.json").decode(plan)
+						end)
+						if ok then
+							plan = decoded
+						end
+					end
+					if type(plan) ~= "table" then
+						return nil
+					end
+					local normalized = {}
+					local in_progress = 0
+					for _, item in ipairs(plan) do
+						if type(item) ~= "table" then
+							return nil
+						end
+						local step = tostring(item.step or ""):gsub("^%s+", ""):gsub("%s+$", "")
+						local status = tostring(item.status or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+						if step == "" or (status ~= "pending" and status ~= "in_progress" and status ~= "completed") then
+							return nil
+						end
+						if status == "in_progress" then
+							in_progress = in_progress + 1
+						end
+						normalized[#normalized + 1] = { step = step, status = status }
+					end
+					if in_progress > 1 then
+						return nil
+					end
+					return normalized
+				end
+
+				local function apply_streamed_update_plans()
+					if not current_turn_state then
+						return false
+					end
+					local changed = false
+					while true do
+						local start_at, tag_end = stream_seen:find('<tool_call%s+name%s*=%s*"update_plan"%s*>', streamed_plan_scan_pos)
+						if not start_at then
+							break
+						end
+						local close_at, close_end = stream_seen:find("</tool_call>", tag_end + 1, true)
+						if not close_at then
+							break
+						end
+						streamed_plan_scan_pos = close_end + 1
+						local block = stream_seen:sub(start_at, close_end)
+						local calls = protocol.extract_all_tool_calls(block)
+						local call = calls and calls[1]
+						local plan = call and call.name == "update_plan" and normalize_streamed_plan(call.args and call.args.plan) or nil
+						if plan then
+							local key = ""
+							for _, item in ipairs(plan) do
+								key = key .. item.status .. ":" .. item.step .. "\n"
+							end
+							if key ~= streamed_plan_last_key then
+								streamed_plan_last_key = key
+								current_turn_state:tool_event({
+									name = "update_plan",
+									args = { plan = plan },
+									result = {
+										is_error = false,
+										plan = plan,
+										summary = "streamed " .. tostring(#plan) .. " steps",
+									},
+								})
+								changed = true
+							end
+						end
+					end
+					return changed
 				end
 
 				local function scan_planned_tools()
@@ -461,14 +564,41 @@ function repl.run(options)
 						local start_at, end_at, name = stream_seen:find('<tool_call%s+name%s*=%s*"([^"]+)"', planned_tool_scan_pos)
 						if not start_at then break end
 						planned_tool_scan_pos = end_at + 1
-						if name and name ~= "" and not planned_tool_seen[name] then
-							planned_tool_seen[name] = true
-							planned_tool_names[#planned_tool_names + 1] = name
+						if name and name ~= "" then
+							planned_tool_total = planned_tool_total + 1
+							planned_tool_counts[name] = (planned_tool_counts[name] or 0) + 1
+							planned_tool_last_open_pos = start_at
+							if current_turn_state then
+								current_turn_state:stream_tool_open(name)
+							end
+							if not planned_tool_seen[name] then
+								planned_tool_seen[name] = true
+								planned_tool_names[#planned_tool_names + 1] = name
+							end
 							changed = true
 						end
 					end
+					while true do
+						local close_at, close_end = stream_seen:find("</tool_call>", planned_tool_close_scan_pos, true)
+						if not close_at then break end
+						planned_tool_close_scan_pos = close_end + 1
+						if planned_tool_closed_count < planned_tool_total then
+							planned_tool_closed_count = planned_tool_closed_count + 1
+							if current_turn_state then
+								current_turn_state:stream_tool_close()
+							end
+							changed = true
+						end
+					end
+					if apply_streamed_update_plans() then
+						changed = true
+					end
 					if changed then
-						show_model_progress_live(planned_tool_label())
+						local label = planned_tool_label()
+						if label ~= planned_tool_last_label then
+							planned_tool_last_label = label
+						end
+						render_live_ast("work")
 					end
 				end
 
@@ -511,7 +641,7 @@ function repl.run(options)
 					return name == "edit" or name == "write" or name == "run" or name == "shell"
 				end
 
-				local function unescape_json_fragment(value)
+				unescape_json_fragment = function(value)
 					value = tostring(value or "")
 					value = value:gsub('\\"', '"'):gsub("\\\\", "\\")
 					return value
@@ -588,11 +718,16 @@ function repl.run(options)
 					local should_report = not hidden_tool_displayed
 						or label ~= hidden_tool_last_label
 						or hidden_tool_bytes - hidden_tool_last_report >= 512
-					if should_report then
-						show_model_progress_live("receiving " .. label .. "... " .. compact_bytes(hidden_tool_bytes) .. " streamed")
-						hidden_tool_last_report = hidden_tool_bytes
-						hidden_tool_last_label = label
-						hidden_tool_displayed = true
+						if should_report then
+							local progress = label .. " " .. compact_bytes(hidden_tool_bytes)
+							planned_tool_last_label = planned_tool_label(progress)
+							if current_turn_state then
+								current_turn_state:stream_tool_progress(progress)
+							end
+								render_live_ast("work")
+							hidden_tool_last_report = hidden_tool_bytes
+							hidden_tool_last_label = label
+							hidden_tool_displayed = true
 					end
 				end
 
@@ -606,7 +741,6 @@ function repl.run(options)
 						first_token = false
 					end
 					token_count = token_count + 1
-					live_model_progress_last_token_at = socket.gettime()
 
 					if ui.is_debug() then
 						io.write(text)
@@ -733,36 +867,48 @@ function repl.run(options)
 					end
 				end
 
-				local function on_tool(event)
-					if spinner_active then
-						ui.clear_thinking()
-						spinner_active = false
-					end
-					clear_live_model_progress()
-					ui.clear_model_progress()
-					if not tool_header_shown then
-						ui.tool_header()
+					local function on_tool(event)
+						if spinner_active then
+							ui.clear_thinking()
+							spinner_active = false
+						end
+						clear_live_model_progress()
+						ui.clear_model_progress()
+						if not tool_header_shown then
+							ui.tool_header()
 						tool_header_shown = true
 					end
-					ui.tool(event)
-				end
+							if current_turn_state then
+								current_turn_state:tool_event(event)
+							end
+							ui.tool(event)
+							render_live_ast("work")
+							if event
+								and (event.name == "run" or event.name == "shell")
+								and event.result
+								and event.result.is_error
+								and ui.live_ast_error_detail then
+								ui.live_ast_error_detail(event)
+							end
+						end
 
-				local function on_thinking(info)
-					if tool_header_shown then
-						ui.tool_summary()
-						tool_header_shown = false
-					end
-					if info and info.status then
-						ui.clear_model_progress()
-						ui.model_progress(info.status)
-					end
+					local function on_thinking(info)
+						if tool_header_shown then
+							ui.tool_summary()
+							tool_header_shown = false
+						end
+						if info and info.status then
+							ui.clear_model_progress()
+							ui.model_progress(info.status)
+						end
 					if info and info.checkpoint_summary and ui.checkpoint then
 						ui.checkpoint(info.checkpoint_summary, {
 							cycle = info.checkpoint_cycle,
 							tokens = info.checkpoint_tokens,
-						})
-					end
-					local tool_count_text = "tool results"
+							})
+						end
+						render_live_ast("work")
+						local tool_count_text = "tool results"
 					if info and info.tools and info.tools >= 4 then
 						tool_count_text = tostring(info.tools) .. " tool results"
 					end
@@ -781,10 +927,15 @@ function repl.run(options)
 					hidden_tool_displayed = false
 					planned_tool_names = {}
 					planned_tool_seen = {}
+					planned_tool_counts = {}
+					planned_tool_total = 0
+					planned_tool_closed_count = 0
 					planned_tool_scan_pos = 1
-					live_model_progress = false
-					live_model_progress_text = nil
-					stop_live_model_progress_timer()
+					planned_tool_close_scan_pos = 1
+					planned_tool_last_open_pos = nil
+					planned_tool_last_label = nil
+					streamed_plan_scan_pos = 1
+					streamed_plan_last_key = nil
 				end
 
 				repl.busy = true
@@ -793,7 +944,6 @@ function repl.run(options)
 					return core.run_session(session, on_token, on_tool, on_thinking)
 				end)
 				repl.busy = false
-				stop_live_model_progress_timer()
 
 				-- Flush any held-back partial content from the stream filter
 				if #stream_buf > 0 and not has_seen_tool_call and not turn_has_seen_tool_call and not in_tool_call and not in_thinking then
@@ -806,6 +956,23 @@ function repl.run(options)
 					repl.cancelled = false
 					if spinner_active then
 						ui.clear_thinking()
+					end
+					if current_turn_state then
+						local salvaged = ok and type(result) == "table" and tonumber(result._partial_salvaged_calls) or nil
+						local reason
+						if salvaged and salvaged > 0 then
+							reason = tostring(salvaged) .. " complete salvaged tool call" .. (salvaged == 1 and "" or "s") .. ", 0 executed"
+						else
+							reason = planned_tool_total > 0
+								and (tostring(planned_tool_closed_count) .. " complete of " .. tostring(planned_tool_total) .. " streamed tool calls, 0 executing now")
+								or "cancelled by user"
+						end
+						current_turn_state:cancel(
+							reason,
+							{ salvaged_calls = salvaged }
+						)
+						render_live_ast("work", { force = true, final = true })
+						record_live_ast()
 					end
 					io.write("\n")
 					ui.muted("  ⏎ cancelled")
@@ -824,15 +991,29 @@ function repl.run(options)
 						local visible_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text))
 						if visible_text ~= "" then
 							clear_live_model_progress()
+							if ui.clear_live_ast then
+								ui.clear_live_ast()
+							end
 							io.write(visible_text)
 							io.write(visible_text:sub(-1) == "\n" and "" or "\n")
 						end
 					elseif not first_token and result.text:sub(-1) ~= "\n" then
 						clear_live_model_progress()
+						if ui.clear_live_ast then
+							ui.clear_live_ast()
+						end
 						io.write("\n")
 					end
 					if tool_header_shown then
 						ui.tool_summary()
+					end
+					if current_turn_state then
+						local final_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text or ""))
+						if final_text ~= "" then
+							current_turn_state:set_return(final_text)
+						end
+						render_live_ast("work", { force = true, final = true })
+						record_live_ast()
 					end
 					if not first_token then
 						local ttft = first_token_time and (first_token_time - start_time) or elapsed
@@ -854,6 +1035,11 @@ function repl.run(options)
 					if not tostring(result):find("cancelled") then
 						ui.error(tostring(result))
 					else
+						if current_turn_state then
+							current_turn_state:cancel("cancelled by user")
+							render_live_ast("work", { force = true, final = true })
+							record_live_ast()
+						end
 						ui.muted("  ⏎ cancelled")
 						io.write("\n")
 					end

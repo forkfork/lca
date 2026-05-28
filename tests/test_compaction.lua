@@ -143,6 +143,23 @@ run_test("slimming preserves recent read working set per path", function()
 	end
 end)
 
+run_test("summary prompt includes recent turn ast evidence", function()
+	local prompt = compaction._build_summary_prompt(
+		{
+			{ role = "user", text = "create app" },
+			{ role = "assistant", text = "done" },
+		},
+		nil,
+		{
+			last_turn_ast_summary = "intent=ok(create app)\nchanges=ok(1 file saved  app.lua)\nverify=error(1 check)",
+		},
+		{}
+	)
+	assert_contains(prompt, "<recent-turn-ast>")
+	assert_contains(prompt, "changes=ok(1 file saved  app.lua)")
+	assert_contains(prompt, "Use it as grounding evidence")
+end)
+
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")
 io.write(string.format("  %s passed, %s failed\n\n",
 	green(tostring(passed)), failed > 0 and red(tostring(failed)) or tostring(failed)))

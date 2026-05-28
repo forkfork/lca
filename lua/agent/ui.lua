@@ -125,6 +125,83 @@ local function tool_verb(name)
 	return TOOL_VERBS[name] or "calling"
 end
 
+local TOOL_SHORT = {
+	read = "read",
+	ls = "ls",
+	find = "find",
+	grep = "grep",
+	edit = "edit",
+	write = "write",
+	run = "run",
+	shell = "shell",
+	job_start = "job",
+	job_status = "job",
+	job_output = "job",
+	job_stop = "job",
+	job_wait = "job",
+	update_plan = "plan",
+}
+
+local TOOL_GROUP_ORDER = {
+	"plan",
+	"ls",
+	"find",
+	"grep",
+	"read",
+	"edit",
+	"write",
+	"run",
+	"shell",
+	"job",
+	"mcp",
+	"tool",
+}
+
+local TOOL_GROUP_RANK = {}
+for index, name in ipairs(TOOL_GROUP_ORDER) do
+	TOOL_GROUP_RANK[name] = index
+end
+
+local STACK_FRAME_ORDER = {
+	"verify",
+	"serve",
+	"write",
+	"inspect",
+	"plan",
+	"external",
+	"tools",
+}
+
+local STACK_FRAME_RANK = {}
+for index, name in ipairs(STACK_FRAME_ORDER) do
+	STACK_FRAME_RANK[name] = index
+end
+
+local function tool_group(name)
+	name = tostring(name or "")
+	if name:match("^mcp__") then
+		return "mcp"
+	end
+	return TOOL_SHORT[name] or "tool"
+end
+
+local function stack_frame_for_group(group)
+	if group == "run" or group == "shell" then
+		return "verify"
+	elseif group == "job" then
+		return "serve"
+	elseif group == "write" or group == "edit" then
+		return "write"
+	elseif group == "ls" or group == "find" or group == "grep" or group == "read" then
+		return "inspect"
+	elseif group == "plan" then
+		return "plan"
+	elseif group == "mcp" then
+		return "external"
+	end
+	return "tools"
+end
+
 local function visible_len(value)
 	return #(tostring(value or ""):gsub("\27%[[%d;]*m", ""))
 end
@@ -553,6 +630,577 @@ function ui.clear_model_progress()
 	io.flush()
 end
 
+local live_ast_lines = 0
+local live_tree_buffer = nil
+
+function ui.clear_live_ast()
+	if live_ast_lines <= 0 then
+		return
+	end
+	io.write("\r")
+	for _ = 1, live_ast_lines do
+		io.write("\27[1A\27[2K")
+	end
+	live_ast_lines = 0
+	io.flush()
+end
+
+local function terminal_size()
+	local width = tonumber(os.getenv("COLUMNS"))
+	local height = tonumber(os.getenv("LINES"))
+	local ok, tty = pcall(uv.new_tty, 1, false)
+	if ok and tty then
+		local w, h = tty:get_winsize()
+		if not tty:is_closing() then
+			tty:close()
+		end
+		width = tonumber(w) or width
+		height = tonumber(h) or height
+	end
+	width = width or term_width or 80
+	height = height or 24
+	return width, height
+end
+
+local function truncate_text(value, width)
+	value = tostring(value or ""):gsub("\t", "    "):gsub("\r", "")
+	if width <= 0 then return "" end
+	if visible_len(value) <= width then
+		return value
+	end
+	if width <= 3 then
+		return value:sub(1, width)
+	end
+	return value:sub(1, width - 3) .. "..."
+end
+
+local function node_summary(node)
+	if not node then return "" end
+	return tostring(node.summary or node.detail or "")
+end
+
+local function node_title(node)
+	if not node then return "" end
+	local label = tostring(node.label or node.kind or "")
+	if node.kind == "intent" then
+		return node_summary(node)
+	elseif node.kind == "plan_step" then
+		label = label:gsub("^%d+%.%s*", "")
+	elseif node.kind == "return_value" then
+		label = "final answer"
+	elseif node.kind == "verify" and node.meta and node.meta.last_headline then
+		return label .. "  " .. tostring(node.meta.last_headline)
+	end
+	local summary = node_summary(node)
+	if summary ~= "" and summary ~= label then
+		return label .. "  " .. summary
+	end
+	return label
+end
+
+local function effective_status(node)
+	local status = tostring(node and node.status or "")
+	for _, child in ipairs((node and node.children) or {}) do
+		local child_status = effective_status(child)
+		if child_status == "error" then
+			return "error"
+		elseif child_status == "cancelled" and status ~= "error" then
+			status = "cancelled"
+		elseif (child_status == "running" or child_status == "streaming") and status ~= "cancelled" then
+			status = child_status
+		elseif child_status == "warning" and status ~= "cancelled" and status ~= "running" and status ~= "streaming" then
+			status = "warning"
+		end
+	end
+	return status
+end
+
+local function status_glyph(status)
+	status = tostring(status or "")
+	if status == "ok" then return "✓" end
+	if status == "error" then return "✗" end
+	if status == "cancelled" then return "⊘" end
+	if status == "running" or status == "streaming" then return "◐" end
+	if status == "warning" then return "◇" end
+	return "○"
+end
+
+local function active_rank(node)
+	local status = effective_status(node)
+	if status == "error" then return 1 end
+	if status == "cancelled" then return 2 end
+	if status == "streaming" then return 2.5 end
+	if status == "running" then return 3 end
+	if status == "warning" then return 4 end
+	return 99
+end
+
+local function find_focus(node)
+	local best = node
+	local best_rank = active_rank(node)
+	for _, child in ipairs((node and node.children) or {}) do
+		local candidate, rank = find_focus(child)
+		if rank < best_rank or (rank == best_rank and candidate ~= child and best == node) or (rank == best_rank and best == node) then
+			best = candidate
+			best_rank = rank
+		end
+	end
+	return best, best_rank
+end
+
+local function first_child(node, kind)
+	for _, child in ipairs((node and node.children) or {}) do
+		if child.kind == kind then
+			return child
+		end
+	end
+	return nil
+end
+
+local function is_activeish(node)
+	local status = effective_status(node)
+	return status == "running" or status == "streaming" or status == "error" or status == "cancelled"
+end
+
+local function render_work_tree(node, lines, opts, prefix, is_last)
+	opts = opts or {}
+	lines = lines or {}
+	prefix = prefix or ""
+	local max_lines = opts.max_lines or 24
+	if not node or #lines >= max_lines then
+		return lines
+	end
+	local connector = prefix == "" and (opts.force_connector and (is_last and "└─ " or "├─ ") or "") or (is_last and "└─ " or "├─ ")
+	if not opts.omit_root then
+		local line = prefix .. connector .. status_glyph(effective_status(node)) .. " " .. node_title(node)
+		lines[#lines + 1] = line
+	end
+	if #lines >= max_lines then
+		return lines
+	end
+	local children = node.children or {}
+	local child_prefix = prefix
+	if prefix ~= "" or opts.force_connector then
+		child_prefix = prefix .. (is_last and "   " or "│  ")
+	end
+	local shown = {}
+	for _, child in ipairs(children) do
+		if is_activeish(node) or is_activeish(child) or child.kind == "plan" or child.kind == "plan_step" or child.status ~= "ok" then
+			shown[#shown + 1] = child
+		end
+	end
+	if #shown == 0 and #children > 0 then
+		for i = 1, math.min(#children, 3) do
+			shown[#shown + 1] = children[i]
+		end
+	end
+	for index, child in ipairs(shown) do
+		local child_opts = opts
+		if opts.omit_root then
+			child_opts = {}
+			for key, value in pairs(opts) do
+				child_opts[key] = value
+			end
+			child_opts.omit_root = false
+			child_opts.force_connector = true
+		elseif opts.force_connector then
+			child_opts = {}
+			for key, value in pairs(opts) do
+				child_opts[key] = value
+			end
+			child_opts.force_connector = false
+		end
+		render_work_tree(child, lines, child_opts, child_prefix, index == #shown)
+		if #lines >= max_lines then
+			break
+		end
+	end
+	local hidden = #children - #shown
+	if hidden > 0 and #lines < max_lines then
+		lines[#lines + 1] = child_prefix .. "└─ +" .. tostring(hidden) .. " more"
+	end
+	return lines
+end
+
+local function root_tool_batch(root)
+	for _, child in ipairs((root and root.children) or {}) do
+		if child.kind == "tool_batch" and is_activeish(child) then
+			return child
+		end
+	end
+	return nil
+end
+
+local function streamed_batch_leaf(batch, opts)
+	opts = opts or {}
+	if not batch then
+		return nil
+	end
+	local meta = batch.meta or {}
+	local discovered = tonumber(meta.discovered) or 0
+	local closed = tonumber(meta.closed) or 0
+	local summary = node_summary(batch)
+	if discovered > 0 then
+		closed = math.min(closed, discovered)
+		summary = tostring(closed) .. "/" .. tostring(discovered)
+	end
+	if meta.current and tostring(meta.current) ~= "" then
+		local current = tostring(meta.current)
+		if current ~= "write" and current ~= "edit" and current ~= "run" and current ~= "shell" and current ~= "read" and current ~= "ls" and current ~= "find" and current ~= "grep" then
+			summary = summary .. "  " .. current
+		end
+	end
+	local counts = meta.stream_counts or {}
+	local label = opts.label
+	if not label then
+		local writes = (tonumber(counts.write) or 0) + (tonumber(counts.edit) or 0)
+		local checks = (tonumber(counts.run) or 0) + (tonumber(counts.shell) or 0)
+		local reads = (tonumber(counts.read) or 0) + (tonumber(counts.ls) or 0) + (tonumber(counts.find) or 0) + (tonumber(counts.grep) or 0)
+		if writes > 0 and writes >= checks and writes >= reads then
+			label = "writing project files"
+		elseif checks > 0 and checks >= reads then
+			label = "checking project"
+		elseif reads > 0 then
+			label = "reading workspace"
+		else
+			label = "preparing work"
+		end
+	end
+	return {
+		kind = "stream",
+		label = label,
+		status = effective_status(batch),
+		detail = summary,
+		summary = summary,
+		meta = {},
+		evidence = {},
+		children = {},
+	}
+end
+
+local function streamed_batch_spans_plan(batch)
+	local meta = batch and batch.meta or {}
+	local discovered = tonumber(meta.discovered) or 0
+	return discovered >= 4
+end
+
+local function plan_child_with_stream(child, batch)
+	if streamed_batch_spans_plan(batch) or not batch or not child or child.kind ~= "plan_step" or not is_activeish(child) then
+		return child
+	end
+	local clone = {}
+	for key, value in pairs(child) do
+		clone[key] = value
+	end
+	clone.children = {}
+	for _, grandchild in ipairs(child.children or {}) do
+		clone.children[#clone.children + 1] = grandchild
+	end
+	clone.children[#clone.children + 1] = streamed_batch_leaf(batch)
+	return clone
+end
+
+local function render_root_work_forest(root, plan, max_lines)
+	local lines = {}
+	local synthetic = {
+		kind = "turn",
+		label = "work",
+		status = effective_status(root) or "running",
+		detail = nil,
+		summary = nil,
+		meta = {},
+		evidence = {},
+		children = {},
+	}
+	local batch = root_tool_batch(root)
+	if not (plan and plan.kind == "plan") then
+		for _, child in ipairs((root and root.children) or {}) do
+			if child.kind ~= "intent" and child.kind ~= "plan" and is_activeish(child) then
+				synthetic.children[#synthetic.children + 1] = child
+			end
+		end
+	end
+	if plan and plan.kind == "plan" then
+		local inserted_batch = false
+		for _, child in ipairs(plan.children or {}) do
+			synthetic.children[#synthetic.children + 1] = plan_child_with_stream(child, batch)
+			if not inserted_batch and streamed_batch_spans_plan(batch) and child.kind == "plan_step" and is_activeish(child) then
+				synthetic.children[#synthetic.children + 1] = streamed_batch_leaf(batch)
+				inserted_batch = true
+			end
+		end
+		if not inserted_batch and streamed_batch_spans_plan(batch) then
+			synthetic.children[#synthetic.children + 1] = streamed_batch_leaf(batch)
+		end
+	else
+		for _, child in ipairs((root and root.children) or {}) do
+			if child.kind ~= "intent" and child.kind ~= "plan" then
+				synthetic.children[#synthetic.children + 1] = child
+			end
+		end
+	end
+	render_work_tree(synthetic, lines, { max_lines = max_lines, omit_root = true }, "", true)
+	return lines
+end
+
+local function detail_lines_for(node, width, max_lines)
+	local lines = {}
+	if not node then
+		return lines
+	end
+	lines[#lines + 1] = status_glyph(effective_status(node)) .. " " .. node_title(node)
+	local meta = node.meta or {}
+	if node.kind == "changes" then
+		local files = meta.files or {}
+		if #files > 0 then
+			lines[#lines + 1] = "files: " .. table.concat(files, ", ")
+		elseif meta.last_path then
+			lines[#lines + 1] = "file: " .. tostring(meta.last_path)
+		end
+	elseif node.kind == "verify" then
+		if meta.last_command then
+			lines[#lines + 1] = "command: " .. tostring(meta.last_command)
+		end
+		if meta.last_summary then
+			lines[#lines + 1] = "result: " .. tostring(meta.last_summary)
+		end
+	elseif node.kind == "inspect" then
+		if meta.last_path then
+			lines[#lines + 1] = "path: " .. tostring(meta.last_path)
+		end
+		if meta.last_pattern then
+			lines[#lines + 1] = "pattern: " .. tostring(meta.last_pattern)
+		end
+	elseif node.kind == "tool_batch" then
+		if meta.current then
+			lines[#lines + 1] = "current: " .. tostring(meta.current)
+		end
+		local discovered = tonumber(meta.discovered) or 0
+		local closed = tonumber(meta.closed) or 0
+		if discovered > 0 then
+			lines[#lines + 1] = "closed: " .. tostring(closed) .. "/" .. tostring(discovered)
+		end
+	elseif node.kind == "plan_step" then
+		local summaries = {}
+		for _, child in ipairs(node.children or {}) do
+			summaries[#summaries + 1] = status_glyph(effective_status(child)) .. " " .. node_title(child)
+			if #summaries >= 5 then
+				break
+			end
+		end
+		if #summaries > 0 then
+			lines[#lines + 1] = "evidence:"
+			for _, summary in ipairs(summaries) do
+				lines[#lines + 1] = "  " .. summary
+				if #lines >= max_lines then break end
+			end
+		end
+	end
+	if #lines < max_lines and meta.last_output then
+		lines[#lines + 1] = "output:"
+		for output_line in (tostring(meta.last_output) .. "\n"):gmatch("(.-)\n") do
+			if output_line ~= "" then
+				lines[#lines + 1] = "  " .. output_line
+				if #lines >= max_lines then break end
+			end
+		end
+	end
+	if #lines < max_lines and node.summary and node.summary ~= "" then
+		lines[#lines + 1] = "summary: " .. tostring(node.summary)
+	end
+	for _, item in ipairs(node.evidence or {}) do
+		if #lines >= max_lines then break end
+		lines[#lines + 1] = "evidence: " .. tostring(item)
+	end
+	if #lines < max_lines then
+		for _, child in ipairs(node.children or {}) do
+			lines[#lines + 1] = status_glyph(effective_status(child)) .. " " .. node_title(child)
+			if #lines >= max_lines then break end
+		end
+	end
+	for i, line in ipairs(lines) do
+		lines[i] = truncate_text(line, width)
+	end
+	return lines
+end
+
+local function write_live_tree_line(text)
+	if live_tree_buffer then
+		live_tree_buffer[#live_tree_buffer + 1] = text .. "\n"
+		return 1
+	end
+	io.write(text .. "\n")
+	return 1
+end
+
+local function live_ast_clear_sequence()
+	if live_ast_lines <= 0 then
+		return ""
+	end
+	local parts = { "\r" }
+	for _ = 1, live_ast_lines do
+		parts[#parts + 1] = "\27[1A\27[2K"
+	end
+	return table.concat(parts)
+end
+
+function ui.live_ast_error_detail(event)
+	if not event or not event.result or not event.result.is_error then
+		return
+	end
+	local content = tostring(event.result.content or ""):gsub("\r", "")
+	if content == "" then
+		return
+	end
+	local width = terminal_size()
+	local max_width = math.max(40, width - 16)
+	local command = event.args and event.args.command
+	local lines = {}
+	lines[#lines + 1] = "  " .. color("red", "┆ error") .. color("dim", " detail")
+	if command and command ~= "" then
+		lines[#lines + 1] = "  " .. color("dim", "┆ command ") .. color("dim", truncate_text(command, max_width - 10))
+	end
+	local function clean_error_line(line)
+		return tostring(line or "")
+			:gsub("^lua:%s*", "")
+			:gsub("^%(command line%):%d+:%s*", "")
+			:gsub("^%S+%.lua:%d+:%s*", "")
+	end
+	local shown = 0
+	for line in (content .. "\n"):gmatch("(.-)\n") do
+		local cleaned = clean_error_line(line:gsub("^%s+", ""):gsub("%s+$", ""))
+		local lower = cleaned:lower()
+		if cleaned ~= ""
+			and not (lower:match("^lua%s+%d") and lower:find("copyright", 1, true)) then
+			lines[#lines + 1] = "  " .. color("dim", "┆ ") .. color("dim", truncate_text(cleaned, max_width))
+			shown = shown + 1
+			if shown >= 3 then
+				break
+			end
+		end
+	end
+	for _, line in ipairs(lines) do
+		io.write(line .. "\n")
+	end
+	live_ast_lines = live_ast_lines + #lines
+	io.flush()
+end
+
+local function render_split_live_tree(root, label)
+	local width, height = terminal_size()
+	local max_height = math.min(40, math.max(8, height - 8))
+	local intent = first_child(root, "intent")
+	local plan = first_child(root, "plan")
+	local tree_root = plan or root
+	local tree_lines = render_root_work_forest(root, tree_root, max_height - 1)
+	local title = intent and node_summary(intent) or node_title(root)
+	local written = write_live_tree_line("  " .. color("magenta", "▧") .. " " .. color("magenta", pad_right(label, 10)) .. color("dim", truncate_text(title, width - 18)))
+	for _, line in ipairs(tree_lines) do
+		written = written + write_live_tree_line("  " .. color("dim", "┆ " .. pad_right("", 10)) .. color("dim", truncate_text(line, width - 16)))
+	end
+	return written
+end
+
+local function collect_tree_counts(node, counts)
+	counts = counts or {
+		files = 0,
+		checks = 0,
+		errors = 0,
+		cancelled = 0,
+		done_steps = 0,
+		total_steps = 0,
+	}
+	if not node then
+		return counts
+	end
+	local display_status = effective_status(node)
+	if display_status == "error" then
+		counts.errors = counts.errors + 1
+	elseif display_status == "cancelled" then
+		counts.cancelled = counts.cancelled + 1
+	end
+	if node.kind == "changes" then
+		local files = node.meta and node.meta.files
+		counts.files = counts.files + (type(files) == "table" and #files or tonumber(node.meta and node.meta.total) or 0)
+	elseif node.kind == "verify" then
+		counts.checks = counts.checks + (tonumber(node.meta and node.meta.total) or 0)
+	elseif node.kind == "plan_step" then
+		counts.total_steps = counts.total_steps + 1
+		if display_status == "ok" then
+			counts.done_steps = counts.done_steps + 1
+		end
+	end
+	for _, child in ipairs(node.children or {}) do
+		collect_tree_counts(child, counts)
+	end
+	return counts
+end
+
+local function render_compact_live_tree(root, label)
+	local width = terminal_size()
+	local intent = first_child(root, "intent")
+	local title = intent and node_summary(intent) or node_title(root)
+	local counts = collect_tree_counts(root)
+	local parts = {}
+	if counts.total_steps > 0 then
+		parts[#parts + 1] = tostring(counts.done_steps) .. "/" .. tostring(counts.total_steps) .. " steps"
+	end
+	if counts.files > 0 then
+		parts[#parts + 1] = tostring(counts.files) .. " file" .. (counts.files == 1 and "" or "s") .. " changed"
+	end
+	if counts.checks > 0 then
+		parts[#parts + 1] = tostring(counts.checks) .. " check" .. (counts.checks == 1 and "" or "s")
+	end
+	if counts.errors > 0 then
+		parts[#parts + 1] = tostring(counts.errors) .. " error" .. (counts.errors == 1 and "" or "s")
+	end
+	if counts.cancelled > 0 then
+		parts[#parts + 1] = tostring(counts.cancelled) .. " cancelled"
+	end
+	local suffix = #parts > 0 and ("  " .. table.concat(parts, " · ")) or ""
+	local line = status_glyph(effective_status(root)) .. " " .. title .. suffix
+	return write_live_tree_line("  " .. color("magenta", "▧") .. " " .. color("magenta", pad_right(label, 10)) .. color("dim", truncate_text(line, width - 18)))
+end
+
+function ui.live_ast(state, opts)
+	opts = opts or {}
+	local label = opts.label or "ast"
+	if state and type(state.snapshot) == "function" then
+		local snapshot = state:snapshot()
+		if snapshot then
+			live_tree_buffer = {}
+			local count
+			if opts.final then
+				count = render_split_live_tree(snapshot, label)
+			else
+				count = render_split_live_tree(snapshot, label)
+			end
+			local output = table.concat(live_tree_buffer)
+			live_tree_buffer = nil
+			io.write(live_ast_clear_sequence() .. output)
+			if opts.live ~= false then
+				live_ast_lines = count or 0
+			else
+				live_ast_lines = 0
+			end
+			io.flush()
+			return
+		end
+	end
+	if not state or not state.render then return end
+	local rendered = state:render(opts.render_opts or {})
+	if rendered == "" then return end
+	local line = "  " .. color("magenta", "▧") .. " " .. color("magenta", pad_right(label, 10)) .. color("dim", truncate_text(rendered:gsub("\n.*$", ""), 100)) .. "\n"
+	io.write(live_ast_clear_sequence() .. line)
+	local count = 1
+	if opts.live ~= false then
+		live_ast_lines = count
+	else
+		live_ast_lines = 0
+	end
+	io.flush()
+end
+
 function ui.error(text)
 	io.stderr:write(color("red", "  \xe2\x9c\x97 error: ") .. text .. "\n")
 end
@@ -871,6 +1519,7 @@ local active_tool_seq = 0
 local active_tool_order = {}
 local active_tool_by_id = {}
 local active_tool_queues = {}
+local active_tool_statuses = {}
 
 local function now_seconds()
 	return uv.hrtime() / 1e9
@@ -911,41 +1560,29 @@ local function queue_remove_first(queue)
 	return id
 end
 
+local tool_safety_state
+
 local function render_active_tools()
 	if not active_tool_timer then return end
-	local count = #active_tool_order
-	if count == 0 then
+	if #active_tool_order == 0 then
 		io.write("\r\27[K")
 		io.flush()
 		return
 	end
 
 	active_tool_frame = active_tool_frame + 1
-	local glyph = ACTIVE_GLYPHS[(active_tool_frame % #ACTIVE_GLYPHS) + 1]
 	local first = active_tool_by_id[active_tool_order[1]]
 	local elapsed = first and format_duration(now_seconds() - first.started_at) or nil
-	local text
-	if count == 1 and first then
-		text = first.name .. "  " .. first.desc
-		if elapsed then
-			text = text .. "  " .. elapsed
-		end
-	else
-		local names = {}
-		local seen = {}
-		for _, id in ipairs(active_tool_order) do
-			local item = active_tool_by_id[id]
-			if item and not seen[item.name] then
-				seen[item.name] = true
-				names[#names + 1] = item.name
-			end
-		end
-		text = tostring(count) .. " tools running  " .. table.concat(names, ", ")
-		if elapsed then
-			text = text .. "  " .. elapsed
-		end
+	local summary = ui.tool_status_summary("running", { live = true })
+	local text = "executing batch"
+	if elapsed then
+		text = text .. "  " .. elapsed
 	end
-	io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("dim", text))
+	if summary ~= "" then
+		text = text .. "  " .. summary
+	end
+	local glyph = ACTIVE_GLYPHS[(active_tool_frame % #ACTIVE_GLYPHS) + 1]
+	io.write("\r\27[K  " .. color("cyan", glyph) .. " " .. color("cyan", pad_right("tools", 10)) .. color("dim", text))
 	io.flush()
 end
 
@@ -970,10 +1607,12 @@ local function mark_tool_started(event, desc)
 	active_tool_seq = active_tool_seq + 1
 	local id = active_tool_seq
 	local key = tool_event_key(event)
+	local group = tool_group(event.name)
 	local item = {
 		id = id,
 		key = key,
 		name = event.name,
+		group = group,
 		desc = desc,
 		started_at = now_seconds(),
 	}
@@ -981,6 +1620,12 @@ local function mark_tool_started(event, desc)
 	active_tool_order[#active_tool_order + 1] = id
 	active_tool_queues[key] = active_tool_queues[key] or {}
 	active_tool_queues[key][#active_tool_queues[key] + 1] = id
+	active_tool_statuses[#active_tool_statuses + 1] = {
+		id = id,
+		name = event.name,
+		group = group,
+		status = "running",
+	}
 	ensure_active_tool_timer()
 	return item
 end
@@ -988,11 +1633,30 @@ end
 local function mark_tool_finished(event)
 	local key = tool_event_key(event)
 	local id = queue_remove_first(active_tool_queues[key])
-	if not id and #active_tool_order > 0 then
-		id = active_tool_order[1]
-	end
 	local item = id and active_tool_by_id[id] or nil
+	local status = "done"
+	if tool_safety_state(event) then
+		status = "deferred"
+	elseif event.result and event.result.is_error then
+		status = "failed"
+	end
+	if not id then
+		active_tool_seq = active_tool_seq + 1
+		active_tool_statuses[#active_tool_statuses + 1] = {
+			id = active_tool_seq,
+			name = event.name,
+			group = tool_group(event.name),
+			status = status,
+		}
+		return nil
+	end
 	if id then
+		for _, entry in ipairs(active_tool_statuses) do
+			if entry.id == id then
+				entry.status = status
+				break
+			end
+		end
 		active_tool_by_id[id] = nil
 		for index, active_id in ipairs(active_tool_order) do
 			if active_id == id then
@@ -1010,8 +1674,9 @@ local tool_names = {}
 local tool_failures = 0
 local tool_blocked = 0
 local tool_batch_started_at = nil
+local tool_saved_paths = {}
 
-local function tool_safety_state(event)
+tool_safety_state = function(event)
 	local result = event and event.result
 	local summary = result and result.summary
 	if summary == "stale tag" then
@@ -1032,6 +1697,9 @@ local function note_tool_batch_event(event)
 	tool_batch_started_at = tool_batch_started_at or now_seconds()
 	tool_count = tool_count + 1
 	table.insert(tool_names, event.name)
+	if not (event.result and event.result.is_error) and (event.name == "write" or event.name == "edit") and event.args and event.args.path then
+		tool_saved_paths[#tool_saved_paths + 1] = tostring(event.args.path)
+	end
 	if tool_safety_state(event) then
 		tool_blocked = tool_blocked + 1
 	elseif event.result and event.result.is_error then
@@ -1039,8 +1707,251 @@ local function note_tool_batch_event(event)
 	end
 end
 
+local function status_glyph(status)
+	if status == "done" then
+		return "●", "green"
+	elseif status == "failed" then
+		return "✕", "red"
+	elseif status == "deferred" then
+		return "◇", "yellow"
+	elseif status == "cancelled" then
+		return "·", "dim"
+	end
+	local glyph = ACTIVE_GLYPHS[(active_tool_frame % #ACTIVE_GLYPHS) + 1] or "◐"
+	return glyph, "cyan"
+end
+
+local function grouped_tool_statuses()
+	local grouped = {}
+	local order = {}
+	for _, entry in ipairs(active_tool_statuses) do
+		local group = entry.group or tool_group(entry.name)
+		if not grouped[group] then
+			grouped[group] = {}
+			order[#order + 1] = group
+		end
+		grouped[group][#grouped[group] + 1] = entry.status or "running"
+	end
+	table.sort(order, function(a, b)
+		local ar = TOOL_GROUP_RANK[a] or 999
+		local br = TOOL_GROUP_RANK[b] or 999
+		if ar == br then
+			return a < b
+		end
+		return ar < br
+	end)
+	return grouped, order
+end
+
+function ui.tool_status_summary(phase, opts)
+	opts = opts or {}
+	if #active_tool_statuses == 0 then
+		return ""
+	end
+	local grouped, order = grouped_tool_statuses()
+	local parts = {}
+	local max_groups = opts.max_groups or 8
+	for i, group in ipairs(order) do
+		if i > max_groups then
+			parts[#parts + 1] = "+" .. tostring(#order - max_groups)
+			break
+		end
+		local glyphs = {}
+		local max_glyphs = opts.max_glyphs or 12
+		local statuses = grouped[group]
+		for j, status in ipairs(statuses) do
+			if j > max_glyphs then
+				glyphs[#glyphs + 1] = color("dim", "+" .. tostring(#statuses - max_glyphs))
+				break
+			end
+			local glyph, glyph_color = status_glyph(status)
+			glyphs[#glyphs + 1] = color(glyph_color, glyph)
+		end
+		parts[#parts + 1] = color("dim", group .. ": ") .. table.concat(glyphs)
+	end
+	return table.concat(parts, color("dim", "  "))
+end
+
+local function compact_saved_paths(paths)
+	if #paths == 0 then
+		return nil
+	end
+	local names = {}
+	local limit = math.min(#paths, 3)
+	for i = 1, limit do
+		names[#names + 1] = paths[i]:match("([^/]+)$") or paths[i]
+	end
+	local suffix = #paths > limit and (" +" .. tostring(#paths - limit)) or ""
+	return table.concat(names, ", ") .. suffix
+end
+
+local function frame_status(statuses)
+	local has_running = false
+	local has_deferred = false
+	for _, status in ipairs(statuses or {}) do
+		if status == "failed" then
+			return "failed"
+		elseif status == "running" then
+			has_running = true
+		elseif status == "deferred" then
+			has_deferred = true
+		end
+	end
+	if has_running then
+		return "running"
+	elseif has_deferred then
+		return "deferred"
+	end
+	return "done"
+end
+
+local function frame_status_marks(statuses)
+	local marks = {}
+	local limit = math.min(#statuses, 10)
+	for i = 1, limit do
+		local glyph, glyph_color = status_glyph(statuses[i])
+		marks[#marks + 1] = color(glyph_color, glyph)
+	end
+	if #statuses > limit then
+		marks[#marks + 1] = color("dim", "+" .. tostring(#statuses - limit))
+	end
+	return table.concat(marks)
+end
+
+local function stack_frame_details(frame, entries, saved_paths)
+	local count = #entries
+	if frame == "write" then
+		local saved = compact_saved_paths(saved_paths or {})
+		if saved then
+			return tostring(#saved_paths) .. " file" .. (#saved_paths == 1 and "" or "s") .. " saved  " .. saved
+		end
+		return tostring(count) .. " mutation" .. (count == 1 and "" or "s")
+	elseif frame == "inspect" then
+		local groups = {}
+		local seen = {}
+		for _, entry in ipairs(entries) do
+			if entry.group and not seen[entry.group] then
+				seen[entry.group] = true
+				groups[#groups + 1] = entry.group
+			end
+		end
+		table.sort(groups, function(a, b)
+			return (TOOL_GROUP_RANK[a] or 999) < (TOOL_GROUP_RANK[b] or 999)
+		end)
+		return tostring(count) .. " lookup" .. (count == 1 and "" or "s") .. (#groups > 0 and ("  " .. table.concat(groups, ", ")) or "")
+	elseif frame == "verify" then
+		return tostring(count) .. " check" .. (count == 1 and "" or "s")
+	elseif frame == "serve" then
+		return tostring(count) .. " job action" .. (count == 1 and "" or "s")
+	elseif frame == "plan" then
+		return tostring(count) .. " update" .. (count == 1 and "" or "s")
+	elseif frame == "external" then
+		return tostring(count) .. " external call" .. (count == 1 and "" or "s")
+	end
+	return tostring(count) .. " tool" .. (count == 1 and "" or "s")
+end
+
+local function stack_frames(saved_paths)
+	local frames = {}
+	local order = {}
+	for _, entry in ipairs(active_tool_statuses) do
+		local frame = stack_frame_for_group(entry.group or tool_group(entry.name))
+		if not frames[frame] then
+			frames[frame] = { entries = {}, statuses = {} }
+			order[#order + 1] = frame
+		end
+		frames[frame].entries[#frames[frame].entries + 1] = entry
+		frames[frame].statuses[#frames[frame].statuses + 1] = entry.status or "running"
+	end
+	table.sort(order, function(a, b)
+		local ar = STACK_FRAME_RANK[a] or 999
+		local br = STACK_FRAME_RANK[b] or 999
+		if ar == br then
+			return a < b
+		end
+		return ar < br
+	end)
+	return frames, order
+end
+
+local function render_tool_stack(label, saved_paths)
+	local frames, order = stack_frames(saved_paths)
+	if #order == 0 then return false end
+	io.write("  " .. color("dim", "╭─ stack") .. (label and label ~= "" and color("dim", "  " .. label) or "") .. "\n")
+	for _, frame in ipairs(order) do
+		local data = frames[frame]
+		local status = frame_status(data.statuses)
+		local glyph, glyph_color = status_glyph(status)
+		local marks = frame_status_marks(data.statuses)
+		local details = stack_frame_details(frame, data.entries, frame == "write" and saved_paths or nil)
+		io.write("  " .. color("dim", "│ ") .. color(glyph_color, glyph) .. " " .. color(glyph_color, pad_right(frame, 10)) .. color("dim", details))
+		if marks ~= "" and #data.statuses > 1 then
+			io.write(color("dim", "  ") .. marks)
+		end
+		io.write("\n")
+	end
+	io.write("  " .. color("dim", "╰─") .. "\n")
+	return true
+end
+
+local function important_success_output(event)
+	local content = tostring(event and event.result and event.result.content or "")
+	if content == "" or content == "(no output)" then
+		return false
+	end
+	if #content > 1200 then
+		return true
+	end
+	local lower = content:lower()
+	if lower:find("error", 1, true)
+		or lower:find("failed", 1, true)
+		or lower:find("traceback", 1, true)
+		or lower:find("warning", 1, true)
+		or lower:find("http://", 1, true)
+		or lower:find("https://", 1, true)
+		or lower:find("listening", 1, true)
+		or lower:find("server", 1, true) then
+		return true
+	end
+	return false
+end
+
+local function live_ast_suppresses_tool_event(event)
+	if DEBUG or not event then
+		return false
+	end
+	if event.result and event.result.is_error then
+		if event.name == "run" or event.name == "shell" then
+			return true
+		end
+		return false
+	end
+	if tool_safety_state(event) then
+		return false
+	end
+	if event.phase == "start" then
+		return event.name ~= "job_start"
+	end
+	if event.name == "read"
+		or event.name == "ls"
+		or event.name == "find"
+		or event.name == "write"
+		or event.name == "edit"
+		or event.name == "update_plan" then
+		return true
+	end
+	if event.name == "grep" then
+		local content = event.result and event.result.content or ""
+		return #tostring(content) <= 800
+	end
+	if event.name == "run" or event.name == "shell" then
+		return not important_success_output(event)
+	end
+	return false
+end
+
 function ui.tool(event)
-	if DEBUG then
+		if DEBUG then
 		io.write(color("cyan", "\xe2\x97\x8f " .. event.name))
 		local desc = render_description(event)
 		io.write(color("dim", "  " .. desc))
@@ -1062,10 +1973,18 @@ function ui.tool(event)
 			end
 		end
 		io.write("\n")
-	else
-		note_tool_batch_event(event)
+		else
+			note_tool_batch_event(event)
+			if live_ast_suppresses_tool_event(event) then
+				if event.phase == "start" then
+					mark_tool_started(event, render_description(event))
+				else
+					mark_tool_finished(event)
+				end
+				return
+			end
 
-		local tc = tool_color(event.name)
+			local tc = tool_color(event.name)
 		local desc = render_description(event)
 		local hint = render_result_hint(event)
 
@@ -1089,8 +2008,8 @@ function ui.tool(event)
 		else
 			if event.phase == "start" then
 				mark_tool_started(event, desc)
-				rail_line("◉", tc, event.name, desc)
 				if event.name == "run" and event.args and event.args.command then
+					rail_line("◉", tc, event.name, desc)
 					rail_block("command", event.args.command, { max_lines = 6, max_width = 120, max_bytes = 1200 })
 				end
 			else
@@ -1104,18 +2023,21 @@ function ui.tool(event)
 				if elapsed_text then
 					status = status ~= "" and (status .. "  " .. elapsed_text) or elapsed_text
 				end
-				rail_line("◆", tc, event.name, status)
 				if event.name == "update_plan" and event.result and event.result.plan then
+					rail_line("◆", tc, event.name, status)
 					if event.result.plan_fresh or ui.plan_should_list(event.result.plan) then
 						ui.plan_outline(event.result.plan)
 					else
 						ui.plan_progress(event.result.plan)
 					end
 				elseif event.name == "update_plan" and event.result and event.result.content then
+					rail_line("◆", tc, event.name, status)
 					rail_block("plan", event.result.content, { max_lines = 12, max_width = 120, max_bytes = 1600 })
 				elseif event.name == "run" and event.result and event.result.content then
+					rail_line("◆", tc, event.name, status)
 					rail_block("output", event.result.content, { max_lines = 6, max_width = 120, max_bytes = 1200 })
 				elseif event.name == "grep" and event.result and event.result.content then
+					rail_line("◆", tc, event.name, status)
 					rail_block("matches", event.result.content, { max_lines = 4, max_width = 120, max_bytes = 800 })
 				end
 			end
@@ -1127,6 +2049,16 @@ end
 function ui.tool_summary()
 	if not DEBUG and tool_count > 0 then
 		io.write("\r\27[K")
+		if tool_failures == 0 and tool_blocked == 0 then
+			tool_count = 0
+			tool_names = {}
+			tool_failures = 0
+			tool_blocked = 0
+			tool_batch_started_at = nil
+			tool_saved_paths = {}
+			active_tool_statuses = {}
+			return
+		end
 
 		local seen = {}
 		local unique = {}
@@ -1150,7 +2082,16 @@ function ui.tool_summary()
 			outcome = tostring(tool_blocked) .. " blocked, " .. tostring(tool_failures) .. " failed"
 		end
 		local elapsed = tool_batch_started_at and format_elapsed(now_seconds() - tool_batch_started_at) or nil
-		if tool_count > 1 then
+		if #active_tool_statuses > 0 then
+			local text = label
+			if outcome then
+				text = text .. "  " .. outcome
+			end
+			if elapsed then
+				text = text .. "  " .. elapsed
+			end
+			render_tool_stack(text, tool_saved_paths)
+		elseif tool_count > 1 then
 			local text = label
 			if outcome then
 				text = text .. "  " .. outcome
@@ -1166,6 +2107,8 @@ function ui.tool_summary()
 		tool_failures = 0
 		tool_blocked = 0
 		tool_batch_started_at = nil
+		tool_saved_paths = {}
+		active_tool_statuses = {}
 	end
 end
 

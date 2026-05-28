@@ -85,6 +85,54 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.]]
 
+local serialize_messages
+
+local function recent_turn_ast_block(session)
+	if type(session) ~= "table" or type(session.last_turn_ast_summary) ~= "string" or session.last_turn_ast_summary == "" then
+		return nil
+	end
+	return table.concat({
+		"<recent-turn-ast>",
+		"Machine-derived execution summary for the most recent turn. Use it as grounding evidence for status, files changed, verification, cancellation, and failures. Do not quote it wholesale.",
+		session.last_turn_ast_summary,
+		"</recent-turn-ast>",
+	}, "\n")
+end
+
+local function build_summary_prompt(messages_to_summarize, previous_summary, session, opts)
+	opts = opts or {}
+	local conversation_text = serialize_messages(messages_to_summarize)
+
+	local prompt_text = "<conversation>\n" .. conversation_text .. "\n</conversation>\n\n"
+	local ast_block = recent_turn_ast_block(session)
+	if ast_block then
+		prompt_text = prompt_text .. ast_block .. "\n\n"
+	end
+	if previous_summary then
+		prompt_text = prompt_text .. "<previous-summary>\n" .. previous_summary .. "\n</previous-summary>\n\n"
+		prompt_text = prompt_text .. UPDATE_SUMMARIZATION_PROMPT
+	else
+		prompt_text = prompt_text .. SUMMARIZATION_PROMPT
+	end
+	if opts.preserve_next_improvements then
+		prompt_text = prompt_text .. [[
+
+Additional insanitywolf checkpoint rules:
+- Compact prior execution details aggressively.
+- Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
+- In "Next Steps", put only high-impact implementation improvements that justify another cycle. Include expected impact, exact files/commands/resources involved, and why each next step is worth doing.
+- Treat local hardening, including security hardening, as valid next-cycle work when it is evidence-backed and preserves the user's requested shape.
+- For authentication, authorization, admin portal, or session/cookie apps, classify local security hardening as autonomous next-cycle work when it avoids new external services and preserves the app shape. Examples: CSRF tokens, stronger session/token entropy, secure/HttpOnly/SameSite cookie flags, request/body size caps, basic login throttling, constant-time token comparison, and safer defaults. Do not put these in user-directed offers.
+- For those auth/admin apps, user-directed offers are only larger product or packaging choices such as SQLite persistence, Docker/systemd packaging, dependency swaps, routing/framework restructures, or new external services.
+- Do not list inventory checks, rereads, final tree listings, optional lint probes, or already-passed verification as next-cycle work. Put those in Critical Context only if they matter.
+- If any valid next-cycle work exists, do not say no further autonomous cycle is warranted; reserve that phrase for checkpoints with no valid autonomous work.
+- If the remaining work is only final verification, optional polish, external dependencies, scope expansion, or anything needing user/product judgment, state that no further autonomous cycle is warranted and name the blocker.
+- When no further autonomous cycle is warranted, still include 2-4 concrete user-directed options the user could explicitly ask for next. Mark them as offers, not autonomous next-cycle work.]]
+	end
+
+	return prompt_text
+end
+
 function compaction.estimate_tokens(message)
 	local text = message.text or ""
 	return math.ceil(#text / 4)
@@ -463,7 +511,7 @@ function compaction.find_cut_point(messages)
 	return cut_index
 end
 
-local function serialize_messages(messages)
+function serialize_messages(messages)
 	local parts = {}
 	for _, msg in ipairs(messages) do
 		local role_label
@@ -483,30 +531,7 @@ end
 
 function compaction.generate_summary(messages_to_summarize, previous_summary, session, opts)
 	opts = opts or {}
-	local conversation_text = serialize_messages(messages_to_summarize)
-
-	local prompt_text = "<conversation>\n" .. conversation_text .. "\n</conversation>\n\n"
-	if previous_summary then
-		prompt_text = prompt_text .. "<previous-summary>\n" .. previous_summary .. "\n</previous-summary>\n\n"
-		prompt_text = prompt_text .. UPDATE_SUMMARIZATION_PROMPT
-	else
-		prompt_text = prompt_text .. SUMMARIZATION_PROMPT
-	end
-	if opts.preserve_next_improvements then
-		prompt_text = prompt_text .. [[
-
-Additional insanitywolf checkpoint rules:
-- Compact prior execution details aggressively.
-- Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
-- In "Next Steps", put only high-impact implementation improvements that justify another cycle. Include expected impact, exact files/commands/resources involved, and why each next step is worth doing.
-- Treat local hardening, including security hardening, as valid next-cycle work when it is evidence-backed and preserves the user's requested shape.
-- For authentication, authorization, admin portal, or session/cookie apps, classify local security hardening as autonomous next-cycle work when it avoids new external services and preserves the app shape. Examples: CSRF tokens, stronger session/token entropy, secure/HttpOnly/SameSite cookie flags, request/body size caps, basic login throttling, constant-time token comparison, and safer defaults. Do not put these in user-directed offers.
-- For those auth/admin apps, user-directed offers are only larger product or packaging choices such as SQLite persistence, Docker/systemd packaging, dependency swaps, routing/framework restructures, or new external services.
-- Do not list inventory checks, rereads, final tree listings, optional lint probes, or already-passed verification as next-cycle work. Put those in Critical Context only if they matter.
-- If any valid next-cycle work exists, do not say no further autonomous cycle is warranted; reserve that phrase for checkpoints with no valid autonomous work.
-- If the remaining work is only final verification, optional polish, external dependencies, scope expansion, or anything needing user/product judgment, state that no further autonomous cycle is warranted and name the blocker.
-- When no further autonomous cycle is warranted, still include 2-4 concrete user-directed options the user could explicitly ask for next. Mark them as offers, not autonomous next-cycle work.]]
-	end
+	local prompt_text = build_summary_prompt(messages_to_summarize, previous_summary, session, opts)
 
 	local provider = providers.load(session.credentials_path)
 	local response = provider.complete({
@@ -522,6 +547,8 @@ Additional insanitywolf checkpoint rules:
 
 	return response.text
 end
+
+compaction._build_summary_prompt = build_summary_prompt
 
 local function append_current_plan(text, session)
 	if type(session) ~= "table" or type(session.plan) ~= "table" or #session.plan == 0 then

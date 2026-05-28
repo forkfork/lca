@@ -409,6 +409,11 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				text = response.text or "",
 				events = events,
 				_response_meta = last_response_meta,
+				_cancelled = true,
+				_cancelled_after_response = true,
+				_partial_salvage = response._partial_salvage,
+				_partial_salvaged_calls = response._partial_salvaged_calls,
+				_response_bytes = response._response_bytes,
 			}
 		end
 

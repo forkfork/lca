@@ -129,6 +129,33 @@ run_test("usage history is saved and loaded", function()
 	assert_eq(second.last_usage.cached_tokens, 500)
 end)
 
+run_test("turn ast evidence is saved and loaded", function()
+	local path = tmp_dir .. "/session-turn-ast.json"
+	local first = session_module.create({ session_id = "lca-test-session" })
+	first.last_turn_ast_summary = "intent=ok(create Lua auth API)\nchanges=ok(1 file saved  app.lua)"
+	first.last_turn_ast_snapshot = {
+		kind = "turn",
+		status = "ok",
+		children = {
+			{ kind = "changes", status = "ok", summary = "1 file saved  app.lua" },
+		},
+	}
+	local ok, err = first:save(path)
+	if not ok then
+		error(err)
+	end
+
+	local second = session_module.create({})
+	local loaded, load_err = second:load(path)
+	if not loaded then
+		error(load_err)
+	end
+
+	assert_eq(second.last_turn_ast_summary, first.last_turn_ast_summary)
+	assert_eq(second.last_turn_ast_snapshot.kind, "turn")
+	assert_eq(second.last_turn_ast_snapshot.children[1].kind, "changes")
+end)
+
 run_test("system prompt is frozen for cache stability", function()
 	local path = tmp_dir .. "/session-system-prompt.json"
 	local cache_project_dir = tmp_dir .. "/project"

@@ -50,6 +50,7 @@ build = {
 		["agent.system_prompt"] = "lua/agent/system_prompt.lua",
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",
 		["agent.tool_registry"] = "lua/agent/tool_registry.lua",
+		["agent.turn_state"] = "lua/agent/turn_state.lua",
 		["agent.ui"] = "lua/agent/ui.lua",
 		["agent.providers"] = "lua/agent/providers/init.lua",
 		["agent.providers.bedrock"] = "lua/agent/providers/bedrock.lua",

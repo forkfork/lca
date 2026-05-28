@@ -19,15 +19,18 @@ local provider_calls = 0
 package.loaded["agent.providers"] = {
 	load = function()
 		return {
-			complete = function(request)
-				provider_calls = provider_calls + 1
-				last_request = request
-				if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
-					summary_request = request
-				end
-				if type(provider_response) == "table" then
-					return provider_response
-				end
+				complete = function(request)
+					provider_calls = provider_calls + 1
+					last_request = request
+					if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
+						summary_request = request
+					end
+					if type(provider_response) == "table" then
+						if provider_response._cancel_during_complete then
+							require("agent.repl").cancelled = true
+						end
+						return provider_response
+					end
 				if type(provider_response) == "function" then
 					return {
 						text = provider_response(request),
@@ -425,6 +428,43 @@ test("partial salvage emits quiet thinking status", function()
 	end
 	if not found then
 		error("missing partial salvage thinking status")
+	end
+end)
+
+test("cancel after partial salvage preserves recovered tool metadata", function()
+	provider_response = {
+		text = table.concat({
+			'<tool_call name="ls">',
+			'{"path":"."}',
+			"</tool_call>",
+		}, "\n"),
+		_partial_salvage = true,
+		_partial_salvaged_calls = 1,
+		_response_bytes = 4321,
+		_cancel_during_complete = true,
+	}
+
+	local repl = require("agent.repl")
+	repl.cancelled = false
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger cancelled partial salvage")
+
+	local result = core.run_session(session, nil, nil, nil)
+	repl.cancelled = false
+
+	if result._cancelled ~= true then
+		error("expected cancelled result")
+	end
+	if result._partial_salvage ~= true then
+		error("expected partial salvage metadata")
+	end
+	if result._partial_salvaged_calls ~= 1 then
+		error("expected one salvaged call")
+	end
+	if result.text:find('<tool_call name="ls">', 1, true) == nil then
+		error("expected salvaged tool text to be preserved")
 	end
 end)
 

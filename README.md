@@ -18,7 +18,7 @@ eval "$(luarocks --local --lua-dir="$LUA_PREFIX" path --bin)"
 Linux:
 
 ```bash
-sudo apt install lua5.4 luarocks curl openssl
+sudo apt install lua5.4 liblua5.4-dev luarocks build-essential curl openssl libcrypt-dev
 luarocks --lua-version=5.4 --local install lca
 eval "$(luarocks --lua-version=5.4 --local path --bin)"
 ```
@@ -26,8 +26,8 @@ eval "$(luarocks --lua-version=5.4 --local path --bin)"
 From a checkout:
 
 ```bash
-luarocks --local make lca-dev-1.rockspec
-eval "$(luarocks --local path --bin)"
+make local
+eval "$(luarocks --lua-version=5.4 --local path --bin)"
 ```
 
 ## Auth
@@ -70,6 +70,15 @@ Run directly from the checkout:
 ```bash
 lua bin/agent.lua "Explain what files this project should inspect first." --model gpt-5.5
 lua bin/repl.lua --model gpt-5.5
+```
+
+Useful development targets:
+
+```bash
+make local   # install this checkout into local LuaRocks
+make rock    # pack lca-dev-1.src.rock
+make test    # run all Lua tests
+make check   # make local, then make test
 ```
 
 See `docs/architecture.md` for the module layout.
