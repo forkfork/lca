@@ -769,28 +769,6 @@ local function status_glyph(status)
 	return "○"
 end
 
-local function active_rank(node)
-	local status = effective_status(node)
-	if status == "error" then return 1 end
-	if status == "cancelled" then return 2 end
-	if status == "streaming" then return 2.5 end
-	if status == "running" then return 3 end
-	if status == "warning" then return 4 end
-	return 99
-end
-
-local function find_focus(node)
-	local best = node
-	local best_rank = active_rank(node)
-	for _, child in ipairs((node and node.children) or {}) do
-		local candidate, rank = find_focus(child)
-		if rank < best_rank or (rank == best_rank and candidate ~= child and best == node) or (rank == best_rank and best == node) then
-			best = candidate
-			best_rank = rank
-		end
-	end
-	return best, best_rank
-end
 
 local function first_child(node, kind)
 	for _, child in ipairs((node and node.children) or {}) do
@@ -1038,86 +1016,6 @@ local function render_root_work_forest(root, plan, max_lines)
 	return lines
 end
 
-local function detail_lines_for(node, width, max_lines)
-	local lines = {}
-	if not node then
-		return lines
-	end
-	lines[#lines + 1] = status_glyph(effective_status(node)) .. " " .. node_title(node)
-	local meta = node.meta or {}
-	if node.kind == "changes" then
-		local files = meta.files or {}
-		if #files > 0 then
-			lines[#lines + 1] = "files: " .. table.concat(files, ", ")
-		elseif meta.last_path then
-			lines[#lines + 1] = "file: " .. tostring(meta.last_path)
-		end
-	elseif node.kind == "verify" then
-		if meta.last_command then
-			lines[#lines + 1] = "command: " .. tostring(meta.last_command)
-		end
-		if meta.last_summary then
-			lines[#lines + 1] = "result: " .. tostring(meta.last_summary)
-		end
-	elseif node.kind == "inspect" then
-		if meta.last_path then
-			lines[#lines + 1] = "path: " .. tostring(meta.last_path)
-		end
-		if meta.last_pattern then
-			lines[#lines + 1] = "pattern: " .. tostring(meta.last_pattern)
-		end
-	elseif node.kind == "tool_batch" then
-		if meta.current then
-			lines[#lines + 1] = "current: " .. tostring(meta.current)
-		end
-		local discovered = tonumber(meta.discovered) or 0
-		local closed = tonumber(meta.closed) or 0
-		if discovered > 0 then
-			lines[#lines + 1] = "closed: " .. tostring(closed) .. "/" .. tostring(discovered)
-		end
-	elseif node.kind == "plan_step" then
-		local summaries = {}
-		for _, child in ipairs(node.children or {}) do
-			summaries[#summaries + 1] = status_glyph(effective_status(child)) .. " " .. node_title(child)
-			if #summaries >= 5 then
-				break
-			end
-		end
-		if #summaries > 0 then
-			lines[#lines + 1] = "evidence:"
-			for _, summary in ipairs(summaries) do
-				lines[#lines + 1] = "  " .. summary
-				if #lines >= max_lines then break end
-			end
-		end
-	end
-	if #lines < max_lines and meta.last_output then
-		lines[#lines + 1] = "output:"
-		for output_line in (tostring(meta.last_output) .. "\n"):gmatch("(.-)\n") do
-			if output_line ~= "" then
-				lines[#lines + 1] = "  " .. output_line
-				if #lines >= max_lines then break end
-			end
-		end
-	end
-	if #lines < max_lines and node.summary and node.summary ~= "" then
-		lines[#lines + 1] = "summary: " .. tostring(node.summary)
-	end
-	for _, item in ipairs(node.evidence or {}) do
-		if #lines >= max_lines then break end
-		lines[#lines + 1] = "evidence: " .. tostring(item)
-	end
-	if #lines < max_lines then
-		for _, child in ipairs(node.children or {}) do
-			lines[#lines + 1] = status_glyph(effective_status(child)) .. " " .. node_title(child)
-			if #lines >= max_lines then break end
-		end
-	end
-	for i, line in ipairs(lines) do
-		lines[i] = truncate_text(line, width)
-	end
-	return lines
-end
 
 local function write_live_tree_line(text)
 	if live_tree_buffer then
@@ -1200,66 +1098,6 @@ local function render_split_live_tree(root, label)
 	return written
 end
 
-local function collect_tree_counts(node, counts)
-	counts = counts or {
-		files = 0,
-		checks = 0,
-		errors = 0,
-		cancelled = 0,
-		done_steps = 0,
-		total_steps = 0,
-	}
-	if not node then
-		return counts
-	end
-	local display_status = effective_status(node)
-	if display_status == "error" then
-		counts.errors = counts.errors + 1
-	elseif display_status == "cancelled" then
-		counts.cancelled = counts.cancelled + 1
-	end
-	if node.kind == "changes" then
-		local files = node.meta and node.meta.files
-		counts.files = counts.files + (type(files) == "table" and #files or tonumber(node.meta and node.meta.total) or 0)
-	elseif node.kind == "verify" then
-		counts.checks = counts.checks + (tonumber(node.meta and node.meta.total) or 0)
-	elseif node.kind == "plan_step" then
-		counts.total_steps = counts.total_steps + 1
-		if display_status == "ok" then
-			counts.done_steps = counts.done_steps + 1
-		end
-	end
-	for _, child in ipairs(node.children or {}) do
-		collect_tree_counts(child, counts)
-	end
-	return counts
-end
-
-local function render_compact_live_tree(root, label)
-	local width = terminal_size()
-	local intent = first_child(root, "intent")
-	local title = intent and node_summary(intent) or node_title(root)
-	local counts = collect_tree_counts(root)
-	local parts = {}
-	if counts.total_steps > 0 then
-		parts[#parts + 1] = tostring(counts.done_steps) .. "/" .. tostring(counts.total_steps) .. " steps"
-	end
-	if counts.files > 0 then
-		parts[#parts + 1] = tostring(counts.files) .. " file" .. (counts.files == 1 and "" or "s") .. " changed"
-	end
-	if counts.checks > 0 then
-		parts[#parts + 1] = tostring(counts.checks) .. " check" .. (counts.checks == 1 and "" or "s")
-	end
-	if counts.errors > 0 then
-		parts[#parts + 1] = tostring(counts.errors) .. " error" .. (counts.errors == 1 and "" or "s")
-	end
-	if counts.cancelled > 0 then
-		parts[#parts + 1] = tostring(counts.cancelled) .. " cancelled"
-	end
-	local suffix = #parts > 0 and ("  " .. table.concat(parts, " · ")) or ""
-	local line = status_glyph(effective_status(root)) .. " " .. title .. suffix
-	return write_live_tree_line("  " .. color("magenta", "▧") .. " " .. color("magenta", pad_right(label, 10)) .. color("dim", truncate_text(line, width - 18)))
-end
 
 function ui.live_ast(state, opts)
 	opts = opts or {}
@@ -1806,7 +1644,7 @@ local function note_tool_batch_event(event)
 	end
 end
 
-local function status_glyph(status)
+local function tool_status_glyph(status)
 	if status == "done" then
 		return "●", "green"
 	elseif status == "failed" then
@@ -1842,7 +1680,7 @@ local function grouped_tool_statuses()
 	return grouped, order
 end
 
-function ui.tool_status_summary(phase, opts)
+function ui.tool_status_summary(_phase, opts)
 	opts = opts or {}
 	if #active_tool_statuses == 0 then
 		return ""
@@ -1863,7 +1701,7 @@ function ui.tool_status_summary(phase, opts)
 				glyphs[#glyphs + 1] = color("dim", "+" .. tostring(#statuses - max_glyphs))
 				break
 			end
-			local glyph, glyph_color = status_glyph(status)
+			local glyph, glyph_color = tool_status_glyph(status)
 			glyphs[#glyphs + 1] = color(glyph_color, glyph)
 		end
 		parts[#parts + 1] = color("dim", group .. ": ") .. table.concat(glyphs)
@@ -1908,7 +1746,7 @@ local function frame_status_marks(statuses)
 	local marks = {}
 	local limit = math.min(#statuses, 10)
 	for i = 1, limit do
-		local glyph, glyph_color = status_glyph(statuses[i])
+		local glyph, glyph_color = tool_status_glyph(statuses[i])
 		marks[#marks + 1] = color(glyph_color, glyph)
 	end
 	if #statuses > limit then
@@ -1950,7 +1788,7 @@ local function stack_frame_details(frame, entries, saved_paths)
 	return tostring(count) .. " tool" .. (count == 1 and "" or "s")
 end
 
-local function stack_frames(saved_paths)
+local function stack_frames()
 	local frames = {}
 	local order = {}
 	for _, entry in ipairs(active_tool_statuses) do
@@ -1974,7 +1812,7 @@ local function stack_frames(saved_paths)
 end
 
 local function render_tool_stack(label, saved_paths)
-	local frames, order = stack_frames(saved_paths)
+	local frames, order = stack_frames()
 	if #order == 0 then return false end
 	io.write("  " .. color("dim", "╭─ stack") .. (label and label ~= "" and color("dim", "  " .. label) or "") .. "\n")
 	for _, frame in ipairs(order) do
@@ -2202,7 +2040,6 @@ function ui.tool_summary()
 		end
 		local tools_used = table.concat(unique, ", ")
 		local label = tool_count .. " tool" .. (tool_count == 1 and "" or "s")
-		local ok_count = math.max(0, tool_count - tool_failures - tool_blocked)
 		local outcome
 		if tool_failures == 0 and tool_blocked == 0 then
 			outcome = nil
@@ -2214,7 +2051,7 @@ function ui.tool_summary()
 			outcome = tostring(tool_blocked) .. " blocked, " .. tostring(tool_failures) .. " failed"
 		end
 		local elapsed = tool_batch_started_at and format_elapsed(now_seconds() - tool_batch_started_at) or nil
-		if #active_tool_statuses > 0 then
+		if DEBUG and #active_tool_statuses > 0 then
 			local text = label
 			if outcome then
 				text = text .. "  " .. outcome
@@ -2223,7 +2060,7 @@ function ui.tool_summary()
 				text = text .. "  " .. elapsed
 			end
 			render_tool_stack(text, tool_saved_paths)
-		elseif tool_count > 1 then
+		elseif DEBUG and tool_count > 1 then
 			local text = label
 			if outcome then
 				text = text .. "  " .. outcome

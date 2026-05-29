@@ -142,7 +142,6 @@ end
 
 local function error_headline(value)
 	value = tostring(value or ""):gsub("\r", "")
-	local fallback = nil
 	local function clean(line)
 		return tostring(line or "")
 			:gsub("^lua:%s*", "")
@@ -152,7 +151,6 @@ local function error_headline(value)
 	for line in (value .. "\n"):gmatch("(.-)\n") do
 		local cleaned = line:gsub("^%s+", ""):gsub("%s+$", "")
 		if cleaned ~= "" then
-			fallback = fallback or cleaned
 			local lower = cleaned:lower()
 			if lower:find("not found", 1, true)
 				or lower:find("no such", 1, true)
@@ -164,7 +162,7 @@ local function error_headline(value)
 			end
 		end
 	end
-	return fallback and trim_text(clean(fallback), 96) or nil
+	return nil
 end
 
 local function basename(path)
@@ -224,6 +222,26 @@ local function event_detail(event)
 		return result.summary
 	end
 	return event.name
+end
+
+local function failed_tool_detail(event)
+	local result = event.result or {}
+	local parts = {}
+	if result.summary and result.summary ~= "" then
+		parts[#parts + 1] = tostring(result.summary)
+	end
+	if event.name == "run" or event.name == "shell" then
+		local command = event.args and event.args.command
+		if command and command ~= "" then
+			parts[#parts + 1] = trim_text(tostring(command):gsub("%s+", " "), 96)
+		end
+	else
+		local detail = event_detail(event)
+		if detail and detail ~= "" and detail ~= event.name then
+			parts[#parts + 1] = detail
+		end
+	end
+	return table.concat(parts, "  ")
 end
 
 local function worst_status(statuses)
@@ -517,9 +535,14 @@ function turn_state:tool_event(event)
 				node.meta.last_summary = event.result.summary
 				if event.result.content and event.result.content ~= "" and event.result.content ~= "(no output)" then
 					node.meta.last_output = trim_text(event.result.content, 500)
-					node.meta.last_headline = event.result.is_error
-						and error_headline(event.result.content)
-						or output_headline(event.result.content)
+					if event.result.is_error then
+						node.meta.last_headline = error_headline(event.result.content)
+					else
+						node.meta.last_headline = output_headline(event.result.content)
+					end
+					if event.result.is_error and (not node.meta.last_headline or node.meta.last_headline == "") then
+						node.meta.last_headline = event.result.summary
+					end
 					if event.result.is_error and node.meta.last_headline and node.meta.last_headline ~= "" then
 						node.meta.failed_headline = node.meta.failed_headline or node.meta.last_headline
 					end
@@ -530,6 +553,22 @@ function turn_state:tool_event(event)
 					end
 				end
 		end
+	end
+	if event.phase ~= "start" and event.result and event.result.is_error and frame ~= "plan" then
+		local child = new_node("tool", event.name or "tool", "error", failed_tool_detail(event))
+		child.detail = failed_tool_detail(event)
+		child.meta.tool = event.name
+		child.meta.summary = event.result.summary
+		if event.args and event.args.command then
+			child.meta.command = trim_text(event.args.command, 180)
+		end
+		if event.args and event.args.path then
+			child.meta.path = event.args.path
+		end
+		if event.result.content and event.result.content ~= "" and event.result.content ~= "(no output)" then
+			child.meta.output = trim_text(event.result.content, 500)
+		end
+		node.children[#node.children + 1] = child
 	end
 	add_evidence(node, event_detail(event))
 	if event.name == "update_plan" and event.result and event.result.plan then
@@ -544,10 +583,10 @@ function turn_state:tool_event(event)
 			step.meta.index = index
 			step.meta.raw_status = item.status
 			local declared_status = plan_status(item.status)
-			local status = plan_step_status(step, declared_status, prior_error)
-			step.meta.blocked_by_prior_error = status == "warning" and declared_status == "ok" or nil
-			set_status(step, status, item.step)
-			if status == "error" then
+			local step_status = plan_step_status(step, declared_status, prior_error)
+			step.meta.blocked_by_prior_error = step_status == "warning" and declared_status == "ok" or nil
+			set_status(step, step_status, item.step)
+			if step_status == "error" then
 				prior_error = true
 			end
 			if item.status == "in_progress" then
@@ -558,8 +597,8 @@ function turn_state:tool_event(event)
 		self.active_plan_node = active
 	end
 	local statuses = {}
-	for _, status in ipairs(node.meta.statuses or {}) do
-		statuses[#statuses + 1] = status
+	for _, tool_status in ipairs(node.meta.statuses or {}) do
+		statuses[#statuses + 1] = tool_status
 	end
 	if event.name == "update_plan" and event.result and event.result.plan then
 		for _, step in ipairs(node.children or {}) do

@@ -1184,10 +1184,9 @@ function repl.run(options)
 						spinner_active = false
 					end
 					local final_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text or ""))
-					if not first_token and turn_has_seen_tool_call and result.text ~= "" then
-						-- Tool turns hide assistant text while tools are streaming, so finish
-						-- the work tree first and print the completion text underneath it.
-					elseif not first_token and result.text:sub(-1) ~= "\n" then
+					if not first_token
+						and not (turn_has_seen_tool_call and result.text ~= "")
+						and result.text:sub(-1) ~= "\n" then
 						clear_live_model_progress()
 						clear_live_ast()
 						io.write("\n")

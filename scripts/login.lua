@@ -269,7 +269,7 @@ local function deepseek_login(options)
 	}, "\n")
 end
 
-local function openai_login(options)
+local function openai_login(_options)
 	local script_dir = arg[0]:match("^(.*)/[^/]+$") or "."
 	local auth_script = script_dir .. "/auth.lua"
 	local temp_out = os.tmpname()

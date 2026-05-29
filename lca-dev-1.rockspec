@@ -30,7 +30,6 @@ build = {
 	type = "builtin",
 	modules = {
 		["logo"] = "lua/logo.lua",
-		["agent.async"] = "lua/agent/async.lua",
 		["agent.commands"] = "lua/agent/commands.lua",
 		["agent.compaction"] = "lua/agent/compaction.lua",
 		["agent.config"] = "lua/agent/config.lua",

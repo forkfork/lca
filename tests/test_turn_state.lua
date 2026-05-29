@@ -107,7 +107,8 @@ test("localizes failed verification", function()
 	})
 	local rendered = state:render()
 
-	assert_contains(rendered, 'verify = error("1 check")')
+	assert_contains(rendered, "verify {")
+	assert_contains(rendered, 'return error("1 check")')
 end)
 
 test("ui can render a live ast block", function()
@@ -357,6 +358,38 @@ test("failed verification headline is preserved after later success", function()
 	if output:find("verify smoke ok", 1, true) then
 		error("failed verify rendered later successful headline:\n" .. output)
 	end
+end)
+
+test("failed verification records failed tool leaf", function()
+	local state = turn_state.new({ intent = "commit changes" })
+	state:tool_event({
+		name = "run",
+		args = { command = "git diff --cached --check" },
+		result = { is_error = true, summary = "exit 2", content = "AGENTS.md | 1 +\n" },
+	})
+
+	local snapshot = state:snapshot()
+	local verify = nil
+	for _, child in ipairs(snapshot.children or {}) do
+		if child.kind == "verify" then
+			verify = child
+		end
+	end
+	if not verify then
+		error("missing verify node")
+	end
+	if verify.meta.failed_headline ~= "exit 2" then
+		error("unexpected failed headline: " .. tostring(verify.meta.failed_headline))
+	end
+	if not verify.children or #verify.children ~= 1 then
+		error("missing failed tool leaf")
+	end
+	local tool = verify.children[1]
+	if tool.kind ~= "tool" or tool.status ~= "error" then
+		error("unexpected failed tool leaf")
+	end
+	assert_contains(tool.detail, "exit 2")
+	assert_contains(tool.detail, "git diff --cached --check")
 end)
 
 test("failed run output becomes a cleaned verification headline", function()

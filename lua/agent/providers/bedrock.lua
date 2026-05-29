@@ -217,7 +217,6 @@ local function build_request_body(request)
 		body.system = { { text = request.system_prompt } }
 		if estimate_tokens(request.system_prompt) >= MIN_CACHE_TOKENS and cache_points_used < MAX_CACHE_POINTS then
 			body.system[#body.system + 1] = { cachePoint = { type = "default" } }
-			cache_points_used = cache_points_used + 1
 		end
 	end
 

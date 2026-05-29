@@ -390,7 +390,7 @@ function ws.connect(opts)
 				timings = self.state.timings,
 			}
 		end
-		function conn:close()
+		function conn.close()
 			close_socket(sock)
 			sock = nil
 		end
