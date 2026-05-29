@@ -9,11 +9,11 @@ local activity_cache = {}
 local JOBS_DIR = ".lca/jobs"
 local DEFAULT_OUTPUT_LIMIT = 20000
 local DEFAULT_TAIL_LINES = 200
-local DEFAULT_PRUNE_DAYS = 7
-local DEFAULT_MIN_FINISHED = 20
-local FAILED_TO_START_PRUNE_DAYS = 1
+local DEFAULT_PRUNE_SECONDS = 3600
+local DEFAULT_MIN_FINISHED = 0
 local SECONDS_PER_DAY = 86400
 local FAILED_VISIBLE_SECONDS = 60
+local FINISHED_VISIBLE_SECONDS = 300
 
 local function now_iso()
 	return os.date("!%Y-%m-%dT%H:%M:%SZ")
@@ -130,6 +130,7 @@ local function summarize(job)
 		id = job.id,
 		command = job.command,
 		cwd = job.cwd,
+		store_cwd = job.store_cwd,
 		pid = job.pid,
 		pgid = job.pgid,
 		started_at = job.started_at,
@@ -144,9 +145,11 @@ end
 
 local function upsert_index_job(cwd, job)
 	local index = load_index(cwd)
+	local store_cwd = job.store_cwd or job.cwd
 	local found = false
 	for i, item in ipairs(index.jobs) do
-		if item.id == job.id then
+		local item_store_cwd = item.store_cwd or item.cwd
+		if item.id == job.id and item_store_cwd == store_cwd then
 			index.jobs[i] = summarize(job)
 			found = true
 			break
@@ -175,10 +178,20 @@ local function remove_index_job(cwd, id)
 end
 
 local function resolve_job(cwd, id)
+	local index = load_index(cwd)
+	for _, item in ipairs(index.jobs) do
+		local store_cwd = item.store_cwd
+		if item.id == id and store_cwd and store_cwd ~= cwd then
+			local resolved = jobs.load(store_cwd, id)
+			if resolved then
+				return resolved, store_cwd
+			end
+		end
+	end
+
 	local job = jobs.load(cwd, id)
 	if job then return job, cwd end
 
-	local index = load_index(cwd)
 	for _, item in ipairs(index.jobs) do
 		if item.id == id and item.cwd and item.cwd ~= cwd then
 			local resolved = jobs.load(item.cwd, id)
@@ -460,18 +473,20 @@ function jobs.start(args, context)
 		return nil, "command is required"
 	end
 
-	local base_cwd = (context and context.cwd) or "."
+	local base_cwd = path_util.resolve((context and context.cwd) or ".", ".")
 	local cwd = path_util.resolve(args.cwd or base_cwd, base_cwd)
-	local id, id_err = jobs.allocate_id(cwd)
+	local store_cwd = base_cwd
+	local id, id_err = jobs.allocate_id(store_cwd)
 	if not id then return nil, id_err end
 
-	local dir = job_dir(cwd, id)
+	local dir = job_dir(store_cwd, id)
 	local stdout = dir .. "/stdout.log"
 	local stderr = dir .. "/stderr.log"
 	local job = {
 		id = id,
 		command = args.command,
 		cwd = cwd,
+		store_cwd = store_cwd,
 		pid = nil,
 		pgid = nil,
 		started_at = now_iso(),
@@ -484,12 +499,12 @@ function jobs.start(args, context)
 		stderr = stderr,
 	}
 
-	local ok, err = jobs.save(cwd, job)
+	local ok, err = jobs.save(store_cwd, job)
 	if not ok then return nil, err end
 	write_file(stdout, "")
 	write_file(stderr, "")
 
-	local supervisor_code = "package.path=" .. json.string(supervisor_package_path()) .. ";require('agent.job_supervisor').main({" .. json.string(cwd) .. "," .. json.string(id) .. "})"
+	local supervisor_code = "package.path=" .. json.string(supervisor_package_path()) .. ";require('agent.job_supervisor').main({" .. json.string(store_cwd) .. "," .. json.string(id) .. "})"
 	local lua = lua_command()
 	local env = {}
 	for name, value in pairs(lua.env or {}) do
@@ -511,11 +526,11 @@ function jobs.start(args, context)
 		return nil, "failed to start supervisor: " .. tostring(pid_or_err)
 	end
 
-	local current = jobs.load(cwd, id) or job
+	local current = jobs.load(store_cwd, id) or job
 	current.supervisor_pid = pid_or_err
-	jobs.save(cwd, current)
+	jobs.save(store_cwd, current)
 	if cwd ~= base_cwd then
-		upsert_index_job(base_cwd, current)
+		upsert_index_job(cwd, current)
 	end
 	handle:unref()
 	return job
@@ -567,12 +582,10 @@ function jobs.visible(cwd, opts)
 		if job.status == "running" and job.alive then
 			visible[#visible + 1] = job
 		elseif not has_running and is_finished_status(job.status) then
-			if job.status == "failed_to_start" then
-				local t = parse_iso(job.finished_at) or parse_iso(job.started_at) or now
-				if now - t <= FAILED_VISIBLE_SECONDS then
-					visible[#visible + 1] = job
-				end
-			else
+			local t = parse_iso(job.finished_at) or parse_iso(job.started_at) or now
+			if job.status == "failed_to_start" and now - t <= FAILED_VISIBLE_SECONDS then
+				visible[#visible + 1] = job
+			elseif job.status ~= "failed_to_start" and now - t <= FINISHED_VISIBLE_SECONDS then
 				visible[#visible + 1] = job
 			end
 		end
@@ -679,9 +692,17 @@ end
 
 function jobs.prune(cwd, opts)
 	opts = opts or {}
-	local prune_days = tonumber(opts.days) or DEFAULT_PRUNE_DAYS
+	local prune_seconds = tonumber(opts.seconds)
+	if not prune_seconds and opts.days ~= nil then
+		prune_seconds = (tonumber(opts.days) or 0) * SECONDS_PER_DAY
+	end
+	prune_seconds = prune_seconds or DEFAULT_PRUNE_SECONDS
 	local min_finished = math.max(0, math.floor(tonumber(opts.min_finished) or DEFAULT_MIN_FINISHED))
-	local failed_days = tonumber(opts.failed_days) or FAILED_TO_START_PRUNE_DAYS
+	local failed_seconds = tonumber(opts.failed_seconds)
+	if not failed_seconds and opts.failed_days ~= nil then
+		failed_seconds = (tonumber(opts.failed_days) or 0) * SECONDS_PER_DAY
+	end
+	failed_seconds = failed_seconds or prune_seconds
 	local now = opts.now or os.time()
 
 	local finished = {}
@@ -702,9 +723,9 @@ function jobs.prune(cwd, opts)
 	local pruned = {}
 	for _, job in ipairs(finished) do
 		kept_finished = kept_finished + 1
-		local age_days = (now - (job._finished_at_epoch or 0)) / SECONDS_PER_DAY
-		local threshold = job.status == "failed_to_start" and failed_days or prune_days
-		if kept_finished > min_finished and age_days > threshold then
+		local age_seconds = now - (job._finished_at_epoch or 0)
+		local threshold = job.status == "failed_to_start" and failed_seconds or prune_seconds
+		if kept_finished > min_finished and age_seconds > threshold then
 			local ok = jobs.remove(cwd, job.id, { force = false })
 			if ok then
 				pruned[#pruned + 1] = job.id

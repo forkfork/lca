@@ -16,16 +16,15 @@ local TOTAL_TIMEOUT_SEC = 600
 local POST_TOOL_THRESHOLD = 800
 local MAX_OUTPUT_TEXT_CHARS = 200000
 local MAX_SSE_LINE_BYTES = 262144
-local PROMPT_CACHE_KEY_OVERRIDE = os.getenv("LCA_CODEX_PROMPT_CACHE_KEY")
-local DEFAULT_SERVICE_TIER = os.getenv("LCA_CODEX_DEFAULT_SERVICE_TIER") or "priority"
-local DUMP_REQUEST_DIR = os.getenv("LCA_CODEX_DUMP_REQUEST_DIR")
-local LOG_RAW_USAGE = os.getenv("LCA_CODEX_LOG_RAW_USAGE") == "1"
-local WEBSOCKET_ENABLED = os.getenv("LCA_CODEX_WEBSOCKET") ~= "0"
-	and os.getenv("LCA_CODEX_DISABLE_WEBSOCKET") ~= "1"
-local WEBSOCKET_UPGRADE_TIMEOUT_SEC = tonumber(os.getenv("LCA_CODEX_WEBSOCKET_UPGRADE_TIMEOUT") or "") or 5
-local WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC = tonumber(os.getenv("LCA_CODEX_WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE") or "") or 8
-local WEBSOCKET_CONNECT_ATTEMPTS = tonumber(os.getenv("LCA_CODEX_WEBSOCKET_CONNECT_ATTEMPTS") or "") or 3
-local WEBSOCKET_REUSE = os.getenv("LCA_CODEX_WEBSOCKET_REUSE") ~= "0"
+local PROMPT_CACHE_KEY_OVERRIDE = nil
+local DEFAULT_SERVICE_TIER = "priority"
+local DUMP_REQUEST_DIR = nil
+local LOG_RAW_USAGE = false
+local WEBSOCKET_ENABLED = true
+local WEBSOCKET_UPGRADE_TIMEOUT_SEC = 5
+local WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC = 8
+local WEBSOCKET_CONNECT_ATTEMPTS = 3
+local WEBSOCKET_REUSE = true
 
 local CLOSE_TOOL_CALL = "</tool_call>"
 local CLOSE_TOOL_CALL_LEN = #CLOSE_TOOL_CALL
@@ -654,6 +653,58 @@ local function canonical_tool_text(text)
 	return text
 end
 
+local function log_sample(text, limit)
+	text = tostring(text or "")
+	limit = tonumber(limit) or 900
+	text = text:gsub("\\", "\\\\"):gsub("\r", "\\r"):gsub("\n", "\\n")
+	if #text > limit then
+		return text:sub(1, limit) .. "...(+" .. tostring(#text - limit) .. " chars)"
+	end
+	return text
+end
+
+local function tool_call_signature(call)
+	local args = call and call.args or {}
+	local target = args.path or args.command or args.id or args.url
+	if target and tostring(target) ~= "" then
+		return tostring(call.name or "?") .. "(" .. tostring(target):gsub("%s+", " ") .. ")"
+	end
+	return tostring(call and call.name or "?")
+end
+
+local function tool_call_signatures(text)
+	local ok, protocol = pcall(require, "agent.tool_protocol")
+	if not ok or not protocol.extract_all_tool_calls then
+		return "unavailable"
+	end
+	local calls = protocol.extract_all_tool_calls(text or "")
+	local parts = {}
+	local limit = math.min(#calls, 12)
+	for i = 1, limit do
+		parts[#parts + 1] = tool_call_signature(calls[i])
+	end
+	if #calls > limit then
+		parts[#parts + 1] = "+" .. tostring(#calls - limit) .. " more"
+	end
+	return tostring(#calls) .. " call" .. (#calls == 1 and "" or "s") .. ": " .. table.concat(parts, ", ")
+end
+
+local function canonical_tool_debug_summary(raw, canonical)
+	return string.format(
+		"raw_chars=%d canonical_chars=%d raw_calls=\"%s\" canonical_calls=\"%s\" raw_sample=\"%s\" canonical_sample=\"%s\"",
+		#tostring(raw or ""),
+		#tostring(canonical or ""),
+		tool_call_signatures(raw),
+		tool_call_signatures(canonical),
+		log_sample(raw, 900),
+		log_sample(canonical, 900)
+	)
+end
+
+local function log_canonical_tool_change(prefix, raw, canonical)
+	debug_log("%s %s", prefix, canonical_tool_debug_summary(raw, canonical))
+end
+
 local function complete_tool_calls_prefix(text)
 	text = tostring(text or "")
 	local parts = {}
@@ -880,6 +931,7 @@ local function do_complete_websocket(request, credentials, body, on_token)
 				return request.cancelled and request.cancelled() or cancel_requested()
 			end,
 			headers = codex_websocket_headers(credentials, request),
+			on_wait = request.on_wait,
 		}
 	end
 
@@ -926,6 +978,10 @@ local function do_complete_websocket(request, credentials, body, on_token)
 		if ok then
 			if reused then
 				result.websocket_reused = true
+			end
+			if cutoff or abort_reason then
+				close_websocket_connection(key)
+				result.websocket_closed_after_early_return = true
 			end
 			return result
 		end
@@ -992,10 +1048,7 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	if cutoff or tool_call_seen then
 		local canonical = canonical_tool_text(result.text)
 		if canonical ~= result.text then
-			debug_log("[codex] websocket canonicalized tool response chars=%d->%d",
-				#result.text,
-				#canonical
-			)
+			log_canonical_tool_change("[codex] websocket canonicalized tool response", result.text, canonical)
 			result.text = canonical
 		end
 	end
@@ -1110,10 +1163,7 @@ local function do_complete(request, credentials, body, on_token)
 	if cutoff or tool_call_seen then
 		local canonical = canonical_tool_text(result.text)
 		if canonical ~= result.text then
-			debug_log("[codex] canonicalized tool response chars=%d->%d",
-				#result.text,
-				#canonical
-			)
+			log_canonical_tool_change("[codex] canonicalized tool response", result.text, canonical)
 			result.text = canonical
 		end
 	end
@@ -1296,6 +1346,7 @@ end
 codex._request_body = request_body
 codex._input_json = input_json
 codex._canonical_tool_text = canonical_tool_text
+codex._canonical_tool_debug_summary = canonical_tool_debug_summary
 codex._complete_tool_calls_prefix = complete_tool_calls_prefix
 codex._salvage_partial_tool_response = salvage_partial_tool_response
 codex._post_tool_tail_kind = post_tool_tail_kind

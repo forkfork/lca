@@ -21,10 +21,10 @@ local TOOL_PROTOCOL_PROMPT = [[
 - After </tool_call>, stop immediately. Do not explain what you are doing until tool results are returned.
 ]]
 
-local FIRST_BYTE_TIMEOUT_SEC = tonumber(os.getenv("LCA_DEEPSEEK_FIRST_BYTE_TIMEOUT") or "") or 45
-local IDLE_TIMEOUT_SEC = tonumber(os.getenv("LCA_DEEPSEEK_IDLE_TIMEOUT") or "") or 60
-local TOTAL_TIMEOUT_SEC = tonumber(os.getenv("LCA_DEEPSEEK_TOTAL_TIMEOUT") or "") or 600
-local MAX_SSE_LINE_BYTES = tonumber(os.getenv("LCA_DEEPSEEK_MAX_SSE_LINE_BYTES") or "") or 262144
+local FIRST_BYTE_TIMEOUT_SEC = 45
+local IDLE_TIMEOUT_SEC = 60
+local TOTAL_TIMEOUT_SEC = 600
+local MAX_SSE_LINE_BYTES = 262144
 
 local function debug_log(fmt, ...)
 	local ok, core = pcall(require, "agent.core")

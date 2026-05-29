@@ -162,6 +162,29 @@ run_test("blocks same-batch read and write of one file", function()
 	assert_lines(path, { "one", "two" })
 end)
 
+run_test("skips missing read before same-batch create write", function()
+	local path = tmp_dir .. "/new-file-after-missing-read.txt"
+	os.remove(path)
+	local events = {}
+
+	local calls = {
+		{ name = "read", args = { path = path } },
+		{ name = "write", args = { path = path, _raw_content = "created\n" } },
+	}
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir }, function(event)
+		events[#events + 1] = event
+	end)
+
+	assert_eq(results[1].is_error, false, "missing read should be non-error context")
+	assert_eq(results[1].summary, "new file pending")
+	assert_eq(results[1].ui_state, "deferred")
+	assert_eq(results[2].is_error, false, "write should create the file")
+	assert_lines(path, { "created" })
+	assert_eq(#events, 2, "write should emit start and result events")
+	assert_eq(events[1].name, "write")
+	assert_eq(events[2].name, "write")
+end)
+
 run_test("rejects overlapping same-file edits in one batch", function()
 	local path = tmp_dir .. "/overlap.txt"
 	write_file(path, "one\ntwo\nthree\n")
@@ -237,6 +260,40 @@ run_test("skips later run after failed edit", function()
 	if f then
 		f:close()
 		error("run executed despite failed edit")
+	end
+end)
+
+run_test("defers same-batch job controls after job_start", function()
+	local events = {}
+	local calls = {
+		{ name = "job_start", args = { command = "sleep 30", timeout = 30000 } },
+		{ name = "job_wait", args = { id = "1", timeout_ms = 100 } },
+		{ name = "job_status", args = { id = "1" } },
+		{ name = "job_stop", args = { id = "1" } },
+	}
+
+	local results = parallel.execute_batch(calls, { cwd = tmp_dir }, function(event)
+		events[#events + 1] = event
+	end)
+
+	assert_eq(results[1].is_error, false, "job_start should succeed")
+	assert_contains(results[1].summary, "started job_")
+	for i = 2, 4 do
+		assert_eq(results[i].is_error, false, "job control should be deferred")
+		assert_eq(results[i].summary, "job id pending")
+		assert_eq(results[i].ui_state, "deferred")
+		assert_contains(results[i].content, "returned job_N id")
+	end
+	assert_eq(#events, 5, "only job_start should emit a start event")
+	assert_eq(events[1].name, "job_start")
+	assert_eq(events[1].phase, "start")
+	for i = 2, 5 do
+		assert_eq(events[i].phase or "result", "result")
+	end
+
+	local id = results[1].job and results[1].job.id
+	if id then
+		require("agent.tools.job_stop").execute({ id = id }, { cwd = tmp_dir })
 	end
 end)
 

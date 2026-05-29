@@ -9,10 +9,11 @@ local json = require("agent.util.json")
 local core = {}
 
 local MAX_TOOL_STEPS = 40
-local INSANITYWOLF_MAX_TOOL_STEPS = tonumber(os.getenv("LCA_INSANITYWOLF_MAX_TOOL_STEPS") or "") or 80
+local INSANITYWOLF_MAX_TOOL_STEPS = 80
 local MAX_BATCH_SIZE = 10
-local SLIM_CONTEXT_TOKENS = tonumber(os.getenv("LCA_SLIM_CONTEXT_TOKENS") or "") or 60000
-local MAX_CONSECUTIVE_READ_ONLY_BATCHES = tonumber(os.getenv("LCA_MAX_READ_ONLY_BATCHES") or "") or 5
+local MAX_READ_ONLY_BATCH_SIZE = 5
+local SLIM_CONTEXT_TOKENS = 60000
+local MAX_CONSECUTIVE_READ_ONLY_BATCHES = 5
 local INSANITYWOLF_TOOL_RESERVE = 8
 
 local DIRECT_RETURN_TOOLS = {
@@ -139,6 +140,16 @@ end
 
 local function clean_assistant_text(text)
 	return protocol.strip_tool_results(protocol.strip_tool_calls(text or ""))
+end
+
+local function is_false_tool_protocol_apology(text)
+	text = tostring(text or ""):lower()
+	return text:find("tool results didn", 1, true) ~= nil
+		or text:find("tool execution results weren", 1, true) ~= nil
+		or text:find("previous tool-call turn was emitted incorrectly", 1, true) ~= nil
+		or text:find("mixed tool calls in a final response", 1, true) ~= nil
+		or text:find("malformed `update_plan`", 1, true) ~= nil
+		or text:find("malformed update_plan", 1, true) ~= nil
 end
 
 local function compact_log_text(text, max_len)
@@ -275,7 +286,7 @@ function core.run_once(prompt, options)
 	return response.text
 end
 
-function core.run_session(session, on_token, on_tool, on_thinking)
+function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 	local provider = get_provider(session.credentials_path)
 	local events = {}
 
@@ -289,6 +300,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 	local last_response_meta = nil
 	local insanitywolf_checkpoints = 0
 	local insanitywolf_budget_warned = false
+	local false_protocol_apology_retries = 0
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
 	local max_tool_steps = session.flow == "insanitywolf" and INSANITYWOLF_MAX_TOOL_STEPS or MAX_TOOL_STEPS
 
@@ -399,6 +411,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			service_tier = session.service_tier,
 			system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 			messages = session.messages,
+			on_wait = on_wait,
 		}, on_token)
 		last_response_meta = response_meta(response)
 
@@ -477,6 +490,26 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		end
 		if #tool_calls == 0 then
 			local text = clean_assistant_text(response.text)
+			if total_tool_executions > 0 and false_protocol_apology_retries < 2 and is_false_tool_protocol_apology(text) then
+				false_protocol_apology_retries = false_protocol_apology_retries + 1
+				log_separator("FALSE TOOL PROTOCOL APOLOGY - CONTINUING")
+				log("[tool-protocol] false_apology_retry=%d text=%s", false_protocol_apology_retries, compact_log_text(text, 1200))
+				session:add_user(table.concat({
+					"Your last response incorrectly claimed the previous tool-call turn was malformed or missing tool results.",
+					"The tool results were available and already processed by the harness.",
+					"Do not apologize for tool protocol. Continue from the actual tool results and either make the next required tool call or give the final user-facing summary.",
+				}, "\n"))
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "ignored false tool protocol apology",
+					})
+				end
+				goto continue_session_loop
+			end
 			if session.record_usage then
 				session:record_usage(response._usage, #session.messages)
 			end
@@ -500,22 +533,29 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			end
 		end
 
+		local raw_read_only_batch = batch_is_read_only(tool_calls)
+		local effective_batch_cap = raw_read_only_batch and MAX_READ_ONLY_BATCH_SIZE > 0
+			and math.min(MAX_BATCH_SIZE, MAX_READ_ONLY_BATCH_SIZE)
+			or MAX_BATCH_SIZE
+
 		-- Enforce tool budget and per-batch cap
 		local batch = {}
 		local dropped_for_batch_cap = 0
+		local dropped_for_duplicate = 0
 		local seen_tool_calls = {}
 		for i, tc in ipairs(tool_calls) do
 			local key = tool_call_key(tc)
 			if key and seen_tool_calls[key] then
+				dropped_for_duplicate = dropped_for_duplicate + 1
 				log("DUPLICATE TOOL CALL dropped at call %d/%d: %s", i, #tool_calls, tc.name)
 				goto continue_tool_call
 			end
 			if key then
 				seen_tool_calls[key] = true
 			end
-			if #batch >= MAX_BATCH_SIZE then
+			if #batch >= effective_batch_cap then
 				dropped_for_batch_cap = #tool_calls - i + 1
-				log("BATCH CAP reached (%d), dropping remaining %d calls", MAX_BATCH_SIZE, dropped_for_batch_cap)
+				log("BATCH CAP reached (%d), dropping remaining %d calls", effective_batch_cap, dropped_for_batch_cap)
 				break
 			end
 			total_tool_executions = total_tool_executions + 1
@@ -525,6 +565,22 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 			end
 			batch[#batch + 1] = tc
 			::continue_tool_call::
+		end
+		if dropped_for_duplicate >= 2 or (dropped_for_duplicate > 0 and dropped_for_duplicate >= math.ceil(#tool_calls / 2)) then
+			session:add_user(table.concat({
+				"Duplicate tool-call guard: you repeated " .. tostring(dropped_for_duplicate) .. " identical tool call" .. (dropped_for_duplicate == 1 and "" or "s") .. " in the previous response.",
+				"Only unique calls were executed.",
+				"Continue from the executed tool results. Do not repeat identical tool calls unless a prior result explicitly requires a retry.",
+			}, "\n"))
+			if on_thinking then
+				on_thinking({
+					step = step,
+					messages = #session.messages,
+					tools = #batch,
+					total_tools = total_tool_executions,
+					status = "duplicate tool calls dropped  " .. tostring(dropped_for_duplicate),
+				})
+			end
 		end
 		local read_only_batch = batch_is_read_only(batch)
 		if read_only_batch then
@@ -627,14 +683,23 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				end
 			end
 			if dropped_for_batch_cap > 0 then
-				session:add_user("Batch cap reached: only the first " .. tostring(MAX_BATCH_SIZE) .. " tool calls ran; " .. tostring(dropped_for_batch_cap) .. " later calls were deferred. Continue with at most " .. tostring(MAX_BATCH_SIZE) .. " tool calls in the next batch.")
+				local cap_message
+				if raw_read_only_batch and effective_batch_cap < MAX_BATCH_SIZE then
+					cap_message = table.concat({
+						"Read-only batch cap reached: only the first " .. tostring(effective_batch_cap) .. " inspection calls ran; " .. tostring(dropped_for_batch_cap) .. " later calls were deferred.",
+						"Stop broad workspace inventory. Use the context already gathered and make the next concrete edit/write/run action, or explain the specific blocker.",
+					}, "\n")
+				else
+					cap_message = "Batch cap reached: only the first " .. tostring(effective_batch_cap) .. " tool calls ran; " .. tostring(dropped_for_batch_cap) .. " later calls were deferred. Continue with at most " .. tostring(effective_batch_cap) .. " tool calls in the next batch."
+				end
+				session:add_user(cap_message)
 				if on_thinking then
 					on_thinking({
 						step = step,
 						messages = #session.messages,
 						tools = last_batch_tool_executions,
 						total_tools = total_tool_executions,
-						status = "batch cap deferred  " .. tostring(dropped_for_batch_cap) .. " tools",
+						status = (raw_read_only_batch and effective_batch_cap < MAX_BATCH_SIZE and "read-only batch cap deferred  " or "batch cap deferred  ") .. tostring(dropped_for_batch_cap) .. " tools",
 					})
 				end
 			end
@@ -754,6 +819,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 				})
 			end
 		end
+		::continue_session_loop::
 	end
 
 	log_separator("TOOL BUDGET EXHAUSTED")
@@ -774,6 +840,7 @@ function core.run_session(session, on_token, on_tool, on_thinking)
 		service_tier = session.service_tier,
 		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 		messages = session.messages,
+		on_wait = on_wait,
 	}, on_token)
 	last_response_meta = response_meta(response)
 	local text = clean_assistant_text(response.text)

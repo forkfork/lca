@@ -4,11 +4,11 @@ local uv = require("luv")
 local supervisor = {}
 
 local function save(job)
-	jobs.save(job.cwd, job)
+	jobs.save(job.store_cwd or job.cwd, job)
 end
 
 local function finish(job, status, code)
-	local current = jobs.load(job.cwd, job.id)
+	local current = jobs.load(job.store_cwd or job.cwd, job.id)
 	if current and current.status == "stopped" then
 		current.exit_code = code
 		current.finished_at = current.finished_at or jobs.now_iso()

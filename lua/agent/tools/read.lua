@@ -3,9 +3,9 @@ local path = require("agent.util.path")
 
 local read = {}
 
-local DEFAULT_LIMIT = tonumber(os.getenv("LCA_READ_DEFAULT_LIMIT") or "") or 160
-local MAX_LIMIT = tonumber(os.getenv("LCA_READ_MAX_LIMIT") or "") or 300
-local MAX_BYTES = tonumber(os.getenv("LCA_READ_MAX_BYTES") or "") or 12000
+local DEFAULT_LIMIT = 160
+local MAX_LIMIT = 300
+local MAX_BYTES = 12000
 
 local function split_lines(text)
 	local lines = {}

@@ -68,6 +68,29 @@ test("canonical tool text keeps multiple complete tool calls", function()
 	assert(canonical:find('"path":"README.md"', 1, true), "missing second call")
 end)
 
+test("canonical debug summary records raw and canonical tool signatures", function()
+	local raw = table.concat({
+		'<tool_call name="ls">',
+		'{"path":"/tmp/project"}',
+		"</tool_call>",
+		'<tool_call name="ls">',
+		'{"path":"/tmp/project"}',
+		"</tool_call>",
+		"Trailing prose",
+	}, "\n")
+	local canonical = codex._canonical_tool_text(raw)
+	local summary = codex._canonical_tool_debug_summary(raw, canonical)
+	if not summary:find('raw_calls="2 calls: ls%(/tmp/project%), ls%(/tmp/project%)"') then
+		error("raw duplicate signatures missing from summary: " .. summary)
+	end
+	if not summary:find('canonical_calls="2 calls: ls%(/tmp/project%), ls%(/tmp/project%)"') then
+		error("canonical duplicate signatures missing from summary: " .. summary)
+	end
+	if not summary:find('raw_sample="', 1, true) or not summary:find('canonical_sample="', 1, true) then
+		error("summary should include bounded raw and canonical samples: " .. summary)
+	end
+end)
+
 test("partial salvage keeps only fully closed tool calls", function()
 	local partial = table.concat({
 		'<tool_call name="ls">',

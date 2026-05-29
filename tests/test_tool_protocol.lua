@@ -194,6 +194,28 @@ test("extra close tags and trailing prose after raw edit are ignored", function(
 	end
 end)
 
+test("extra close prose and close after raw write are ignored", function()
+	local text = table.concat({
+		'<tool_call name="write">',
+		'{"path":"Makefile"}',
+		'.PHONY: smoke',
+		'',
+		'smoke:',
+		'\tpython3 -m py_compile app.py',
+		'</tool_call> ',
+		'#undef',
+		'</tool_call>',
+	}, "\n")
+	local calls = protocol.extract_all_tool_calls(text)
+	assert_eq(#calls, 1)
+	assert_eq(calls[1].name, "write")
+	assert_eq(calls[1].args._raw_content, ".PHONY: smoke\n\nsmoke:\n\tpython3 -m py_compile app.py")
+	local ok, err = protocol.validate_tool_calls(calls)
+	if not ok then
+		error("expected malformed trailing close junk to be ignored, got: " .. tostring(err))
+	end
+end)
+
 test("malformed prose after raw write does not poison raw content", function()
 	local text = table.concat({
 		'<tool_call name="write">',

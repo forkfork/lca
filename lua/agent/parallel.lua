@@ -21,6 +21,13 @@ local FILE_READ_TOOLS = {
 	read = true,
 }
 
+local JOB_CONTROL_TOOLS = {
+	job_output = true,
+	job_status = true,
+	job_stop = true,
+	job_wait = true,
+}
+
 local START_EVENT_TOOLS = {
 	edit = true,
 	find = true,
@@ -156,6 +163,24 @@ local function collect_read_targets(other_batch, context)
 	return targets
 end
 
+local function collect_write_targets(other_batch, context)
+	local targets = {}
+	for _, item in ipairs(other_batch) do
+		if item.tc.name == "write" then
+			local target = file_mutation_target(item.tc, context)
+			if target then
+				targets[target] = true
+			end
+		end
+	end
+	return targets
+end
+
+local function path_exists(path)
+	local stat = uv.fs_stat(path)
+	return stat ~= nil
+end
+
 local function has_rg()
 	if cached_has_rg ~= nil then
 		return cached_has_rg
@@ -202,7 +227,7 @@ local function tool_to_command(name, args, context)
 end
 
 local MAX_BYTES = 20000
-local MAX_READ_BATCH_BYTES = tonumber(os.getenv("LCA_READ_BATCH_MAX_BYTES") or "") or 24000
+local MAX_READ_BATCH_BYTES = 24000
 
 local function truncate(output)
 	if #output <= MAX_BYTES then
@@ -325,12 +350,30 @@ local function read_budget_result(max_bytes)
 	}
 end
 
+local function missing_creation_read_result(path)
+	return {
+		is_error = false,
+		ui_state = "deferred",
+		content = path .. " does not exist yet; skipped same-batch read because this batch also creates it with write.",
+		summary = "new file pending",
+	}
+end
+
 local function skipped_run_after_failed_mutation_result()
 	return {
 		is_error = true,
 		ui_state = "deferred",
 		content = "Skipped run because an earlier edit/write in this batch failed. Re-read or fix the failed mutation before running verification.",
 		summary = "skipped after failed mutation",
+	}
+end
+
+local function pending_job_id_result()
+	return {
+		is_error = false,
+		ui_state = "deferred",
+		content = "Skipped same-batch job control because job_start creates the job id at execution time. Use the returned job_N id in the next turn.",
+		summary = "job id pending",
 	}
 end
 
@@ -426,6 +469,18 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	end
 	other_batch = deduped_other_batch
 
+	local write_targets = collect_write_targets(other_batch, context)
+	local runnable_other_batch = {}
+	for _, item in ipairs(other_batch) do
+		local target = file_read_target(item.tc, context)
+		if target and write_targets[target] and not path_exists(target) then
+			results[item.index] = missing_creation_read_result(target)
+		else
+			runnable_other_batch[#runnable_other_batch + 1] = item
+		end
+	end
+	other_batch = runnable_other_batch
+
 	if #shell_batch > 1 then
 		local pending = #shell_batch
 
@@ -467,6 +522,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	local completed_group_targets = {}
 	local read_batch_bytes = 0
 	local mutation_failed = false
+	local pending_job_start = false
 	for _, item in ipairs(other_batch) do
 		-- Check cancellation between sequential tool executions
 		if repl_ok and repl_mod.cancelled then break end
@@ -477,6 +533,8 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		local edit_group = mutation_target and edit_groups[mutation_target]
 		if tc.name == "run" and mutation_failed then
 			result = skipped_run_after_failed_mutation_result()
+		elseif JOB_CONTROL_TOOLS[tc.name] and pending_job_start then
+			result = pending_job_id_result()
 		elseif mutation_target and read_targets[mutation_target] then
 			result = dependent_batch_result(mutation_target)
 		elseif edit_group and not completed_group_targets[mutation_target] and not mutated_targets[mutation_target] then
@@ -520,6 +578,9 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			if mutation_target and result and not result.is_error then
 				mutated_targets[mutation_target] = true
 			end
+		end
+		if tc.name == "job_start" and result and not result.is_error then
+			pending_job_start = true
 		end
 		if (tc.name == "edit" or tc.name == "write") and result and result.is_error then
 			mutation_failed = true

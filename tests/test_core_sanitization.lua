@@ -111,7 +111,13 @@ test("stores only deduped executed tool calls in assistant history", function()
 	-- Expected: the stub provider keeps asking for tools until the budget
 	-- path returns. This test is about recorded history, not final text.
 	local _ = result
-	local assistant_text = session.messages[2] and session.messages[2].text or ""
+	local assistant_text = ""
+	for _, message in ipairs(session.messages) do
+		if message.role == "assistant" then
+			assistant_text = message.text or ""
+			break
+		end
+	end
 	local count = 0
 	for _ in assistant_text:gmatch("<tool_call") do
 		count = count + 1
@@ -125,8 +131,8 @@ test("batch cap is surfaced to next model turn", function()
 	provider_calls = 0
 	local first_response = {}
 	for i = 1, 12 do
-		first_response[#first_response + 1] = '<tool_call name="ls">'
-		first_response[#first_response + 1] = '{"path":"missing-' .. tostring(i) .. '"}'
+		first_response[#first_response + 1] = '<tool_call name="job_stop">'
+		first_response[#first_response + 1] = '{"id":"job-' .. tostring(i) .. '"}'
 		first_response[#first_response + 1] = "</tool_call>"
 	end
 	provider_response = function(request)
@@ -158,6 +164,77 @@ test("batch cap is surfaced to next model turn", function()
 	end
 	if not found then
 		error("missing batch cap steering message")
+	end
+end)
+
+test("duplicate-heavy tool batch is surfaced to next model turn", function()
+	provider_calls = 0
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("Duplicate tool%-call guard", 1, false) then
+				return "done after duplicate guard"
+			end
+		end
+		return table.concat({
+			'<tool_call name="ls">',
+			'{"path":"."}',
+			"</tool_call>",
+			'<tool_call name="ls">',
+			'{"path":"."}',
+			"</tool_call>",
+			'<tool_call name="ls">',
+			'{"path":"."}',
+			"</tool_call>",
+		}, "\n")
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger duplicate batch")
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "done after duplicate guard" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+end)
+
+test("read-only batch cap steers away from broad inventory", function()
+	provider_calls = 0
+	local first_response = {}
+	for i = 1, 12 do
+		first_response[#first_response + 1] = '<tool_call name="ls">'
+		first_response[#first_response + 1] = '{"path":"missing-' .. tostring(i) .. '"}'
+		first_response[#first_response + 1] = "</tool_call>"
+	end
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("Read%-only batch cap reached") then
+				return "done after read-only cap"
+			end
+		end
+		return table.concat(first_response, "\n")
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger too much inventory")
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "done after read-only cap" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	local found = false
+	for _, message in ipairs(session.messages) do
+		local text = tostring(message.text or "")
+		if text:find("only the first 5 inspection calls ran", 1, true)
+			and text:find("Stop broad workspace inventory", 1, true)
+		then
+			found = true
+			break
+		end
+	end
+	if not found then
+		error("missing read-only batch cap steering message")
 	end
 end)
 
@@ -465,6 +542,41 @@ test("cancel after partial salvage preserves recovered tool metadata", function(
 	end
 	if result.text:find('<tool_call name="ls">', 1, true) == nil then
 		error("expected salvaged tool text to be preserved")
+	end
+end)
+
+test("false tool protocol apology is ignored after tool results", function()
+	provider_calls = 0
+	provider_response = function()
+		if provider_calls == 1 then
+			return table.concat({
+				'<tool_call name="run">',
+				'{"command":"printf ok","timeout":120000}',
+				"</tool_call>",
+			}, "\n")
+		elseif provider_calls == 2 then
+			return "I’m sorry, but I can’t continue because the previous tool-call turn was emitted incorrectly: it mixed tool calls in a final response and used malformed `update_plan` arguments."
+		end
+		return "Done after retry."
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger false apology")
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "Done after retry." then
+		error("expected false apology to be retried, got: " .. tostring(result.text))
+	end
+	local found_correction = false
+	for _, message in ipairs(session.messages) do
+		if message.role == "user" and tostring(message.text or ""):find("incorrectly claimed", 1, true) then
+			found_correction = true
+			break
+		end
+	end
+	if not found_correction then
+		error("missing correction message after false apology")
 	end
 end)
 

@@ -1,6 +1,6 @@
 local ui = {}
 
-local DEBUG = os.getenv("LCA_DEBUG") == "1"
+local DEBUG = false
 
 local colors = {
 	reset = "\27[0m",
@@ -632,6 +632,14 @@ end
 
 local live_ast_lines = 0
 local live_tree_buffer = nil
+local live_tree_last_activity = 0
+local live_tree_started_at = uv.hrtime() / 1e9
+local LIVE_TREE_STALL_SECONDS = 15
+local LIVE_STREAM_PREVIEW_TTL_SECONDS = 0.9
+local LIVE_STREAM_PREVIEW_TAIL = 180
+local live_stream_preview = nil
+local live_stream_preview_at = 0
+local live_stream_preview_bytes = 0
 
 function ui.clear_live_ast()
 	if live_ast_lines <= 0 then
@@ -643,6 +651,39 @@ function ui.clear_live_ast()
 	end
 	live_ast_lines = 0
 	io.flush()
+end
+
+local function normalize_stream_preview(text)
+	text = tostring(text or ""):gsub("\r", " "):gsub("\n", " "):gsub("%s+", " ")
+	text = text:gsub("^%s+", ""):gsub("%s+$", "")
+	if text:find("<tool_call", 1, true) or text:find("</tool_call>", 1, true) then
+		return ""
+	end
+	return text
+end
+
+function ui.live_stream_preview(text, bytes)
+	text = normalize_stream_preview(text)
+	if text == "" then
+		return
+	end
+	if live_stream_preview and live_stream_preview ~= "" then
+		live_stream_preview = live_stream_preview .. " " .. text
+	else
+		live_stream_preview = text
+	end
+	if #live_stream_preview > LIVE_STREAM_PREVIEW_TAIL then
+		live_stream_preview = live_stream_preview:sub(#live_stream_preview - LIVE_STREAM_PREVIEW_TAIL + 1)
+	end
+	live_stream_preview_at = uv.hrtime() / 1e9
+	live_stream_preview_bytes = tonumber(bytes) or live_stream_preview_bytes
+	ui.note_live_tree_activity()
+end
+
+function ui.clear_live_stream_preview()
+	live_stream_preview = nil
+	live_stream_preview_at = 0
+	live_stream_preview_bytes = 0
 end
 
 local function terminal_size()
@@ -663,7 +704,8 @@ local function terminal_size()
 end
 
 local function truncate_text(value, width)
-	value = tostring(value or ""):gsub("\t", "    "):gsub("\r", "")
+	value = tostring(value or ""):gsub("\t", "    "):gsub("\r", " "):gsub("\n", " ")
+	value = value:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
 	if width <= 0 then return "" end
 	if visible_len(value) <= width then
 		return value
@@ -688,6 +730,8 @@ local function node_title(node)
 		label = label:gsub("^%d+%.%s*", "")
 	elseif node.kind == "return_value" then
 		label = "final answer"
+	elseif node.kind == "verify" and node.meta and tostring(node.status or "") == "error" and node.meta.failed_headline then
+		return label .. "  " .. tostring(node.meta.failed_headline)
 	elseif node.kind == "verify" and node.meta and node.meta.last_headline then
 		return label .. "  " .. tostring(node.meta.last_headline)
 	end
@@ -762,6 +806,59 @@ local function is_activeish(node)
 	return status == "running" or status == "streaming" or status == "error" or status == "cancelled"
 end
 
+function ui.note_live_tree_activity()
+	live_tree_last_activity = uv.hrtime() / 1e9
+end
+
+local function active_tree_color()
+	if live_tree_last_activity > 0 then
+		local stalled = (uv.hrtime() / 1e9) - live_tree_last_activity
+		if stalled >= LIVE_TREE_STALL_SECONDS then
+			return "orange"
+		end
+	end
+	return "green"
+end
+
+local function active_status_glyph()
+	local elapsed = (uv.hrtime() / 1e9) - live_tree_started_at
+	local frame = math.floor(elapsed / 0.12)
+	return ACTIVE_GLYPHS[(frame % #ACTIVE_GLYPHS) + 1] or "◐"
+end
+
+local function compact_bytes(bytes)
+	bytes = tonumber(bytes) or 0
+	if bytes < 1024 then
+		return tostring(bytes) .. "B"
+	end
+	return string.format("%.1fkB", bytes / 1024)
+end
+
+local function live_stream_preview_line(width)
+	if not live_stream_preview or live_stream_preview == "" then
+		return nil
+	end
+	local age = (uv.hrtime() / 1e9) - live_stream_preview_at
+	if age > LIVE_STREAM_PREVIEW_TTL_SECONDS then
+		return nil
+	end
+	local prefix = "≋ " .. compact_bytes(live_stream_preview_bytes) .. "  "
+	local text_width = math.max(0, width - visible_len(prefix) - 2)
+	local preview = truncate_text("..." .. live_stream_preview, text_width)
+	return color(active_tree_color(), prefix) .. color("dim", preview)
+end
+
+local function render_tree_row(prefix, connector, status, title, width)
+	local plain_prefix = tostring(prefix or "") .. tostring(connector or "")
+	local available = math.max(0, width - visible_len(plain_prefix) - 2)
+	status = tostring(status or "")
+	local text = truncate_text(title, available)
+	if status == "running" or status == "streaming" then
+		return color("dim", plain_prefix) .. color(active_tree_color(), active_status_glyph() .. " " .. text)
+	end
+	return color("dim", plain_prefix .. status_glyph(status) .. " " .. text)
+end
+
 local function render_work_tree(node, lines, opts, prefix, is_last)
 	opts = opts or {}
 	lines = lines or {}
@@ -772,7 +869,7 @@ local function render_work_tree(node, lines, opts, prefix, is_last)
 	end
 	local connector = prefix == "" and (opts.force_connector and (is_last and "└─ " or "├─ ") or "") or (is_last and "└─ " or "├─ ")
 	if not opts.omit_root then
-		local line = prefix .. connector .. status_glyph(effective_status(node)) .. " " .. node_title(node)
+		local line = render_tree_row(prefix, connector, effective_status(node), node_title(node), opts.width or 80)
 		lines[#lines + 1] = line
 	end
 	if #lines >= max_lines then
@@ -817,7 +914,7 @@ local function render_work_tree(node, lines, opts, prefix, is_last)
 	end
 	local hidden = #children - #shown
 	if hidden > 0 and #lines < max_lines then
-		lines[#lines + 1] = child_prefix .. "└─ +" .. tostring(hidden) .. " more"
+		lines[#lines + 1] = color("dim", child_prefix .. "└─ +" .. tostring(hidden) .. " more")
 	end
 	return lines
 end
@@ -839,10 +936,14 @@ local function streamed_batch_leaf(batch, opts)
 	local meta = batch.meta or {}
 	local discovered = tonumber(meta.discovered) or 0
 	local closed = tonumber(meta.closed) or 0
+	local deferred = tonumber(meta.deferred) or 0
 	local summary = node_summary(batch)
 	if discovered > 0 then
 		closed = math.min(closed, discovered)
 		summary = tostring(closed) .. "/" .. tostring(discovered)
+	end
+	if deferred > 0 then
+		summary = summary .. " +" .. tostring(deferred) .. " deferred"
 	end
 	if meta.current and tostring(meta.current) ~= "" then
 		local current = tostring(meta.current)
@@ -856,9 +957,9 @@ local function streamed_batch_leaf(batch, opts)
 		local writes = (tonumber(counts.write) or 0) + (tonumber(counts.edit) or 0)
 		local checks = (tonumber(counts.run) or 0) + (tonumber(counts.shell) or 0)
 		local reads = (tonumber(counts.read) or 0) + (tonumber(counts.ls) or 0) + (tonumber(counts.find) or 0) + (tonumber(counts.grep) or 0)
-		if writes > 0 and writes >= checks and writes >= reads then
+		if writes > 0 then
 			label = "writing project files"
-		elseif checks > 0 and checks >= reads then
+		elseif checks > 0 then
 			label = "checking project"
 		elseif reads > 0 then
 			label = "reading workspace"
@@ -878,14 +979,8 @@ local function streamed_batch_leaf(batch, opts)
 	}
 end
 
-local function streamed_batch_spans_plan(batch)
-	local meta = batch and batch.meta or {}
-	local discovered = tonumber(meta.discovered) or 0
-	return discovered >= 4
-end
-
 local function plan_child_with_stream(child, batch)
-	if streamed_batch_spans_plan(batch) or not batch or not child or child.kind ~= "plan_step" or not is_activeish(child) then
+	if not batch or not child or child.kind ~= "plan_step" or not is_activeish(child) then
 		return child
 	end
 	local clone = {}
@@ -902,6 +997,7 @@ end
 
 local function render_root_work_forest(root, plan, max_lines)
 	local lines = {}
+	local width = terminal_size()
 	local synthetic = {
 		kind = "turn",
 		label = "work",
@@ -924,12 +1020,11 @@ local function render_root_work_forest(root, plan, max_lines)
 		local inserted_batch = false
 		for _, child in ipairs(plan.children or {}) do
 			synthetic.children[#synthetic.children + 1] = plan_child_with_stream(child, batch)
-			if not inserted_batch and streamed_batch_spans_plan(batch) and child.kind == "plan_step" and is_activeish(child) then
-				synthetic.children[#synthetic.children + 1] = streamed_batch_leaf(batch)
+			if batch and child.kind == "plan_step" and is_activeish(child) then
 				inserted_batch = true
 			end
 		end
-		if not inserted_batch and streamed_batch_spans_plan(batch) then
+		if not inserted_batch and batch then
 			synthetic.children[#synthetic.children + 1] = streamed_batch_leaf(batch)
 		end
 	else
@@ -939,7 +1034,7 @@ local function render_root_work_forest(root, plan, max_lines)
 			end
 		end
 	end
-	render_work_tree(synthetic, lines, { max_lines = max_lines, omit_root = true }, "", true)
+	render_work_tree(synthetic, lines, { max_lines = max_lines, omit_root = true, width = width - 16 }, "", true)
 	return lines
 end
 
@@ -1095,8 +1190,12 @@ local function render_split_live_tree(root, label)
 	local tree_lines = render_root_work_forest(root, tree_root, max_height - 1)
 	local title = intent and node_summary(intent) or node_title(root)
 	local written = write_live_tree_line("  " .. color("magenta", "▧") .. " " .. color("magenta", pad_right(label, 10)) .. color("dim", truncate_text(title, width - 18)))
+	local preview = live_stream_preview_line(width - 16)
+	if preview then
+		written = written + write_live_tree_line("  " .. color("dim", "┆ " .. pad_right("", 10)) .. preview)
+	end
 	for _, line in ipairs(tree_lines) do
-		written = written + write_live_tree_line("  " .. color("dim", "┆ " .. pad_right("", 10)) .. color("dim", truncate_text(line, width - 16)))
+		written = written + write_live_tree_line("  " .. color("dim", "┆ " .. pad_right("", 10)) .. line)
 	end
 	return written
 end
@@ -1950,6 +2049,39 @@ local function live_ast_suppresses_tool_event(event)
 	return false
 end
 
+function ui.tool_writes_persistent(event)
+	if DEBUG then
+		return true
+	end
+	if not event then
+		return false
+	end
+	if tool_safety_state(event) then
+		return true
+	end
+	if event.result and event.result.is_error then
+		return event.name ~= "run" and event.name ~= "shell"
+	end
+	if live_ast_suppresses_tool_event(event) then
+		return false
+	end
+	if event.phase == "start" then
+		return false
+	end
+	if event.name == "update_plan" and event.result and (event.result.plan or event.result.content) then
+		return true
+	end
+	if event.name == "run" and event.result and event.result.content then
+		local content = tostring(event.result.content)
+		return content ~= "" and content ~= "(no output)"
+	end
+	if event.name == "grep" and event.result and event.result.content then
+		local content = tostring(event.result.content)
+		return content ~= "" and content ~= "(no matches)"
+	end
+	return false
+end
+
 function ui.tool(event)
 		if DEBUG then
 		io.write(color("cyan", "\xe2\x97\x8f " .. event.name))
@@ -2156,7 +2288,7 @@ function ui.status(session)
 	local lines = {
 		"model: " .. session.model,
 		"reasoning: " .. (session.reasoning_effort or "default"),
-		"service tier: " .. (session.service_tier or "default"),
+		"service tier: " .. (session.service_tier or "priority"),
 		"mode: " .. ((session.flow == "insanitywolf") and "insanitywolf" or "normal"),
 		"cwd: " .. session.cwd,
 		"credentials: " .. session.credentials_path,

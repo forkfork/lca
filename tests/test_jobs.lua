@@ -144,7 +144,7 @@ test("job tools resolve jobs started in another cwd", function()
 	}, { cwd = caller_dir })
 	if result.is_error then error(result.content) end
 	local id = extract_id(result)
-	wait_for(app_dir, id, "running", 5)
+	wait_for(caller_dir, id, "running", 5)
 
 	local status = job_status.execute({ id = id }, { cwd = caller_dir })
 	if status.is_error then error(status.content) end
@@ -169,6 +169,49 @@ test("job tools resolve jobs started in another cwd", function()
 	if waited.summary ~= "stopped" then
 		error("wait did not resolve stopped cross-cwd job")
 	end
+end)
+
+test("job ids stay in caller namespace when process cwd differs", function()
+	local caller_dir = tmp_dir .. "/caller-namespace"
+	local app_dir = tmp_dir .. "/app-namespace"
+	os.execute("mkdir -p " .. shell.quote(caller_dir) .. " " .. shell.quote(app_dir))
+
+	local first = job_start.execute({
+		command = "sleep 30",
+		cwd = app_dir,
+	}, { cwd = caller_dir })
+	if first.is_error then error(first.content) end
+	local first_id = extract_id(first)
+	wait_for(caller_dir, first_id, "running", 5)
+
+	local second = job_start.execute({
+		command = "sleep 30",
+		cwd = app_dir,
+	}, { cwd = caller_dir })
+	if second.is_error then error(second.content) end
+	local second_id = extract_id(second)
+	wait_for(caller_dir, second_id, "running", 5)
+
+	if first_id ~= "job_1" or second_id ~= "job_2" then
+		error("expected caller-scoped ids job_1/job_2, got " .. tostring(first_id) .. "/" .. tostring(second_id))
+	end
+
+	local visible = jobs.visible(caller_dir)
+	local seen = {}
+	for _, job in ipairs(visible) do
+		seen[job.id] = true
+	end
+	if not seen[first_id] or not seen[second_id] then
+		error("caller /jobs should show both cross-cwd running jobs")
+	end
+
+	local status_from_app = job_status.execute({ id = second_id, cwd = app_dir }, { cwd = caller_dir })
+	if status_from_app.is_error then
+		error(status_from_app.content)
+	end
+
+	job_stop.execute({ id = first_id }, { cwd = caller_dir })
+	job_stop.execute({ id = second_id }, { cwd = caller_dir })
 end)
 
 test("job tools reject numeric ids as invalid arguments", function()
@@ -280,7 +323,7 @@ end)
 
 test("job prune keeps running and recent finished jobs", function()
 	local now = os.time()
-	local old_time = os.date("!%Y-%m-%dT%H:%M:%SZ", now - (10 * 86400))
+	local old_time = os.date("!%Y-%m-%dT%H:%M:%SZ", now - (2 * 3600))
 	local recent_time = os.date("!%Y-%m-%dT%H:%M:%SZ", now - 60)
 	local running_result = job_start.execute({
 		command = "sleep 30",
@@ -314,7 +357,7 @@ test("job prune keeps running and recent finished jobs", function()
 	jobs.save(tmp_dir, old)
 	jobs.save(tmp_dir, recent)
 
-	local pruned = jobs.prune(tmp_dir, { days = 7, min_finished = 0, now = now })
+	local pruned = jobs.prune(tmp_dir, { now = now })
 	if pruned.count ~= 1 or pruned.pruned[1] ~= "job_old" then
 		error("unexpected prune result")
 	end
@@ -356,6 +399,29 @@ test("job-prune slash command reports cleanup", function()
 	local body = table.concat(seen, "\n")
 	if not body:find("pruned 1 jobs", 1, true) then
 		error("slash prune did not report cleanup")
+	end
+end)
+
+test("job prune accepts explicit day threshold", function()
+	local now = os.time()
+	jobs.save(tmp_dir, {
+		id = "job_days_recent",
+		command = "true",
+		cwd = tmp_dir,
+		started_at = os.date("!%Y-%m-%dT%H:%M:%SZ", now - (2 * 3600)),
+		finished_at = os.date("!%Y-%m-%dT%H:%M:%SZ", now - (2 * 3600)),
+		status = "exited",
+		exit_code = 0,
+		stdout = tmp_dir .. "/.lca/jobs/job_days_recent/stdout.log",
+		stderr = tmp_dir .. "/.lca/jobs/job_days_recent/stderr.log",
+	})
+
+	local pruned = jobs.prune(tmp_dir, { days = 7, min_finished = 0, now = now })
+	if pruned.count ~= 0 then
+		error("explicit days threshold should preserve 2h-old job")
+	end
+	if not jobs.load(tmp_dir, "job_days_recent") then
+		error("job was pruned despite explicit day threshold")
 	end
 end)
 
@@ -461,6 +527,55 @@ test("jobs visible hides finished jobs when running jobs exist", function()
 		error("--all visible jobs did not include finished job")
 	end
 	job_stop.execute({ id = running_id }, { cwd = tmp_dir })
+end)
+
+test("jobs visible hides stale finished jobs by default", function()
+	local now = os.time()
+	jobs.save(tmp_dir, {
+		id = "job_stale_finished",
+		command = "true",
+		cwd = tmp_dir,
+		started_at = os.date("!%Y-%m-%dT%H:%M:%SZ", now - 3600),
+		finished_at = os.date("!%Y-%m-%dT%H:%M:%SZ", now - 3600),
+		status = "exited",
+		exit_code = 0,
+		stdout = tmp_dir .. "/.lca/jobs/job_stale_finished/stdout.log",
+		stderr = tmp_dir .. "/.lca/jobs/job_stale_finished/stderr.log",
+	})
+	jobs.save(tmp_dir, {
+		id = "job_recent_finished",
+		command = "true",
+		cwd = tmp_dir,
+		started_at = os.date("!%Y-%m-%dT%H:%M:%SZ", now - 60),
+		finished_at = os.date("!%Y-%m-%dT%H:%M:%SZ", now - 60),
+		status = "exited",
+		exit_code = 0,
+		stdout = tmp_dir .. "/.lca/jobs/job_recent_finished/stdout.log",
+		stderr = tmp_dir .. "/.lca/jobs/job_recent_finished/stderr.log",
+	})
+
+	local visible = jobs.visible(tmp_dir, { now = now })
+	local saw_stale = false
+	local saw_recent = false
+	for _, job in ipairs(visible) do
+		if job.id == "job_stale_finished" then saw_stale = true end
+		if job.id == "job_recent_finished" then saw_recent = true end
+	end
+	if saw_stale then
+		error("stale finished job should be hidden by default")
+	end
+	if not saw_recent then
+		error("recent finished job should remain briefly visible")
+	end
+
+	local all = jobs.visible(tmp_dir, { all = true, now = now })
+	local all_saw_stale = false
+	for _, job in ipairs(all) do
+		if job.id == "job_stale_finished" then all_saw_stale = true end
+	end
+	if not all_saw_stale then
+		error("--all should include stale finished job")
+	end
 end)
 
 test("jobs visible keeps failed starts briefly only when no jobs run", function()

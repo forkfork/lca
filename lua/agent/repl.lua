@@ -17,7 +17,15 @@ if not logo_ok then logo = nil end
 
 local repl = {}
 local history_path = ".lca-history"
-local AUTO_COMPACT_MIN_NEW_MESSAGES = tonumber(os.getenv("LCA_AUTO_COMPACT_MIN_NEW_MESSAGES") or "") or 10
+local AUTO_COMPACT_MIN_NEW_MESSAGES = 10
+local STREAMED_TOOL_DISPLAY_CAP = 10
+local STREAMED_READ_ONLY_TOOL_DISPLAY_CAP = 5
+local STREAMED_READ_ONLY_TOOLS = {
+	read = true,
+	ls = true,
+	find = true,
+	grep = true,
+}
 
 -- Cancellation state: set by SIGINT handler, checked by core loop
 repl.cancelled = false
@@ -357,6 +365,10 @@ function repl.run(options)
 				local hidden_tool_target = nil
 				local hidden_tool_last_label = nil
 				local hidden_tool_displayed = false
+				local hidden_visible_bytes = 0
+				local hidden_visible_last_report = 0
+				local hidden_visible_last_preview = 0
+				local hidden_visible_preview_started = false
 				local planned_tool_names = {}
 				local planned_tool_seen = {}
 				local planned_tool_counts = {}
@@ -366,10 +378,19 @@ function repl.run(options)
 				local planned_tool_close_scan_pos = 1
 				local planned_tool_last_open_pos = nil
 				local planned_tool_last_label = nil
+				local planned_tool_deferred_count = 0
+				local planned_tool_read_only_total = 0
+				local planned_tool_seen_non_read_only = false
+				local planned_tool_stream_seen_keys = {}
 				local streamed_plan_scan_pos = 1
 				local streamed_plan_last_key = nil
 				local current_turn_state = turn_state.new({ intent = line })
 				local live_ast_last_render = nil
+				local live_ast_timer = nil
+				local start_live_ast_timer
+				if ui.clear_live_stream_preview then
+					ui.clear_live_stream_preview()
+				end
 
 				local function label_with_current_plan(base)
 					local wolf = session.flow == "insanitywolf" and "🐺 " or ""
@@ -409,6 +430,43 @@ function repl.run(options)
 						live = not (opts and opts.final),
 						final = opts and opts.final or false,
 					})
+					if not (opts and opts.final) then
+						start_live_ast_timer()
+					end
+				end
+
+				local function stop_live_ast_timer()
+					if not live_ast_timer then
+						return
+					end
+					live_ast_timer:stop()
+					if not live_ast_timer:is_closing() then
+						live_ast_timer:close()
+					end
+					live_ast_timer = nil
+				end
+
+				function start_live_ast_timer()
+					if live_ast_timer then
+						return
+					end
+					live_ast_timer = uv.new_timer()
+					live_ast_timer:start(80, 80, function()
+						if not repl.busy then
+							stop_live_ast_timer()
+							return
+						end
+						if tool_header_shown then
+							return
+						end
+						render_live_ast("work", { force = true })
+					end)
+				end
+
+				local function on_wait()
+					if live_ast_timer and not tool_header_shown then
+						render_live_ast("work", { force = true })
+					end
 				end
 
 				local function record_live_ast()
@@ -421,12 +479,16 @@ function repl.run(options)
 					ui.clear_model_progress()
 				end
 
-				local function write_visible(text)
-					if not text or text == "" then return end
-					clear_live_model_progress()
+				local function clear_live_ast()
 					if ui.clear_live_ast then
 						ui.clear_live_ast()
 					end
+				end
+
+				local function write_visible(text)
+					if not text or text == "" then return end
+					clear_live_model_progress()
+					clear_live_ast()
 					io.write(text)
 					io.flush()
 				end
@@ -472,6 +534,9 @@ function repl.run(options)
 					end
 					local closed = planned_tool_closed_count > 0 and (", " .. tostring(planned_tool_closed_count) .. " closed") or ""
 					local label = "receiving tool batch: " .. tostring(planned_tool_total) .. " tool" .. (planned_tool_total == 1 and "" or "s") .. closed
+					if planned_tool_deferred_count > 0 then
+						label = label .. ", +" .. tostring(planned_tool_deferred_count) .. " deferred"
+					end
 					if text ~= "" then
 						label = label .. " · " .. text
 					end
@@ -480,6 +545,18 @@ function repl.run(options)
 						label = label .. " · now " .. current
 					end
 					return label
+				end
+
+				local function planned_stream_duplicate_key(name, start_at)
+					local text = stream_seen:sub(start_at)
+					local target = text:match('"path"%s*:%s*"([^"]+)"')
+						or text:match('"command"%s*:%s*"([^"]+)"')
+						or text:match('"id"%s*:%s*"([^"]+)"')
+						or text:match('"url"%s*:%s*"([^"]+)"')
+					if not target or target == "" then
+						return nil
+					end
+					return tostring(name or "") .. "\0" .. tostring(target)
 				end
 
 				local function normalize_streamed_plan(plan)
@@ -564,18 +641,44 @@ function repl.run(options)
 						local start_at, end_at, name = stream_seen:find('<tool_call%s+name%s*=%s*"([^"]+)"', planned_tool_scan_pos)
 						if not start_at then break end
 						planned_tool_scan_pos = end_at + 1
-						if name and name ~= "" then
-							planned_tool_total = planned_tool_total + 1
-							planned_tool_counts[name] = (planned_tool_counts[name] or 0) + 1
-							planned_tool_last_open_pos = start_at
-							if current_turn_state then
-								current_turn_state:stream_tool_open(name)
+						if name and name ~= "" and name ~= "update_plan" then
+							local read_only = STREAMED_READ_ONLY_TOOLS[name] == true
+							if not read_only then
+								planned_tool_seen_non_read_only = true
 							end
-							if not planned_tool_seen[name] then
-								planned_tool_seen[name] = true
-								planned_tool_names[#planned_tool_names + 1] = name
+							local duplicate_key = planned_stream_duplicate_key(name, start_at)
+							if duplicate_key and planned_tool_stream_seen_keys[duplicate_key] then
+								changed = true
+							else
+								local display = planned_tool_total < STREAMED_TOOL_DISPLAY_CAP
+								if read_only and not planned_tool_seen_non_read_only and planned_tool_read_only_total >= STREAMED_READ_ONLY_TOOL_DISPLAY_CAP then
+									display = false
+								end
+								if display then
+									if duplicate_key then
+										planned_tool_stream_seen_keys[duplicate_key] = true
+									end
+									planned_tool_total = planned_tool_total + 1
+									planned_tool_counts[name] = (planned_tool_counts[name] or 0) + 1
+									planned_tool_last_open_pos = start_at
+									if read_only then
+										planned_tool_read_only_total = planned_tool_read_only_total + 1
+									end
+									if current_turn_state then
+										current_turn_state:stream_tool_open(name)
+									end
+									if not planned_tool_seen[name] then
+										planned_tool_seen[name] = true
+										planned_tool_names[#planned_tool_names + 1] = name
+									end
+								else
+									planned_tool_deferred_count = planned_tool_deferred_count + 1
+									if current_turn_state then
+										current_turn_state:stream_tool_deferred(name)
+									end
+								end
+								changed = true
 							end
-							changed = true
 						end
 					end
 					while true do
@@ -690,6 +793,28 @@ function repl.run(options)
 					return name
 				end
 
+				local function sanitize_tool_preview_fragment(text)
+					text = tostring(text or "")
+					text = text:gsub("<tool_call[^>]*>", " ")
+						:gsub("</tool_call>", " ")
+						:gsub('"raw_content"%s*:%s*"', " ")
+						:gsub('"content"%s*:%s*"', " ")
+						:gsub('"command"%s*:%s*"', " ")
+						:gsub('"path"%s*:%s*"', " ")
+						:gsub('[{}%[%],:"]', " ")
+						:gsub("\\n", " ")
+						:gsub("\\t", " ")
+						:gsub("\\r", " ")
+						:gsub("[\0-\8\11\12\14-\31]", " ")
+						:gsub("%s+", " ")
+						:gsub("^%s+", "")
+						:gsub("%s+$", "")
+					if #text > 96 then
+						text = text:sub(#text - 95)
+					end
+					return text
+				end
+
 				local function finish_hidden_tool_progress()
 					if expects_large_tool_args(hidden_tool_name) and hidden_tool_bytes >= 4096 then
 						clear_live_model_progress()
@@ -720,14 +845,44 @@ function repl.run(options)
 						or hidden_tool_bytes - hidden_tool_last_report >= 512
 						if should_report then
 							local progress = label .. " " .. compact_bytes(hidden_tool_bytes)
+							if ui.live_stream_preview then
+								local fragment = sanitize_tool_preview_fragment(delta)
+								local preview = fragment ~= "" and (progress .. " · " .. fragment) or progress
+								ui.live_stream_preview(preview, hidden_tool_bytes)
+							end
 							planned_tool_last_label = planned_tool_label(progress)
 							if current_turn_state then
 								current_turn_state:stream_tool_progress(progress)
 							end
-								render_live_ast("work")
+								render_live_ast("work", { force = true })
 							hidden_tool_last_report = hidden_tool_bytes
 							hidden_tool_last_label = label
 							hidden_tool_displayed = true
+					end
+				end
+
+				local function note_hidden_visible_progress(text)
+					if not text or text == "" then
+						return
+					end
+					if not current_turn_state then
+						write_visible(text)
+						return
+					end
+					hidden_visible_bytes = hidden_visible_bytes + #text
+					if ui.live_stream_preview then
+						ui.live_stream_preview(text, hidden_visible_bytes)
+					end
+					if not hidden_visible_preview_started then
+						hidden_visible_preview_started = true
+						hidden_visible_last_preview = hidden_visible_bytes
+						render_live_ast("work", { force = true })
+					elseif hidden_visible_bytes - hidden_visible_last_preview >= 24 then
+						hidden_visible_last_preview = hidden_visible_bytes
+						render_live_ast("work", { force = true })
+					end
+					if hidden_visible_bytes - hidden_visible_last_report >= 256 then
+						hidden_visible_last_report = hidden_visible_bytes
 					end
 				end
 
@@ -741,6 +896,9 @@ function repl.run(options)
 						first_token = false
 					end
 					token_count = token_count + 1
+					if ui.note_live_tree_activity then
+						ui.note_live_tree_activity()
+					end
 
 					if ui.is_debug() then
 						io.write(text)
@@ -809,7 +967,7 @@ function repl.run(options)
 
 							if first_tag == "tool_call" then
 								if first_pos > 1 then
-									write_visible(stream_buf:sub(1, first_pos - 1))
+									note_hidden_visible_progress(stream_buf:sub(1, first_pos - 1))
 								end
 								has_seen_tool_call = true
 								turn_has_seen_tool_call = true
@@ -824,7 +982,7 @@ function repl.run(options)
 								note_hidden_tool_progress(stream_buf)
 							elseif first_tag == "thinking" then
 								if first_pos > 1 then
-									write_visible(stream_buf:sub(1, first_pos - 1))
+									note_hidden_visible_progress(stream_buf:sub(1, first_pos - 1))
 								end
 								stream_buf = stream_buf:sub(first_pos)
 								in_thinking = true
@@ -853,61 +1011,81 @@ function repl.run(options)
 										is_prefix = true
 									end
 									if is_prefix then
-										write_visible(stream_buf:sub(1, last_lt - 1))
+										note_hidden_visible_progress(stream_buf:sub(1, last_lt - 1))
 										stream_buf = tail
 										break
 									end
 								end
 
 								-- No partial tag — flush everything
-								write_visible(stream_buf)
+								note_hidden_visible_progress(stream_buf)
 								stream_buf = ""
 							end
 						end
 					end
 				end
 
-					local function on_tool(event)
-						if spinner_active then
-							ui.clear_thinking()
-							spinner_active = false
-						end
-						clear_live_model_progress()
-						ui.clear_model_progress()
-						if not tool_header_shown then
-							ui.tool_header()
+				local function on_tool(event)
+					if spinner_active then
+						ui.clear_thinking()
+						spinner_active = false
+					end
+					if ui.note_live_tree_activity then
+						ui.note_live_tree_activity()
+					end
+					clear_live_model_progress()
+					ui.clear_model_progress()
+					local tool_writes_persistent = not ui.tool_writes_persistent or ui.tool_writes_persistent(event)
+					if tool_writes_persistent then
+						clear_live_ast()
+					end
+					if tool_writes_persistent and not tool_header_shown then
+						ui.tool_header()
 						tool_header_shown = true
 					end
-							if current_turn_state then
-								current_turn_state:tool_event(event)
-							end
-							ui.tool(event)
-							render_live_ast("work")
-							if event
-								and (event.name == "run" or event.name == "shell")
-								and event.result
-								and event.result.is_error
-								and ui.live_ast_error_detail then
-								ui.live_ast_error_detail(event)
-							end
-						end
+					if current_turn_state then
+						current_turn_state:tool_event(event)
+					end
+					ui.tool(event)
+					if not tool_writes_persistent then
+						render_live_ast("work", { force = true })
+					end
+					render_live_ast("work")
+					if event
+						and (event.name == "run" or event.name == "shell")
+						and event.result
+						and event.result.is_error
+						and ui.live_ast_error_detail then
+						ui.live_ast_error_detail(event)
+					end
+				end
 
 					local function on_thinking(info)
 						if tool_header_shown then
+							clear_live_ast()
 							ui.tool_summary()
 							tool_header_shown = false
 						end
 						if info and info.status then
+							clear_live_ast()
 							ui.clear_model_progress()
-							ui.model_progress(info.status)
+							if ui.model_progress_live then
+								ui.model_progress_live(info.status)
+							else
+								ui.model_progress(info.status)
+							end
 						end
 					if info and info.checkpoint_summary and ui.checkpoint then
+						clear_live_ast()
 						ui.checkpoint(info.checkpoint_summary, {
 							cycle = info.checkpoint_cycle,
 							tokens = info.checkpoint_tokens,
 							})
-						end
-						render_live_ast("work")
+					end
+					if ui.note_live_tree_activity then
+						ui.note_live_tree_activity()
+					end
+					render_live_ast("work")
 						local tool_count_text = "tool results"
 					if info and info.tools and info.tools >= 4 then
 						tool_count_text = tostring(info.tools) .. " tool results"
@@ -925,6 +1103,13 @@ function repl.run(options)
 					hidden_tool_target = nil
 					hidden_tool_last_label = nil
 					hidden_tool_displayed = false
+					hidden_visible_bytes = 0
+					hidden_visible_last_report = 0
+					hidden_visible_last_preview = 0
+					hidden_visible_preview_started = false
+					if ui.clear_live_stream_preview then
+						ui.clear_live_stream_preview()
+					end
 					planned_tool_names = {}
 					planned_tool_seen = {}
 					planned_tool_counts = {}
@@ -934,20 +1119,28 @@ function repl.run(options)
 					planned_tool_close_scan_pos = 1
 					planned_tool_last_open_pos = nil
 					planned_tool_last_label = nil
+					planned_tool_deferred_count = 0
+					planned_tool_read_only_total = 0
+					planned_tool_seen_non_read_only = false
+					planned_tool_stream_seen_keys = {}
 					streamed_plan_scan_pos = 1
 					streamed_plan_last_key = nil
 				end
 
 				repl.busy = true
 				repl.cancelled = false
+				if ui.note_live_tree_activity then
+					ui.note_live_tree_activity()
+				end
 				local ok, result = pcall(function()
-					return core.run_session(session, on_token, on_tool, on_thinking)
+					return core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 				end)
 				repl.busy = false
+				stop_live_ast_timer()
 
 				-- Flush any held-back partial content from the stream filter
 				if #stream_buf > 0 and not has_seen_tool_call and not turn_has_seen_tool_call and not in_tool_call and not in_thinking then
-					write_visible(stream_buf)
+					note_hidden_visible_progress(stream_buf)
 				end
 				stream_buf = ""
 
@@ -971,6 +1164,9 @@ function repl.run(options)
 							reason,
 							{ salvaged_calls = salvaged }
 						)
+						if ui.clear_live_stream_preview then
+							ui.clear_live_stream_preview()
+						end
 						render_live_ast("work", { force = true, final = true })
 						record_live_ast()
 					end
@@ -987,33 +1183,32 @@ function repl.run(options)
 						ui.clear_thinking()
 						spinner_active = false
 					end
+					local final_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text or ""))
 					if not first_token and turn_has_seen_tool_call and result.text ~= "" then
-						local visible_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text))
-						if visible_text ~= "" then
-							clear_live_model_progress()
-							if ui.clear_live_ast then
-								ui.clear_live_ast()
-							end
-							io.write(visible_text)
-							io.write(visible_text:sub(-1) == "\n" and "" or "\n")
-						end
+						-- Tool turns hide assistant text while tools are streaming, so finish
+						-- the work tree first and print the completion text underneath it.
 					elseif not first_token and result.text:sub(-1) ~= "\n" then
 						clear_live_model_progress()
-						if ui.clear_live_ast then
-							ui.clear_live_ast()
-						end
+						clear_live_ast()
 						io.write("\n")
 					end
 					if tool_header_shown then
+						clear_live_ast()
 						ui.tool_summary()
 					end
 					if current_turn_state then
-						local final_text = protocol.strip_tool_results(protocol.strip_tool_calls(result.text or ""))
 						if final_text ~= "" then
 							current_turn_state:set_return(final_text)
 						end
+						if ui.clear_live_stream_preview then
+							ui.clear_live_stream_preview()
+						end
 						render_live_ast("work", { force = true, final = true })
 						record_live_ast()
+					end
+					if not first_token and not ui.is_debug() and final_text ~= "" then
+						io.write(final_text)
+						io.write(final_text:sub(-1) == "\n" and "" or "\n")
 					end
 					if not first_token then
 						local ttft = first_token_time and (first_token_time - start_time) or elapsed
@@ -1037,6 +1232,9 @@ function repl.run(options)
 					else
 						if current_turn_state then
 							current_turn_state:cancel("cancelled by user")
+							if ui.clear_live_stream_preview then
+								ui.clear_live_stream_preview()
+							end
 							render_live_ast("work", { force = true, final = true })
 							record_live_ast()
 						end

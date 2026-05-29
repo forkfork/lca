@@ -67,14 +67,6 @@ run_test("deepseek family uses documented large context", function()
 	assert_eq(limits.context_window("deepseek-custom"), 1000000)
 end)
 
-run_test("explicit auto compact override wins", function()
-	assert_eq(child_eval("LCA_AUTO_COMPACT_TOKENS=50000", "l.auto_compact_threshold('gpt-5.5')"), "50000")
-	assert_eq(child_eval("LCA_AUTO_COMPACT_TOKENS=0", "l.auto_compact_threshold('gpt-5.5')"), "0")
-end)
-
-run_test("context window override affects threshold", function()
-	assert_eq(child_eval("LCA_CONTEXT_WINDOW=100000 LCA_CONTEXT_RESERVE_TOKENS=10000", "l.auto_compact_threshold('gpt-5.5')"), "90000")
-end)
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")
 io.write(string.format("  %s passed, %s failed\n\n",

@@ -79,6 +79,25 @@ local function ensure_child(node, kind, label)
 	return child
 end
 
+local function normalize_plan_step_key(step)
+	step = tostring(step or "step"):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%s+", " ")
+	return step:lower()
+end
+
+local function ensure_plan_step(node, index, step_text)
+	local key = "plan_step\0" .. normalize_plan_step_key(step_text)
+	local child = node.child_index[key]
+	if not child then
+		child = new_node("plan_step", tostring(index) .. ". " .. tostring(step_text or "step"))
+		node.child_index[key] = child
+		node.children[#node.children + 1] = child
+	else
+		child.label = tostring(index) .. ". " .. tostring(step_text or "step")
+	end
+	sort_children(node)
+	return child
+end
+
 local function set_status(node, status, detail)
 	node.status = status or node.status
 	if detail ~= nil then
@@ -220,6 +239,26 @@ local function worst_status(statuses)
 	return best
 end
 
+local function child_statuses(node)
+	local statuses = {}
+	for _, child in ipairs((node and node.children) or {}) do
+		statuses[#statuses + 1] = child.status
+	end
+	return statuses
+end
+
+local function plan_step_status(step, declared_status, prior_error)
+	local statuses = child_statuses(step)
+	if #statuses > 0 then
+		statuses[#statuses + 1] = declared_status
+		return worst_status(statuses)
+	end
+	if prior_error and declared_status == "ok" then
+		return "warning"
+	end
+	return declared_status
+end
+
 local function summarize_frame(node)
 	local counts = node.meta.counts or {}
 	if node.kind == "changes" then
@@ -251,9 +290,14 @@ local function summarize_frame(node)
 		end
 			local discovered = tonumber(node.meta.discovered) or 0
 			local closed = tonumber(node.meta.closed) or 0
+			local deferred = tonumber(node.meta.deferred) or 0
 			if discovered > 0 then
 				closed = math.min(closed, discovered)
-				return compact_count("tool", discovered) .. ", " .. tostring(closed) .. " closed"
+				local summary = compact_count("tool", discovered) .. ", " .. tostring(closed) .. " closed"
+				if deferred > 0 then
+					summary = summary .. ", +" .. tostring(deferred) .. " deferred"
+				end
+				return summary
 			end
 	end
 	if node.detail then
@@ -396,6 +440,15 @@ function turn_state:stream_tool_progress(detail)
 	return node
 end
 
+function turn_state:stream_tool_deferred(name)
+	local node = ensure_child(self.root, "tool_batch", "tool_batch")
+	node.meta.deferred = (tonumber(node.meta.deferred) or 0) + 1
+	node.meta.deferred_counts = node.meta.deferred_counts or {}
+	node.meta.deferred_counts[name or "tool"] = (tonumber(node.meta.deferred_counts[name or "tool"]) or 0) + 1
+	set_status(node, "streaming", summarize_frame(node))
+	return node
+end
+
 function turn_state:stream_tool_close()
 	local node = ensure_child(self.root, "tool_batch", "tool_batch")
 	local discovered = tonumber(node.meta.discovered) or 0
@@ -467,8 +520,14 @@ function turn_state:tool_event(event)
 					node.meta.last_headline = event.result.is_error
 						and error_headline(event.result.content)
 						or output_headline(event.result.content)
+					if event.result.is_error and node.meta.last_headline and node.meta.last_headline ~= "" then
+						node.meta.failed_headline = node.meta.failed_headline or node.meta.last_headline
+					end
 				elseif event.result.summary and event.result.summary ~= "" then
 					node.meta.last_headline = event.result.summary
+					if event.result.is_error then
+						node.meta.failed_headline = node.meta.failed_headline or event.result.summary
+					end
 				end
 		end
 	end
@@ -476,14 +535,21 @@ function turn_state:tool_event(event)
 	if event.name == "update_plan" and event.result and event.result.plan then
 		local completed = 0
 		local active = nil
+		local prior_error = false
 		for index, item in ipairs(event.result.plan) do
 			if item.status == "completed" then
 				completed = completed + 1
 			end
-			local step = ensure_child(node, "plan_step", tostring(index) .. ". " .. tostring(item.step or "step"))
+			local step = ensure_plan_step(node, index, item.step)
 			step.meta.index = index
 			step.meta.raw_status = item.status
-			set_status(step, plan_status(item.status), item.step)
+			local declared_status = plan_status(item.status)
+			local status = plan_step_status(step, declared_status, prior_error)
+			step.meta.blocked_by_prior_error = status == "warning" and declared_status == "ok" or nil
+			set_status(step, status, item.step)
+			if status == "error" then
+				prior_error = true
+			end
 			if item.status == "in_progress" then
 				active = step
 			end
@@ -491,7 +557,18 @@ function turn_state:tool_event(event)
 		node.detail = tostring(completed) .. "/" .. tostring(#event.result.plan) .. " steps"
 		self.active_plan_node = active
 	end
-	set_status(node, worst_status(node.meta.statuses), summarize_frame(node))
+	local statuses = {}
+	for _, status in ipairs(node.meta.statuses or {}) do
+		statuses[#statuses + 1] = status
+	end
+	if event.name == "update_plan" and event.result and event.result.plan then
+		for _, step in ipairs(node.children or {}) do
+			if step.kind == "plan_step" then
+				statuses[#statuses + 1] = step.status
+			end
+		end
+	end
+	set_status(node, worst_status(statuses), summarize_frame(node))
 	return node
 end
 
@@ -499,7 +576,9 @@ function turn_state:set_return(value, status)
 	local node = ensure_child(self.root, "return_value", "return")
 	set_status(node, status or "ok", value)
 	if node.status == "ok" then
-		set_status(self.root, "ok", value)
+		local statuses = child_statuses(self.root)
+		statuses[#statuses + 1] = node.status
+		set_status(self.root, worst_status(statuses), value)
 	end
 	return node
 end

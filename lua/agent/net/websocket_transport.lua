@@ -2,6 +2,7 @@ local socket = require("socket")
 local ssl = require("ssl")
 
 local ws = {}
+local WEBSOCKET_POLL_SECONDS = 0.08
 
 local function now()
 	return socket.gettime()
@@ -68,12 +69,18 @@ local function close_socket(sock)
 	end
 end
 
-local function read_exact(sock, n, state, phase, timeout_sec, cancelled)
+local function notify_wait(opts, phase)
+	if opts and opts.on_wait then
+		pcall(opts.on_wait, phase)
+	end
+end
+
+local function read_exact(sock, n, state, phase, timeout_sec, opts)
 	local deadline = now() + timeout_sec
 	local chunks = {}
 	local got = 0
 	while got < n do
-		if cancelled and cancelled() then
+		if opts.cancelled and opts.cancelled() then
 			fail("cancelled", phase, phase, state)
 		end
 		local chunk, err, partial = sock:receive(n - got)
@@ -90,6 +97,7 @@ local function read_exact(sock, n, state, phase, timeout_sec, cancelled)
 			if now() >= deadline then
 				fail("timeout", phase, phase, state)
 			end
+			notify_wait(opts, phase)
 		else
 			fail("stream", err or "closed", phase, state)
 		end
@@ -97,11 +105,11 @@ local function read_exact(sock, n, state, phase, timeout_sec, cancelled)
 	return table.concat(chunks)
 end
 
-local function send_all(sock, data, state, phase, timeout_sec, cancelled)
+local function send_all(sock, data, state, phase, timeout_sec, opts)
 	local deadline = now() + timeout_sec
 	local index = 1
 	while index <= #data do
-		if cancelled and cancelled() then
+		if opts.cancelled and opts.cancelled() then
 			fail("cancelled", phase, phase, state)
 		end
 		local sent, err, partial = sock:send(data, index)
@@ -113,6 +121,7 @@ local function send_all(sock, data, state, phase, timeout_sec, cancelled)
 			if now() >= deadline then
 				fail("timeout", phase, phase, state)
 			end
+			notify_wait(opts, phase)
 		else
 			fail("write", err or "send failed", phase, state)
 		end
@@ -175,7 +184,7 @@ local function connect_tls(opts, state)
 	if not ok then
 		fail("tls_handshake", err, "tls", state)
 	end
-	wrapped:settimeout(0.25)
+	wrapped:settimeout(WEBSOCKET_POLL_SECONDS)
 	state.timings.tls = now() - t0
 	return wrapped
 end
@@ -213,7 +222,7 @@ local function websocket_handshake(sock, opts, state)
 		header_lines(headers),
 		"\r\n",
 	}, "\r\n")
-	send_all(sock, request, state, "write", opts.deadlines.write, opts.cancelled)
+	send_all(sock, request, state, "write", opts.deadlines.write, opts)
 
 	local deadline = now() + opts.deadlines.first_byte
 	local response = ""
@@ -237,6 +246,7 @@ local function websocket_handshake(sock, opts, state)
 			if now() >= deadline then
 				fail("timeout", "headers", "headers", state)
 			end
+			notify_wait(opts, "headers")
 		else
 			fail("headers", err or "closed", "headers", state)
 		end
@@ -279,7 +289,7 @@ local function send_text(sock, text, state, opts)
 	local mask = random_bytes(4)
 	local frame = string.char(0x81) .. encode_len(#text) .. mask .. mask_payload(text, mask)
 	local t0 = now()
-	send_all(sock, frame, state, "write", opts.deadlines.write, opts.cancelled)
+	send_all(sock, frame, state, "write", opts.deadlines.write, opts)
 	state.timings.write = (state.timings.write or 0) + (now() - t0)
 end
 
@@ -297,19 +307,19 @@ local function read_u64(bytes)
 end
 
 local function read_frame(sock, state, opts)
-	local head = read_exact(sock, 2, state, "read", opts.deadlines.idle, opts.cancelled)
+	local head = read_exact(sock, 2, state, "read", opts.deadlines.idle, opts)
 	local b1, b2 = head:byte(1, 2)
 	local fin = (b1 & 0x80) ~= 0
 	local opcode = b1 & 0x0f
 	local masked = (b2 & 0x80) ~= 0
 	local len = b2 & 0x7f
 	if len == 126 then
-		len = read_u16(read_exact(sock, 2, state, "read", opts.deadlines.idle, opts.cancelled))
+		len = read_u16(read_exact(sock, 2, state, "read", opts.deadlines.idle, opts))
 	elseif len == 127 then
-		len = read_u64(read_exact(sock, 8, state, "read", opts.deadlines.idle, opts.cancelled))
+		len = read_u64(read_exact(sock, 8, state, "read", opts.deadlines.idle, opts))
 	end
-	local mask = masked and read_exact(sock, 4, state, "read", opts.deadlines.idle, opts.cancelled) or nil
-	local payload = len > 0 and read_exact(sock, len, state, "read", opts.deadlines.idle, opts.cancelled) or ""
+	local mask = masked and read_exact(sock, 4, state, "read", opts.deadlines.idle, opts) or nil
+	local payload = len > 0 and read_exact(sock, len, state, "read", opts.deadlines.idle, opts) or ""
 	if mask then
 		payload = mask_payload(payload, mask)
 	end
@@ -358,7 +368,7 @@ function ws.connect(opts)
 					-- pong, masked as required for client frames
 					local mask = random_bytes(4)
 					local frame = string.char(0x8a) .. encode_len(#payload) .. mask .. mask_payload(payload, mask)
-					send_all(sock, frame, self.state, "write", opts.deadlines.write, opts.cancelled)
+					send_all(sock, frame, self.state, "write", opts.deadlines.write, opts)
 				elseif opcode == 0x1 or opcode == 0x0 then
 					text_parts[#text_parts + 1] = payload
 					if fin then

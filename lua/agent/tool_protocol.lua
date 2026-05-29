@@ -84,6 +84,18 @@ local function find_close_tag_before_boundary(text, after_pos, boundary)
 		return nil
 	end
 	for _, found in ipairs(closes) do
+		local line_start = found
+		while line_start > 1 and text:sub(line_start - 1, line_start - 1) ~= "\n" and text:sub(line_start - 1, line_start - 1) ~= "\r" do
+			line_start = line_start - 1
+		end
+		local line_end = text:find("[\r\n]", found + 12) or (boundary + 1)
+		local line = text:sub(line_start, line_end - 1)
+		local suffix = text:sub(found + 12, boundary - 1)
+		if line:match("^%s*</tool_call>%s*$") and not suffix:find("<tool_call", 1, true) then
+			return found
+		end
+	end
+	for _, found in ipairs(closes) do
 		local suffix = text:sub(found + 12, boundary - 1)
 		if only_extra_close_tags(suffix) or extra_close_tags_then_prose(suffix) then
 			return found

@@ -5,11 +5,11 @@ local protocol = require("agent.tool_protocol")
 local compaction = {}
 
 local KEEP_RECENT_TOKENS = 20000
-local SLIM_KEEP_RECENT_MESSAGES = tonumber(os.getenv("LCA_SLIM_KEEP_RECENT_MESSAGES") or "") or 8
-local SLIM_LARGE_MESSAGE_BYTES = tonumber(os.getenv("LCA_SLIM_LARGE_MESSAGE_BYTES") or "") or 6000
-local SLIM_TARGET_SESSION_TOKENS = tonumber(os.getenv("LCA_SLIM_TARGET_SESSION_TOKENS") or "") or 50000
-local SLIM_TARGET_MESSAGES = tonumber(os.getenv("LCA_SLIM_TARGET_MESSAGES") or "") or 160
-local SLIM_KEEP_READS_PER_PATH = tonumber(os.getenv("LCA_SLIM_KEEP_READS_PER_PATH") or "") or 8
+local SLIM_KEEP_RECENT_MESSAGES = 8
+local SLIM_LARGE_MESSAGE_BYTES = 6000
+local SLIM_TARGET_SESSION_TOKENS = 50000
+local SLIM_TARGET_MESSAGES = 160
+local SLIM_KEEP_READS_PER_PATH = 8
 
 local SUMMARIZATION_SYSTEM_PROMPT = "You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."
 

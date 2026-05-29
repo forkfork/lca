@@ -15,19 +15,7 @@ local MODEL_CONTEXT_WINDOWS = {
 	["deepseek-reasoner"] = 1000000,
 }
 
-local function env_number(name)
-	local value = tonumber(os.getenv(name) or "")
-	if value and value > 0 then
-		return math.floor(value)
-	end
-	return nil
-end
-
 function context_limits.context_window(model)
-	local override = env_number("LCA_CONTEXT_WINDOW")
-	if override then
-		return override
-	end
 	model = tostring(model or "")
 	if MODEL_CONTEXT_WINDOWS[model] then
 		return MODEL_CONTEXT_WINDOWS[model]
@@ -45,15 +33,10 @@ function context_limits.context_window(model)
 end
 
 function context_limits.reserve_tokens()
-	return env_number("LCA_CONTEXT_RESERVE_TOKENS") or DEFAULT_RESERVE_TOKENS
+	return DEFAULT_RESERVE_TOKENS
 end
 
 function context_limits.auto_compact_threshold(model)
-	local raw = os.getenv("LCA_AUTO_COMPACT_TOKENS")
-	local explicit = tonumber(raw or "")
-	if raw ~= nil and explicit then
-		return math.floor(explicit)
-	end
 	return math.max(1, context_limits.context_window(model) - context_limits.reserve_tokens())
 end
 
