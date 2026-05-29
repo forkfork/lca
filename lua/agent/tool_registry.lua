@@ -207,6 +207,8 @@ To delete lines, leave the content empty (nothing after the JSON line):
 
 - Treat a dirty git worktree as user-owned. Do not stage, commit, discard, or rewrite unrelated changes.
 - For commits: inspect status, identify the intended files, stage explicit reviewed paths only, run `git diff --cached --stat` and `git diff --cached --check`, then commit.
+- For a user request that is only "commit", "push", or "commit and push": do not inspect source files, reread diffs, refactor, fix lint, or run tests unless the user explicitly asks or the required git check fails. Use the known intended paths from the current work; if intent is unknown, use `git status --short` and stop with a concise blocker instead of broad exploration.
+- For commit-and-push, do not combine `git commit` and `git push` in one command. Commit first, then run `git push` separately with a longer timeout so a slow network push does not make a successful commit look failed.
 - Do NOT use broad staging (`git add -A`, `git add .`, `git add -u`, `git commit -am`) unless the user explicitly asks to commit every dirty change. Prefer `git add path1 path2`.
 - If `git diff --check` reports whitespace in files outside the intended commit, stop and report it. Do not fix unrelated files just to make a commit pass.
 - Push only after the commit succeeds and the user asked to push.

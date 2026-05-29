@@ -282,6 +282,9 @@ test("tool is advertised with usage guidance", function()
 	assert(prompt:find("env vars", 1, true), "missing config default")
 	assert(prompt:find("health checks", 1, true), "missing HTTP API default")
 	assert(prompt:find("curl%-based smoke tests"), "missing API smoke test default")
+	assert(prompt:find('request that is only "commit"', 1, true), "missing commit-only fast path")
+	assert(prompt:find("do not inspect source files", 1, true), "missing commit exploration guard")
+	assert(prompt:find("do not combine `git commit` and `git push`", 1, true), "missing commit/push split guidance")
 end)
 
 if failed > 0 then

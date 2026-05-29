@@ -689,6 +689,38 @@ test("live tree nests large streamed batch under active plan", function()
 	end
 end)
 
+test("live tree does not duplicate active nodes without a plan", function()
+	local state = turn_state.new({ intent = "commit changes" })
+	state:stream_tool_open("read")
+	state:stream_tool_close()
+	state:tool_event({
+		name = "run",
+		args = { command = "git commit -m test" },
+		result = { is_error = true, summary = "timed out after 120s", content = "Terminated\n" },
+	})
+
+	local old_write = io.write
+	local chunks = {}
+	io.write = function(...)
+		for _, value in ipairs({ ... }) do
+			chunks[#chunks + 1] = tostring(value)
+		end
+	end
+	local ok, err = pcall(function()
+		ui.live_ast(state, { label = "work" })
+	end)
+	io.write = old_write
+	if not ok then
+		error(err)
+	end
+
+	local output = table.concat(chunks)
+	local _, verify_count = output:gsub("verify timed out after 120s", "")
+	if verify_count ~= 1 then
+		error("expected one verify node, got " .. tostring(verify_count) .. "\n" .. output)
+	end
+end)
+
 test("exports compact summary and serializable snapshot", function()
 	local state = turn_state.new({ intent = "create Lua auth API" })
 	state:tool_event({ name = "write", args = { path = "app.lua" }, result = { is_error = false, summary = "written" } })

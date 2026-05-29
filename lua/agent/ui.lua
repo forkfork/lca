@@ -987,13 +987,6 @@ local function render_root_work_forest(root, plan, max_lines)
 		children = {},
 	}
 	local batch = root_tool_batch(root)
-	if not (plan and plan.kind == "plan") then
-		for _, child in ipairs((root and root.children) or {}) do
-			if child.kind ~= "intent" and child.kind ~= "plan" and is_activeish(child) then
-				synthetic.children[#synthetic.children + 1] = child
-			end
-		end
-	end
 	if plan and plan.kind == "plan" then
 		local inserted_batch = false
 		for _, child in ipairs(plan.children or {}) do
