@@ -347,6 +347,54 @@ test("living divider carries the current plan task and rests silently", function
 	assert_contains(app.renderer.previous:plain_line(1), "Make failures heal visibly")
 end)
 
+test("plan intent molts instead of snapping between divider labels", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	state:submit("make the interface feel alive")
+	state:tool_event(start("plan-one", "update_plan", { plan = {
+		{ step = "Shape the living current", status = "in_progress" },
+		{ step = "Verify the organism", status = "pending" },
+	} }))
+	app:render(0.2)
+	assert_contains(app.renderer.previous:plain_line(1), "Shape the living current")
+	state:tool_event(start("plan-two", "update_plan", { plan = {
+		{ step = "Shape the living current", status = "completed" },
+		{ step = "Verify the organism", status = "in_progress" },
+	} }))
+	app:render(0.1)
+	assert_eq(app.divider_previous_label, "◉ Shape the living current")
+	if app.divider_molt_started <= 0 then error("task transition did not start a molt") end
+	local molting = app.renderer.previous:plain_line(1)
+	if not molting:find("·", 1, true) and not molting:find("˙", 1, true) then
+		error("task molt emitted no shed particles")
+	end
+	app:render(1.0)
+	assert_eq(app.divider_previous_label, nil)
+	assert_contains(app.renderer.previous:plain_line(1), "Verify the organism")
+end)
+
+test("typing lowers visual metabolism without slowing event time", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:submit("inspect the renderer")
+	state:tool_event(finish("read", "read", { path = "lua/agent/tui.lua" }, {
+		is_error = false, summary = "400 lines",
+	}))
+	local stream = state.streams[#state.streams]
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(0.1)
+	local age_before, motion_before = stream.age, stream.motion_age
+	app.editor:set("my follow-up")
+	app:render(1.0)
+	if app.motion_scale >= 0.36 then error("typing did not calm the organism") end
+	if math.abs((stream.age - age_before) - 1.0) > 0.0001 then error("typing slowed semantic event time") end
+	if stream.motion_age - motion_before >= 0.4 then error("typing did not slow visual travel") end
+	app.editor:set("")
+	local resumed_before = stream.motion_age
+	app:render(1.0)
+	if app.motion_scale <= 0.94 then error("organism did not wake after typing cleared") end
+	if stream.motion_age - resumed_before <= 0.9 then error("visual travel did not resume") end
+end)
+
 test("unresolved file failures cannot trigger a success celebration", function()
 	local now = 10
 	local state = tui.State.new({ clock = function() return now end })

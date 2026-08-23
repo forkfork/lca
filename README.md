@@ -104,6 +104,11 @@ with a compact real reason;
 actual read and retry events move it through refresh and retry states, and only
 a successful mutation dissolves it into mint. An unresolved file failure never
 receives the successful-completion spark.
+When a plan advances, the previous intent sheds into faint particles while the
+new task assembles from its centre in the boundary. Recovery messages remain
+immediate rather than molting. Typing in the input dock smoothly lowers visual
+motion to a calm metabolic idle and releasing or submitting the text wakes the
+current again; tool timing, event expiry, and execution are never slowed.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

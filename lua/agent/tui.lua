@@ -178,6 +178,7 @@ function State:_stream(text, kind, tool, duration, meta)
 		lane = tool and tool.lane or ((self.stream_sequence - 1) % 6 + 1),
 		direction = self.stream_sequence % 2 == 0 and -1 or 1,
 		age = 0,
+		motion_age = 0,
 		duration = duration,
 		file = meta.file == true,
 		task = meta.task == true,
@@ -332,6 +333,7 @@ function State:_finish_streams(tool, event)
 				recovery.stream.kind = "file_resolving"
 				recovery.stream.recovery_phase = "resolved"
 				recovery.stream.resolution_age = recovery.stream.age
+				recovery.stream.resolution_motion_age = recovery.stream.motion_age or recovery.stream.age
 				recovery.stream.duration = recovery.stream.age + 2.2
 			end
 			self.resolved_recovery = { filename = filename, expires_at = self.clock() + 2.2 }
@@ -898,7 +900,7 @@ local function completion_pop(buffer, row, text, age)
 	return true
 end
 
-local function living_divider(buffer, row, width, label, kind, time)
+local function living_divider(buffer, row, width, label, kind, time, previous_label, molt_progress)
 	local quiet = rgb(40, 65, 70, { "dim" })
 	buffer:write(row, 1, string.rep("─", width), quiet, width)
 	if not label or label == "" then return end
@@ -913,11 +915,37 @@ local function living_divider(buffer, row, width, label, kind, time)
 	local text = " " .. lcatui.width.truncate(label, math.max(12, width - 16)) .. " "
 	local text_width = lcatui.width.string(text)
 	local start = math.max(2, math.floor((width - text_width) / 2) + 1)
-	buffer:write(row, start, text, styles[kind] or styles.active, text_width)
+	local cell_style = styles[kind] or styles.active
+	if previous_label and kind == "task" and (molt_progress or 1) < 1 then
+		local progress = clamp(tonumber(molt_progress) or 0, 0, 1)
+		local chars = lcatui.width.chars(text)
+		local centre = (#chars + 1) / 2
+		local reveal = progress * (#chars / 2 + 1)
+		local col = start
+		for index, char in ipairs(chars) do
+			local char_width = math.max(1, lcatui.width.string(char))
+			local distance = math.abs(index - centre)
+			if char == " " or distance <= reveal then
+				buffer:write(row, col, char, cell_style, char_width)
+			elseif distance <= reveal + 1.6 then
+				buffer:set(row, col, "·", rgb(130, 103, 158, { "dim" }))
+			end
+			col = col + char_width
+		end
+		local old_radius = lcatui.width.string(previous_label) / 2 + 2
+		for spark = 1, 6 do
+			local direction = spark % 2 == 0 and 1 or -1
+			local distance = old_radius + progress * (3 + spark)
+			local x = clamp(math.floor((width + 1) / 2 + direction * distance + 0.5), 1, width)
+			buffer:set(row, x, progress < 0.55 and "·" or "˙", rgb(112, 83, 139, { "dim" }))
+		end
+	else
+		buffer:write(row, start, text, cell_style, text_width)
+	end
 	local span = math.max(1, start - 3)
 	local pulse = 1 + (math.floor((tonumber(time) or 0) * 9) % span)
-	buffer:set(row, pulse, "━", styles[kind] or styles.active)
-	buffer:set(row, width - pulse + 1, "━", styles[kind] or styles.active)
+	buffer:set(row, pulse, "━", cell_style)
+	buffer:set(row, width - pulse + 1, "━", cell_style)
 end
 
 local FILE_MORPHS = {
@@ -926,28 +954,33 @@ local FILE_MORPHS = {
 
 local TASK_MORPHS = { "○", "◔", "◑", "◕" }
 
+local function visual_age(stream)
+	return tonumber(stream.motion_age) or tonumber(stream.age) or 0
+end
+
 local function stream_display(stream)
+	local motion_age = visual_age(stream)
 	if stream.task then
 		local marker = stream.task_status == "completed" and "✓"
-			or stream.kind == "task_active" and TASK_MORPHS[(math.floor(stream.age * 6 + stream.id) % #TASK_MORPHS) + 1]
+			or stream.kind == "task_active" and TASK_MORPHS[(math.floor(motion_age * 6 + stream.id) % #TASK_MORPHS) + 1]
 			or stream.task_status == "in_progress" and "◉" or "○"
 		return marker .. " " .. stream.text
 	end
 	if not stream.file then
 		if stream.personality == "pulse" and not stream.text:match("^[◆◇×]") then
-			local marker = math.floor(stream.age * 5) % 2 == 0 and "◆" or "◇"
+			local marker = math.floor(motion_age * 5) % 2 == 0 and "◆" or "◇"
 			return marker .. " " .. stream.text
 		elseif stream.personality == "scatter" then
 			return "⌁ " .. stream.text
 		end
 		return stream.text
 	end
-	local frame = FILE_MORPHS[(math.floor(stream.age * 8 + stream.id) % #FILE_MORPHS) + 1]
+	local frame = FILE_MORPHS[(math.floor(motion_age * 8 + stream.id) % #FILE_MORPHS) + 1]
 	local marker = stream.kind == "file_error" and "×"
 		or stream.kind == "file_refresh" and "↻"
 		or stream.kind == "file_retry" and "✦"
-		or stream.kind == "file_resolving" and ((stream.age - (stream.resolution_age or stream.age)) < 0.45 and "×"
-			or (stream.age - (stream.resolution_age or stream.age)) < 0.9 and "◇" or "◆")
+		or stream.kind == "file_resolving" and ((motion_age - (stream.resolution_motion_age or motion_age)) < 0.45 and "×"
+			or (motion_age - (stream.resolution_motion_age or motion_age)) < 0.9 and "◇" or "◆")
 		or stream.kind == "file_changed" and "◆"
 		or stream.kind == "file_read" and "◇"
 		or stream.verb == "edit" and "✦"
@@ -957,25 +990,26 @@ local function stream_display(stream)
 end
 
 local function stream_position(stream, width, display)
+	local motion_age = visual_age(stream)
 	local text_width = lcatui.width.string(display or stream_display(stream))
 	local span = math.max(1, width - text_width - 2)
 	local progress
 	local travel_direction = 1
 	if stream.personality == "inward" then
 		local edge = stream.direction < 0 and 1 or 0
-		progress = 0.5 + (edge - 0.5) * math.exp(-stream.age * 0.72)
+		progress = 0.5 + (edge - 0.5) * math.exp(-motion_age * 0.72)
 		travel_direction = edge == 0 and 1 or -1
 	elseif stream.personality == "scatter" then
-		local reach = clamp(stream.age / 2.1, 0, 1)
+		local reach = clamp(motion_age / 2.1, 0, 1)
 		progress = 0.5 + stream.direction * 0.46 * reach
 		travel_direction = stream.direction
 	elseif stream.personality == "pulse" then
-		progress = 0.5 + math.sin(stream.age * 5.2 + stream.id) * math.min(0.09, 7 / span)
-		travel_direction = math.cos(stream.age * 5.2 + stream.id) >= 0 and 1 or -1
+		progress = 0.5 + math.sin(motion_age * 5.2 + stream.id) * math.min(0.09, 7 / span)
+		travel_direction = math.cos(motion_age * 5.2 + stream.id) >= 0 and 1 or -1
 	elseif stream.file or stream.task or not stream.duration then
-		local cycles = stream.file and (stream.age * FILE_COLUMNS_PER_SECOND / span)
-			or stream.task and (stream.age * TASK_COLUMNS_PER_SECOND / span)
-			or (stream.age / 7)
+		local cycles = stream.file and (motion_age * FILE_COLUMNS_PER_SECOND / span)
+			or stream.task and (motion_age * TASK_COLUMNS_PER_SECOND / span)
+			or (motion_age / 7)
 		local phase = (cycles + stream.id * 0.137) % 2
 		progress = phase <= 1 and phase or 2 - phase
 		travel_direction = phase <= 1 and 1 or -1
@@ -990,15 +1024,16 @@ local function stream_position(stream, width, display)
 end
 
 local function stream_row(stream, world_rows)
+	local motion_age = visual_age(stream)
 	local lane = clamp(stream.lane or 1, 1, world_rows)
 	if stream.personality == "scatter" then
-		return clamp(lane + math.floor(math.sin(stream.age * 3.2 + stream.id) * 1.5), 1, world_rows)
+		return clamp(lane + math.floor(math.sin(motion_age * 3.2 + stream.id) * 1.5), 1, world_rows)
 	elseif stream.personality == "inward" then
 		local centre = (world_rows + 1) / 2
-		local pull = 1 - math.exp(-stream.age * 0.72)
+		local pull = 1 - math.exp(-motion_age * 0.72)
 		return clamp(math.floor(lane + (centre - lane) * pull + 0.5), 1, world_rows)
 	elseif stream.personality == "pulse" then
-		return clamp(math.floor((world_rows + 1) / 2 + math.sin(stream.age * 5.2) * 0.7 + 0.5), 1, world_rows)
+		return clamp(math.floor((world_rows + 1) / 2 + math.sin(motion_age * 5.2) * 0.7 + 0.5), 1, world_rows)
 	end
 	return lane
 end
@@ -1089,6 +1124,11 @@ function App.new(opts)
 		fatal_error = nil,
 		foreground_streams = {},
 		celebration_active = false,
+		motion_scale = 1,
+		divider_label = nil,
+		divider_kind = "quiet",
+		divider_previous_label = nil,
+		divider_molt_started = 0,
 	}, App)
 end
 
@@ -1117,7 +1157,7 @@ function App:_flow_for(width, rows)
 	if not self.flow or self.flow_width ~= width or self.flow_height ~= rows then
 		self.flow = lcatui.Current.new(width, rows, { seed = 19, mode = self.effect })
 		self.flow_width, self.flow_height = width, rows
-		self.flow_time = 0
+		self.flow_time = self.flow_time or 0
 	end
 	return self.flow
 end
@@ -1137,6 +1177,22 @@ function App:set_effect(effect)
 	return true
 end
 
+function App:_divider_transition(label, kind)
+	kind = kind or "quiet"
+	if label ~= self.divider_label or kind ~= self.divider_kind then
+		self.divider_previous_label = self.divider_kind == "task" and kind == "task"
+			and self.divider_label and label and self.divider_label ~= label and self.divider_label or nil
+		self.divider_label, self.divider_kind = label, kind
+		self.divider_molt_started = self.flow_time
+	end
+	local progress = 1
+	if self.divider_previous_label then
+		progress = clamp((self.flow_time - self.divider_molt_started) / 0.85, 0, 1)
+		if progress >= 1 then self.divider_previous_label = nil end
+	end
+	return self.divider_label, self.divider_kind, self.divider_previous_label, progress
+end
+
 function App:render(frame_dt)
 	local width, terminal_height = self:_size()
 	local height = math.min(STRIP_ROWS, terminal_height)
@@ -1150,10 +1206,16 @@ function App:render(frame_dt)
 	local now = socket.gettime()
 	local dt = frame_dt == nil and clamp(now - self.last_frame, 0, 0.1) or frame_dt
 	self.last_frame = now
-	self.flow_time = self.flow_time + dt
+	local user_typing = self.editor:text() ~= ""
+	local target_motion_scale = user_typing and 0.28 or 1
+	local motion_ease = 1 - math.exp(-(user_typing and 8 or 5) * math.max(0, dt))
+	self.motion_scale = self.motion_scale + (target_motion_scale - self.motion_scale) * motion_ease
+	local visual_dt = dt * self.motion_scale
+	self.flow_time = self.flow_time + visual_dt
 	local live_streams = {}
 	for _, stream in ipairs(self.state.streams) do
 		stream.age = stream.age + dt
+		stream.motion_age = (stream.motion_age or stream.age - dt) + visual_dt
 		if not stream.duration or stream.age <= stream.duration then live_streams[#live_streams + 1] = stream end
 	end
 	self.state.streams = live_streams
@@ -1200,8 +1262,8 @@ function App:render(frame_dt)
 	if failed then
 		vortices[#vortices + 1] = { id = "failure", x = width * 0.5, y = world_rows * 0.5, radius = 15, strength = 1.7, direction = -1, failed = true }
 	end
-	flow:step(dt, {
-		activity = active and 0.88 or listening and (0.19 + listening_breath * 0.08) or 0.18,
+	flow:step(visual_dt, {
+		activity = active and (user_typing and 0.3 or 0.88) or listening and (0.19 + listening_breath * 0.08) or 0.18,
 		active = active,
 		listening = listening,
 		failed = failed,
@@ -1274,8 +1336,9 @@ function App:render(frame_dt)
 		local row = foreground_rows[stream] or stream_row(stream, world_rows)
 		local display = stream_display(stream)
 		local x, travel_direction = stream_position(stream, width, display)
+		local motion_age = visual_age(stream)
 		local resolution = stream.kind == "file_resolving"
-			and clamp((stream.age - (stream.resolution_age or stream.age)) / 0.9, 0, 1) or nil
+			and clamp((motion_age - (stream.resolution_motion_age or motion_age)) / 0.9, 0, 1) or nil
 		local stream_style = resolution and rgb(
 			math.floor(241 + (91 - 241) * resolution),
 			math.floor(79 + (224 - 79) * resolution),
@@ -1331,7 +1394,9 @@ function App:render(frame_dt)
 	end
 
 	local divider_label, divider_kind = self.state:divider_status(state_now)
-	living_divider(screen, top_divider_row, width, divider_label, divider_kind, self.flow_time)
+	local current_label, current_kind, previous_label, molt_progress = self:_divider_transition(divider_label, divider_kind)
+	living_divider(screen, top_divider_row, width, current_label, current_kind, self.flow_time,
+		previous_label, molt_progress)
 	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
 	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
 	screen:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
