@@ -184,6 +184,20 @@ test("UTF-8 editor handles cursor history backspace and delete", function()
 	assert_eq(action.text, "older command")
 end)
 
+test("complete arrow-key chunks move exactly one history entry", function()
+	local editor = tui.Editor.new({ "first", "second", "third" })
+	local input = tui.Input.new(editor)
+	local actions = input:feed_chunk("\27[A", false)
+	assert_eq(#actions, 0)
+	assert_eq(editor:text(), "third")
+	input:feed_chunk("\27[A", false)
+	assert_eq(editor:text(), "second")
+	input:feed_chunk("\27[B", false)
+	assert_eq(editor:text(), "third")
+	input:feed_chunk("\27[B", false)
+	assert_eq(editor:text(), "")
+end)
+
 local function fake_backend(opts)
 	opts = opts or {}
 	local backend = { output = {}, raw = false, flushes = 0 }

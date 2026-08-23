@@ -549,6 +549,16 @@ function Input:feed(byte, busy)
 	return nil
 end
 
+function Input:feed_chunk(chunk, busy)
+	local actions = {}
+	chunk = tostring(chunk or "")
+	for index = 1, #chunk do
+		local action = self:feed(chunk:sub(index, index), busy)
+		if action then actions[#actions + 1] = action end
+	end
+	return actions
+end
+
 tui.Input = Input
 
 local StreamFilter = {}
@@ -717,6 +727,7 @@ local STRIP_ROWS = STRIP_FLOW_ROWS + 3
 
 function App.new(opts)
 	opts = opts or {}
+	local owns_backend = opts.backend == nil
 	local backend = opts.backend or lcatui.backends.posix.new()
 	local effect = opts.effect or "drift"
 	if not EFFECTS[effect] then
@@ -745,6 +756,8 @@ function App.new(opts)
 		last_resize = 0,
 		frame_timer = nil,
 		stdin_poll = nil,
+		input_reader = opts.input_reader,
+		owns_backend = owns_backend,
 		exit_requested = false,
 		cancel_requested = false,
 		submitted = {},
@@ -986,10 +999,24 @@ function App:start_io()
 	self.frame_timer:start(FRAME_MILLISECONDS, FRAME_MILLISECONDS, function()
 		self:drive_frame()
 	end)
+	if not self.input_reader then
+		local posix_ok, unistd = false, nil
+		if self.owns_backend then posix_ok, unistd = pcall(require, "posix.unistd") end
+		if unistd and type(unistd.read) == "function" then
+			-- Do not combine libuv's fd readiness with buffered io.stdin reads:
+			-- stdio can swallow the rest of a multi-byte escape sequence and leave
+			-- libuv nothing to wake on until the user's next keypress.
+			self.input_reader = function() return unistd.read(0, 128) end
+		else
+			self.input_reader = function() return self.backend:read_byte() end
+		end
+	end
 	self.stdin_poll = uv.new_poll(0)
 	self.stdin_poll:start("r", function()
-		local byte = self.backend:read_byte()
-		self:_handle_action(self.input:feed(byte, self.busy))
+		local chunk = self.input_reader()
+		for _, action in ipairs(self.input:feed_chunk(chunk, self.busy)) do
+			self:_handle_action(action)
+		end
 	end)
 end
 
