@@ -74,6 +74,10 @@ Entering `/effect` by itself shows the current choice. Files, tasks, tool
 identity, and failure/success state are preserved when the visual treatment is
 changed.
 
+While the model is composing hidden tool protocol, the TUI reports that work
+separately from execution—for example, `model drafting edit · src/main.js ·
+4.2k chars`. A tool is only shown as active after its real runtime start event.
+
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool
 calls. Use `--xml-tools` to compare or temporarily fall back; `--native-tools`

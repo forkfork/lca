@@ -262,7 +262,13 @@ end
 
 function State:reviewing(info)
 	self.mode = "reviewing"
-	self.model_phase = compact_text(info and info.status or "reviewing tool results", 80)
+	self.model_phase = compact_text(info and info.status or "model continuing after tools", 80)
+end
+
+function State:model_activity(activity)
+	if not activity or not activity.status then return end
+	self.mode = "composing"
+	self.model_phase = compact_text(activity.status, 80)
 end
 
 function State:_resolve_tool(event)
@@ -524,24 +530,62 @@ local StreamFilter = {}
 StreamFilter.__index = StreamFilter
 
 function StreamFilter.new()
-	return setmetatable({ buffer = "", hidden = nil, saw_tool = false }, StreamFilter)
+	return setmetatable({
+		buffer = "", hidden = nil, hidden_name = nil, hidden_bytes = 0,
+		hidden_preview = "", saw_tool = false,
+	}, StreamFilter)
+end
+
+local function progress_count(bytes)
+	if bytes >= 1000 then return string.format("%.1fk chars", bytes / 1000) end
+	return tostring(bytes) .. " chars"
+end
+
+function StreamFilter:_observe_hidden(value)
+	value = tostring(value or "")
+	self.hidden_bytes = self.hidden_bytes + #value
+	if #self.hidden_preview < 1200 then
+		self.hidden_preview = (self.hidden_preview .. value):sub(1, 1200)
+	end
+end
+
+function StreamFilter:_activity()
+	if not self.hidden then return nil end
+	if self.hidden == "thinking" then
+		return { kind = "thinking", status = "model thinking · " .. progress_count(self.hidden_bytes) }
+	end
+	local name = self.hidden_name or "tool call"
+	local target = self.hidden_preview:match('"path"%s*:%s*"([^"\\]+)"')
+		or self.hidden_preview:match('"command"%s*:%s*"([^"\\]+)"')
+	local action = (name == "edit" or name == "write") and ("drafting " .. name) or ("preparing " .. name)
+	if target and target ~= "" then action = action .. " · " .. compact_text(target, 38) end
+	return {
+		kind = "tool", name = name, target = target, bytes = self.hidden_bytes,
+		status = "model " .. action .. " · " .. progress_count(self.hidden_bytes),
+	}
 end
 
 function StreamFilter:feed(delta)
-	if self.saw_tool then return "" end
+	if self.saw_tool then return "", nil end
 	self.buffer = self.buffer .. tostring(delta or "")
 	local visible = {}
+	local activity
 	while #self.buffer > 0 do
 		if self.hidden then
 			local close_tag = self.hidden == "tool" and "</tool_call>" or "</thinking>"
 			local at = self.buffer:find(close_tag, 1, true)
 			if not at then
-				self.buffer = self.buffer:sub(-math.min(#self.buffer, #close_tag - 1))
+				local keep = math.min(#self.buffer, #close_tag - 1)
+				self:_observe_hidden(self.buffer:sub(1, #self.buffer - keep))
+				self.buffer = self.buffer:sub(#self.buffer - keep + 1)
+				activity = self:_activity()
 				break
 			end
+			self:_observe_hidden(self.buffer:sub(1, at - 1))
+			activity = self:_activity()
 			self.buffer = self.buffer:sub(at + #close_tag)
 			if self.hidden == "tool" then self.saw_tool = true; self.buffer = ""; break end
-			self.hidden = nil
+			self.hidden, self.hidden_name, self.hidden_bytes, self.hidden_preview = nil, nil, 0, ""
 		else
 			local tool_at = self.buffer:find("<tool_call", 1, true)
 			local thinking_at = self.buffer:find("<thinking", 1, true)
@@ -550,8 +594,17 @@ function StreamFilter:feed(delta)
 			elseif thinking_at then at, kind = thinking_at, "thinking" end
 			if at then
 				visible[#visible + 1] = self.buffer:sub(1, at - 1)
-				self.buffer = self.buffer:sub(at)
+				local tag_end = self.buffer:find(">", at, true)
+				if not tag_end then
+					self.buffer = self.buffer:sub(at)
+					break
+				end
+				local opening = self.buffer:sub(at, tag_end)
+				self.buffer = self.buffer:sub(tag_end + 1)
 				self.hidden = kind
+				self.hidden_name = kind == "tool" and opening:match('name%s*=%s*"([^"]+)"') or nil
+				self.hidden_bytes, self.hidden_preview = 0, ""
+				activity = self:_activity()
 			else
 				local keep = math.min(#self.buffer, 16)
 				visible[#visible + 1] = self.buffer:sub(1, #self.buffer - keep)
@@ -560,7 +613,7 @@ function StreamFilter:feed(delta)
 			end
 		end
 	end
-	return table.concat(visible)
+	return table.concat(visible), activity
 end
 
 function StreamFilter:finish()
@@ -569,6 +622,8 @@ function StreamFilter:finish()
 	self.buffer = ""
 	return value
 end
+
+tui.StreamFilter = StreamFilter
 
 local function tool_position(id, width, world_top, world_bottom)
 	local hash = 2166136261
@@ -1056,7 +1111,8 @@ function tui.run(options)
 				local ok, turn_result = pcall(function()
 					return core.run_session(session,
 						function(delta)
-							local visible = filter:feed(delta)
+							local visible, activity = filter:feed(delta)
+							if activity then app.state:model_activity(activity) end
 							if visible ~= "" then app.state:model_stream(visible) end
 							app:pump()
 						end,
