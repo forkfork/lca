@@ -21,6 +21,7 @@ package.loaded["agent.providers"] = {
 						'{"command":"printf hello","timeout":120000}',
 						"</tool_call>",
 					}, "\n"),
+					_usage = { prompt_tokens = 2048, cached_tokens = 1024, cache_available = true },
 				}
 			end,
 		}
@@ -63,6 +64,9 @@ test("curl prompt returns run result without final model call", function()
 	end
 	if calls ~= 1 then
 		error("expected one provider call, got " .. tostring(calls))
+	end
+	if not result._usage or result._usage.cached_tokens ~= 1024 then
+		error("direct result lost exact provider usage")
 	end
 end)
 

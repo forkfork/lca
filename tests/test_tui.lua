@@ -216,8 +216,8 @@ test("completed turn rests on elapsed time and one context token number", functi
 	local state = tui.State.new({ clock = function() return now end })
 	state:submit("make it better")
 	now = 148.4
-	state:assistant_complete("Done.", { tokens = 56320 })
-	assert_eq(state.completion_summary, "✓ 48s · 56k tokens")
+	state:assistant_complete("Done.", { tokens = 56320, cache_percent = 95.7 })
+	assert_eq(state.completion_summary, "✓ 48s · 56k tokens · 96% cached")
 	state.verification = "exit 0"
 	state:listen()
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
@@ -242,6 +242,19 @@ test("completed turn rests on elapsed time and one context token number", functi
 	assert_contains(app.renderer.previous:plain_line(3), "✓ 48s · 56k tokens")
 	state:submit("next request")
 	assert_eq(state.completion_summary, nil)
+end)
+
+test("completion cache percentage distinguishes zero from unavailable", function()
+	local now = 10
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("first request")
+	now = 12
+	state:assistant_complete("Done.", { tokens = 8000, cache_percent = 0 })
+	assert_eq(state.completion_summary, "✓ 2s · 8k tokens · 0% cached")
+	state:submit("second request")
+	now = 14
+	state:assistant_complete("Done.", { tokens = 8000 })
+	assert_eq(state.completion_summary, "✓ 2s · 8k tokens")
 end)
 
 test("failed turns do not trigger the completion pop", function()

@@ -158,12 +158,14 @@ local function usage_from_event(event)
 	end
 	local details = usage.prompt_tokens_details or {}
 	local prompt_tokens = usage_number(usage.prompt_tokens)
-	local cached_tokens = usage_number(details.cached_tokens) or 0
+	local cached_value = usage_number(details.cached_tokens)
+	local cached_tokens = cached_value or 0
 	local output_tokens = usage_number(usage.completion_tokens) or 0
 	local total_tokens = usage_number(usage.total_tokens)
 	return {
 		prompt_tokens = prompt_tokens,
 		cached_tokens = cached_tokens,
+		cache_available = cached_value ~= nil,
 		output_tokens = output_tokens,
 		total_tokens = total_tokens or ((prompt_tokens or 0) + output_tokens),
 		raw_usage = usage,

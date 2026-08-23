@@ -564,6 +564,10 @@ function State:assistant_complete(text, metrics)
 	local elapsed = tonumber(metrics.elapsed) or (started_at and self.assistant_completed_at - started_at)
 	if elapsed and metrics.tokens and next(self.recoveries) == nil then
 		self.completion_summary = "✓ " .. format_duration(elapsed) .. " · " .. format_tokens(metrics.tokens)
+		if metrics.cache_percent ~= nil then
+			local cached = clamp(tonumber(metrics.cache_percent) or 0, 0, 100)
+			self.completion_summary = self.completion_summary .. " · " .. tostring(math.floor(cached + 0.5)) .. "% cached"
+		end
 	end
 	self.mode = "complete"
 	self.model_phase = "assistant complete"
@@ -1653,9 +1657,14 @@ function tui.run(options)
 				elseif ok then
 					local final = protocol.strip_tool_results(protocol.strip_tool_calls(turn_result.text or ""))
 					session:add_assistant(turn_result.text, turn_result._output_items)
-					local model_tokens = session.last_usage and tonumber(session.last_usage.prompt_tokens)
+					local final_usage = type(turn_result._usage) == "table" and turn_result._usage or nil
+					local model_tokens = final_usage and tonumber(final_usage.prompt_tokens)
 						or session:estimated_model_input_tokens_usage_aware()
-					app.state:assistant_complete(final, { tokens = model_tokens })
+					local cache_percent
+					if final_usage and final_usage.cache_available == true and model_tokens and model_tokens > 0 then
+						cache_percent = (tonumber(final_usage.cached_tokens) or 0) / model_tokens * 100
+					end
+					app.state:assistant_complete(final, { tokens = model_tokens, cache_percent = cache_percent })
 					app:commit_assistant(final)
 					maybe_auto_compact()
 				else

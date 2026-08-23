@@ -421,12 +421,14 @@ local function do_complete(request, on_token)
 				if usage_json then
 					local input_tokens = json.number_field(usage_json, "inputTokens") or 0
 					local output_tokens = json.number_field(usage_json, "outputTokens") or 0
-					local cache_read = json.number_field(usage_json, "cacheReadInputTokens") or 0
+					local cache_read_value = json.number_field(usage_json, "cacheReadInputTokens")
+					local cache_read = cache_read_value or 0
 					local cache_write = json.number_field(usage_json, "cacheWriteInputTokens") or 0
 					usage = {
 						prompt_tokens = input_tokens,
 						output_tokens = output_tokens,
 						cached_tokens = cache_read,
+						cache_available = cache_read_value ~= nil,
 						cache_write_tokens = cache_write,
 						total_tokens = input_tokens + output_tokens,
 					}

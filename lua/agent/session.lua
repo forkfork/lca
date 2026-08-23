@@ -260,6 +260,7 @@ local function normalize_usage(usage, message_index)
 	return {
 		prompt_tokens = prompt_tokens,
 		cached_tokens = cached_tokens,
+		cache_available = usage.cache_available == true or cached_tokens > 0,
 		cache_write_tokens = cache_write_tokens,
 		output_tokens = output_tokens,
 		total_tokens = total_tokens,

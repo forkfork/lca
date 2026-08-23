@@ -617,6 +617,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				text = text,
 				events = events,
 				_output_items = response._output_items,
+				_usage = response._usage,
 				_response_meta = last_response_meta,
 			}
 		end
@@ -649,6 +650,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			return {
 				text = text,
 				events = events,
+				_usage = response._usage,
 				_response_meta = last_response_meta,
 			}
 		end
@@ -888,6 +890,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				return {
 					text = direct_text,
 					events = events,
+					_usage = response._usage,
 					_response_meta = last_response_meta,
 				}
 			end
@@ -1043,6 +1046,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 		text = text ~= "" and text or "Stopped after " .. MAX_TOOL_STEPS .. " tool steps.",
 		events = events,
 		_output_items = response._output_items,
+		_usage = response._usage,
 		_response_meta = last_response_meta,
 	}
 end

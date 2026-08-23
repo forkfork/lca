@@ -446,7 +446,8 @@ local function usage_from_payload(payload)
 	end
 	local details = usage.prompt_tokens_details or usage.input_tokens_details or {}
 	local prompt_tokens = usage_number(usage.prompt_tokens) or usage_number(usage.input_tokens)
-	local cached_tokens = usage_number(details.cached_tokens) or 0
+	local cached_value = usage_number(details.cached_tokens)
+	local cached_tokens = cached_value or 0
 	local cache_write_tokens = usage_number(details.cache_write_tokens) or 0
 	local output_tokens = usage_number(usage.completion_tokens) or usage_number(usage.output_tokens) or 0
 	local total_tokens = usage_number(usage.total_tokens) or usage_number(usage.totalTokens)
@@ -456,6 +457,7 @@ local function usage_from_payload(payload)
 	return {
 		prompt_tokens = prompt_tokens,
 		cached_tokens = cached_tokens,
+		cache_available = cached_value ~= nil,
 		cache_write_tokens = cache_write_tokens,
 		output_tokens = output_tokens,
 		total_tokens = total_tokens or ((prompt_tokens or 0) + output_tokens),
