@@ -105,7 +105,11 @@ function State.new(opts)
 end
 
 function State:notice(text, kind)
-	self.notices[#self.notices + 1] = { text = compact_text(text, 180), kind = kind or "info" }
+	self.notices[#self.notices + 1] = {
+		text = compact_text(text, 180),
+		kind = kind or "info",
+		created_at = self.clock(),
+	}
 	while #self.notices > 4 do table.remove(self.notices, 1) end
 end
 
@@ -600,9 +604,10 @@ function App:render(frame_dt)
 	local response_entities, response_layout
 	if response_visible then response_entities, response_layout = self:_response_for(assistant, width, world_rows) end
 	local notice = self.state.notices[#self.state.notices]
+	local state_now = self.state.clock()
+	if notice and notice.created_at and state_now - notice.created_at > 8 then notice = nil end
 	local top_reserved = 1
 	if self.state.prompt ~= "" then top_reserved = top_reserved + 1 end
-	if assistant ~= "" then top_reserved = top_reserved + 1 end
 	if notice then top_reserved = top_reserved + 1 end
 	local world_top = math.min(math.max(2, world_rows - 1), top_reserved + 2)
 	local flow = self:_flow_for(width, world_rows)
@@ -667,11 +672,7 @@ function App:render(frame_dt)
 	buffer:write(1, 2, "LCA · " .. self.state.model_phase, rgb(98, 222, 218, { "bold" }), width - 2)
 	local header_row = 2
 	if self.state.prompt ~= "" then
-		buffer:write(header_row, 2, "last request · " .. compact_text(self.state.prompt, width - 17), rgb(110, 132, 151), width - 2)
-		header_row = header_row + 1
-	end
-	if assistant ~= "" then
-		buffer:write(header_row, 2, "assistant · " .. compact_text(assistant, width - 15), rgb(221, 217, 231), width - 2)
+		buffer:write(header_row, 2, "you · " .. compact_text(self.state.prompt, width - 8), rgb(110, 132, 151), width - 2)
 		header_row = header_row + 1
 	end
 	if notice then
@@ -715,7 +716,7 @@ function App:render(frame_dt)
 	end
 
 	if response_visible then
-		local response_now = self.state.clock()
+		local response_now = state_now
 		local started = self.state.mode == "streaming" and self.state.assistant_updated_at
 			or self.state.assistant_completed_at or self.state.assistant_started_at or response_now
 		local settle = clamp((response_now - started) / 1.25, 0, 1)

@@ -302,12 +302,33 @@ test("submitted input clears the dock and is acknowledged before work", function
 	app.busy = true
 	app:render(1 / 30)
 	local buffer = app.renderer.previous
-	assert_contains(buffer:plain_line(2), "last request · explain this project")
+	assert_contains(buffer:plain_line(2), "you · explain this project")
 	if buffer:plain_line(30):find("explain this project", 1, true) then
 		error("submitted text remained in the input dock")
 	end
 	assert_eq(buffer.rows[30][10].style.attrs[1], "reverse")
 	assert_contains(buffer:plain_line(31), "working")
+end)
+
+test("top area avoids duplicate assistant text and expires old notices", function()
+	local now = 40
+	local state = tui.State.new({ clock = function() return now end })
+	state.prompt = "whats this project"
+	state:assistant_complete("This is the centered assistant response.")
+	state:notice("session cleared and saved to .lca-session.json")
+	now = 49
+	state:listen()
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 32 }), state = state })
+	app:render(1 / 30)
+	assert_contains(app.renderer.previous:plain_line(1), "LCA · listening")
+	assert_contains(app.renderer.previous:plain_line(2), "you · whats this project")
+	local top = table.concat({
+		app.renderer.previous:plain_line(1),
+		app.renderer.previous:plain_line(2),
+		app.renderer.previous:plain_line(3),
+	}, "\n")
+	if top:find("assistant ·", 1, true) then error("assistant response was duplicated at the top") end
+	if top:find("session cleared", 1, true) then error("expired notice remained at the top") end
 end)
 
 io.write("\n" .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed\n")
