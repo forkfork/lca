@@ -13,6 +13,8 @@ local tui = {}
 
 local FRAME_SECONDS = 1 / 25
 local FRAME_MILLISECONDS = 40
+local FILE_COLUMNS_PER_SECOND = 21.6
+local TASK_COLUMNS_PER_SECOND = 14
 
 local function clamp(value, low, high)
 	return math.max(low, math.min(high, value))
@@ -152,7 +154,9 @@ function State:_stream(text, kind, tool, duration, meta)
 		age = 0,
 		duration = duration,
 		file = meta.file == true,
+		task = meta.task == true,
 		verb = meta.verb,
+		task_status = meta.status,
 	}
 	self.streams[#self.streams + 1] = stream
 	while #self.streams > 24 do table.remove(self.streams, 1) end
@@ -160,6 +164,21 @@ function State:_stream(text, kind, tool, duration, meta)
 end
 
 local FILE_TOOLS = { read = true, edit = true, write = true }
+
+local function focused_plan_step(plan)
+	if type(plan) ~= "table" then return nil end
+	for _, item in ipairs(plan) do
+		if item.status == "in_progress" and item.step and item.step ~= "" then return item end
+	end
+	for _, item in ipairs(plan) do
+		if item.status == "pending" and item.step and item.step ~= "" then return item end
+	end
+	for index = #plan, 1, -1 do
+		local item = plan[index]
+		if item.step and item.step ~= "" then return item end
+	end
+	return nil
+end
 
 local function result_filename(name, args, result)
 	if FILE_TOOLS[name] and args.path then return basename(args.path) end
@@ -182,6 +201,11 @@ function State:_finish_streams(tool, event)
 	if filename ~= "" then
 		local kind = failed and "file_error" or (name == "edit" or name == "write") and "file_changed" or "file_read"
 		self:_stream(filename, kind, tool, 5.2, { file = true, verb = name })
+	elseif name == "update_plan" and not failed then
+		local item = focused_plan_step(result.plan or args.plan)
+		if item then
+			self:_stream(item.step, "task", tool, 6.2, { task = true, status = item.status })
+		end
 	elseif name == "run" or name == "shell" then
 		local marker = failed and "× " or "◆ "
 		self:_stream(marker .. compact_args(name, args) .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 4.8)
@@ -267,7 +291,10 @@ function State:tool_event(event)
 		self.tool_queues[key] = self.tool_queues[key] or {}
 		self.tool_queues[key][#self.tool_queues[key] + 1] = tool
 		local event_args = event.args or {}
-		if FILE_TOOLS[event.name] and event_args.path then
+		local plan_item = event.name == "update_plan" and focused_plan_step(event_args.plan)
+		if plan_item then
+			self:_stream(plan_item.step, "task_active", tool, nil, { task = true, status = plan_item.status })
+		elseif FILE_TOOLS[event.name] and event_args.path then
 			self:_stream(basename(event_args.path), "file_active", tool, nil, { file = true, verb = event.name })
 		else
 			self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool)
@@ -558,7 +585,15 @@ local FILE_MORPHS = {
 	{ "‹", "›" }, { "{", "}" }, { "⟨", "⟩" }, { "[", "]" },
 }
 
+local TASK_MORPHS = { "○", "◔", "◑", "◕" }
+
 local function stream_display(stream)
+	if stream.task then
+		local marker = stream.task_status == "completed" and "✓"
+			or stream.kind == "task_active" and TASK_MORPHS[(math.floor(stream.age * 6 + stream.id) % #TASK_MORPHS) + 1]
+			or stream.task_status == "in_progress" and "◉" or "○"
+		return marker .. " " .. stream.text
+	end
 	if not stream.file then return stream.text end
 	local frame = FILE_MORPHS[(math.floor(stream.age * 8 + stream.id) % #FILE_MORPHS) + 1]
 	local marker = stream.kind == "file_error" and "×"
@@ -575,8 +610,10 @@ local function stream_position(stream, width, display)
 	local span = math.max(1, width - text_width - 2)
 	local progress
 	local travel_direction = 1
-	if stream.file or not stream.duration then
-		local cycles = stream.file and (stream.age * 24 / span) or (stream.age / 7)
+	if stream.file or stream.task or not stream.duration then
+		local cycles = stream.file and (stream.age * FILE_COLUMNS_PER_SECOND / span)
+			or stream.task and (stream.age * TASK_COLUMNS_PER_SECOND / span)
+			or (stream.age / 7)
 		local phase = (cycles + stream.id * 0.137) % 2
 		progress = phase <= 1 and phase or 2 - phase
 		travel_direction = phase <= 1 and 1 or -1
@@ -743,6 +780,8 @@ function App:render(frame_dt)
 		local x, travel_direction = stream_position(stream, width, display)
 		local stream_style = (stream.kind == "error" or stream.kind == "file_error") and rgb(241, 79, 115, { "bold" })
 			or (stream.kind == "success" or stream.kind == "file_changed") and rgb(91, 224, 169, { "bold" })
+			or stream.kind == "task_active" and rgb(192, 154, 232, { "bold" })
+			or stream.kind == "task" and rgb(165, 137, 202)
 			or stream.kind == "file_read" and rgb(104, 190, 196)
 			or (stream.kind == "active" or stream.kind == "file_active") and rgb(72, 221, 228, { "bold" })
 			or rgb(132, 177, 181)

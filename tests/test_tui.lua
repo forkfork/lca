@@ -141,6 +141,32 @@ test("file tools become filename objects instead of source or diff fragments", f
 	assert_eq(by_kind.file_changed.verb, "edit")
 end)
 
+test("plan updates put the focused task name into the current", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	local started_plan = {
+		{ step = "Inspect renderer timing", status = "completed" },
+		{ step = "Smooth filename motion", status = "in_progress" },
+		{ step = "Verify in a PTY", status = "pending" },
+	}
+	state:tool_event(start("plan-1", "update_plan", { plan = started_plan }))
+	local active = state.streams[#state.streams]
+	assert_eq(active.kind, "task_active")
+	assert_eq(active.text, "Smooth filename motion")
+	assert_eq(active.task, true)
+	local finished_plan = {
+		{ step = "Inspect renderer timing", status = "completed" },
+		{ step = "Smooth filename motion", status = "completed" },
+		{ step = "Verify in a PTY", status = "in_progress" },
+	}
+	state:tool_event(finish("plan-1", "update_plan", { plan = started_plan }, {
+		is_error = false, summary = "updated 3 steps", plan = finished_plan,
+	}))
+	local settled = state.streams[#state.streams]
+	assert_eq(settled.kind, "task")
+	assert_eq(settled.text, "Verify in a PTY")
+	assert_eq(settled.task_status, "in_progress")
+end)
+
 test("UTF-8 editor handles cursor history backspace and delete", function()
 	local editor = tui.Editor.new({ "older command" })
 	local input = tui.Input.new(editor)
@@ -195,7 +221,7 @@ test("filename objects morph and bounce instead of wrapping", function()
 	state:tool_event(start("file-a", "edit", { path = "lua/agent/tui.lua" }))
 	local app = tui.App.new({ backend = backend, state = state })
 	local positions = {}
-	for _, dt in ipairs({ 0.1, 1.0, 6.0 }) do
+	for _, dt in ipairs({ 0.1, 1.0, 7.0 }) do
 		app:render(dt)
 		local line = app.renderer.previous:plain_line(1)
 		assert_contains(line, "tui.lua")
