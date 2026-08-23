@@ -262,5 +262,22 @@ test("completed assistant response settles kinetically in the center", function(
 	assert_contains(table.concat(middle, "\n"), "Supabase starter created. Build passes.")
 end)
 
+test("submitted input clears the dock and is acknowledged before work", function()
+	local backend = fake_backend({ width = 100, height = 32 })
+	local app = tui.App.new({ backend = backend })
+	app.editor:set("explain this project")
+	local submitted = app.editor:submit()
+	app.state:submit(submitted)
+	app.busy = true
+	app:render(1 / 30)
+	local buffer = app.renderer.previous
+	assert_contains(buffer:plain_line(2), "last request · explain this project")
+	if buffer:plain_line(30):find("explain this project", 1, true) then
+		error("submitted text remained in the input dock")
+	end
+	assert_eq(buffer.rows[30][10].style.attrs[1], "reverse")
+	assert_contains(buffer:plain_line(31), "working")
+end)
+
 io.write("\n" .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed\n")
 if failed > 0 then os.exit(1) end

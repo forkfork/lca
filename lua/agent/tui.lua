@@ -852,6 +852,9 @@ function tui.run(options)
 			local line = app:next_submission()
 			if not line then break end
 			if line:sub(1, 1) == "/" then
+				app.state.prompt = compact_text(line, 240)
+				app.state.model_phase = "running command"
+				app:render()
 				local command_result = commands.dispatch(line, session, facade)
 				if command_result == true then break end
 				if command_result ~= "run" then goto continue end
@@ -862,6 +865,9 @@ function tui.run(options)
 			if line ~= "" or session.messages[#session.messages] then
 				app.state:submit(line ~= "" and line or "command request")
 				app.busy, app.cancel_requested = true, false
+				-- Acknowledge Enter before provider setup or network waiting can block.
+				-- The editor is already empty, so this moves its cursor back to the dock start.
+				app:render()
 				local filter = StreamFilter.new()
 				local ok, turn_result = pcall(function()
 					return core.run_session(session,
