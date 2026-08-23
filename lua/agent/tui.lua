@@ -11,6 +11,9 @@ local lcatui = require("lcatui")
 
 local tui = {}
 
+local FRAME_SECONDS = 1 / 25
+local FRAME_MILLISECONDS = 40
+
 local function clamp(value, low, high)
 	return math.max(low, math.min(high, value))
 end
@@ -587,7 +590,6 @@ function App.new(opts)
 		logged_size = nil,
 		logged_layout = nil,
 		last_frame = socket.gettime(),
-		next_frame_at = nil,
 		last_resize = 0,
 		frame_timer = nil,
 		stdin_poll = nil,
@@ -776,8 +778,11 @@ end
 
 function App:start_io()
 	self.input = Input.new(self.editor)
-	self:render(1 / 30)
-	self.next_frame_at = socket.gettime() + 1 / 30
+	self:render(0)
+	self.frame_timer = uv.new_timer()
+	self.frame_timer:start(FRAME_MILLISECONDS, FRAME_MILLISECONDS, function()
+		self:drive_frame()
+	end)
 	self.stdin_poll = uv.new_poll(0)
 	self.stdin_poll:start("r", function()
 		local byte = self.backend:read_byte()
@@ -786,7 +791,7 @@ function App:start_io()
 end
 
 function App:stop_io()
-	for _, handle in ipairs({ self.stdin_poll }) do
+	for _, handle in ipairs({ self.stdin_poll, self.frame_timer }) do
 		if handle and not handle:is_closing() then handle:stop(); handle:close() end
 	end
 	self.stdin_poll, self.frame_timer = nil, nil
@@ -795,31 +800,24 @@ end
 
 function App:drive_frame()
 	local now = socket.gettime()
-	if not self.next_frame_at or now >= self.next_frame_at then
-		local ok, err = pcall(function() self:render(1 / 30) end)
-		if not ok then
-			self.fatal_error = err
-			self.exit_requested = true
-			core.debug_log("[tui] fatal frame error: %s", tostring(err))
-		end
-		local finished = socket.gettime()
-		self.next_frame_at = (self.next_frame_at or now) + 1 / 30
-		while self.next_frame_at <= finished do self.next_frame_at = self.next_frame_at + 1 / 30 end
+	local elapsed = clamp(now - self.last_frame, 0, 0.12)
+	local ok, err = pcall(function() self:render(elapsed > 0 and elapsed or FRAME_SECONDS) end)
+	if not ok then
+		self.fatal_error = err
+		self.exit_requested = true
+		core.debug_log("[tui] fatal frame error: %s", tostring(err))
 	end
 end
 
 function App:pump()
 	uv.run("nowait")
-	self:drive_frame()
 	if self.fatal_error then error(self.fatal_error) end
 end
 
 function App:next_submission()
 	while #self.submitted == 0 and not self.exit_requested do
-		uv.run("nowait")
-		self:drive_frame()
+		uv.run("once")
 		if self.fatal_error then error(self.fatal_error) end
-		uv.sleep(2)
 	end
 	if self.exit_requested then return nil end
 	return table.remove(self.submitted, 1)
@@ -920,7 +918,7 @@ function tui.run(options)
 			if line:sub(1, 1) == "/" then
 				app.state.prompt = compact_text(line, 240)
 				app.state.model_phase = "running command"
-				app:render()
+				app:drive_frame()
 				local command_result = commands.dispatch(line, session, facade)
 				if command_result == true then break end
 				if command_result ~= "run" then goto continue end
@@ -933,7 +931,7 @@ function tui.run(options)
 				app.busy, app.cancel_requested = true, false
 				-- Acknowledge Enter before provider setup or network waiting can block.
 				-- The editor is already empty, so this moves its cursor back to the dock start.
-				app:render()
+				app:drive_frame()
 				local filter = StreamFilter.new()
 				local ok, turn_result = pcall(function()
 					return core.run_session(session,
@@ -942,8 +940,8 @@ function tui.run(options)
 							if visible ~= "" then app.state:model_stream(visible) end
 							app:pump()
 						end,
-						function(event) app.state:tool_event(event); app:render() end,
-						function(info) app.state:reviewing(info); filter = StreamFilter.new(); app:render() end,
+						function(event) app.state:tool_event(event) end,
+						function(info) app.state:reviewing(info); filter = StreamFilter.new() end,
 						function() app:pump() end,
 						{ cancelled = function() return app.cancel_requested end }
 					)
@@ -966,7 +964,7 @@ function tui.run(options)
 					app.state.mode = "failed"
 					app:commit_lines({ "error › " .. compact_text(turn_result, 240), "" })
 				end
-				app:render()
+				app:drive_frame()
 			end
 			::continue::
 		end

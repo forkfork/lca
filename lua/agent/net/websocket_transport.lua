@@ -2,7 +2,9 @@ local socket = require("socket")
 local ssl = require("ssl")
 
 local ws = {}
-local WEBSOCKET_POLL_SECONDS = 0.08
+-- Keep cooperative consumers such as the TUI responsive while LuaSocket owns
+-- the thread. This is a blocking poll interval, not a request timeout.
+local WEBSOCKET_POLL_SECONDS = 0.02
 
 local function now()
 	return socket.gettime()

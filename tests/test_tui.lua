@@ -225,22 +225,31 @@ test("248x69 terminal keeps a fast fixed nine-row inline strip", function()
 	if lower_glyphs < 10 then error("animation did not reach the lower strip rows") end
 end)
 
-test("frame scheduling uses deadlines rather than adding render time", function()
+test("frame scheduling advances by elapsed wall time", function()
 	local original_gettime = require("socket").gettime
-	local now = 10.034
+	local now = 10
 	require("socket").gettime = function() return now end
 	local app = tui.App.new({ backend = fake_backend() })
-	app.next_frame_at = 10.033
+	local elapsed
 	app.render = function(_, dt)
-		assert_eq(dt, 1 / 30)
+		elapsed = dt
 		now = now + 0.020
 	end
+	now = 10.087
 	local ok, err = pcall(function() app:drive_frame() end)
 	require("socket").gettime = original_gettime
 	if not ok then error(err) end
-	if math.abs(app.next_frame_at - 10.066333333333) > 0.00001 then
-		error("next deadline drifted by the render duration: " .. tostring(app.next_frame_at))
+	if math.abs(elapsed - 0.087) > 0.00001 then
+		error("frame ignored elapsed wall time: " .. tostring(elapsed))
 	end
+end)
+
+test("network pumps do not inject opportunistic frames", function()
+	local app = tui.App.new({ backend = fake_backend() })
+	local frames = 0
+	app.drive_frame = function() frames = frames + 1 end
+	app:pump()
+	assert_eq(frames, 0)
 end)
 
 test("terminal lifecycle restores after cancellation", function()
