@@ -115,6 +115,26 @@ test("realistic failure recovery settles into listening state", function()
 	assert_eq(#state.tools, 16)
 end)
 
+test("tool events create truthful semantic stream fragments", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(finish("read-1", "read", { path = "lua/agent/core.lua" }, {
+		is_error = false, summary = "2 lines", content = "336:aB9z: function core.run_session(session)\n337:q1Wx: return true",
+	}))
+	state:tool_event(start("edit-1", "edit", {
+		path = "lua/agent/tui.lua", start_line = 20, end_line = 22,
+		_raw_content = "local current = make_current(width)\nreturn current",
+	}))
+	state:tool_event(finish("edit-1", "edit", {
+		path = "lua/agent/tui.lua", start_line = 20, end_line = 22,
+		_raw_content = "local current = make_current(width)\nreturn current",
+	}, { is_error = false, summary = "replaced 3 lines" }))
+	local by_kind = {}
+	for _, stream in ipairs(state.streams) do by_kind[stream.kind] = stream.text end
+	assert_contains(by_kind.read, "core.lua · function core.run_session(session)")
+	assert_eq(by_kind.remove, "− lines 20–22")
+	assert_eq(by_kind.add, "+ local current = make_current(width)")
+end)
+
 test("UTF-8 editor handles cursor history backspace and delete", function()
 	local editor = tui.Editor.new({ "older command" })
 	local input = tui.Input.new(editor)
@@ -144,6 +164,24 @@ local function fake_backend(opts)
 	function backend:disable_raw() self.raw = false; return true end
 	return backend
 end
+
+test("parallel tool fragments occupy lanes and move with the current", function()
+	local backend = fake_backend({ width = 120, height = 32 })
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(start("tool-a", "grep", { pattern = "on_tool", path = "lua" }))
+	state:tool_event(start("tool-b", "run", { command = "make test" }))
+	local app = tui.App.new({ backend = backend, state = state })
+	app:render(0.1)
+	local first_a = app.renderer.previous:plain_line(1)
+	local first_b = app.renderer.previous:plain_line(2)
+	assert_contains(first_a, "grep · /on_tool/ lua")
+	assert_contains(first_b, "run · make test")
+	app:render(1.0)
+	local second_a = app.renderer.previous:plain_line(1)
+	local second_b = app.renderer.previous:plain_line(2)
+	if first_a == second_a then error("grep fragment did not flow") end
+	if first_b == second_b then error("run fragment did not flow") end
+end)
 
 test("terminal lifecycle restores after injected failure", function()
 	local backend = fake_backend()

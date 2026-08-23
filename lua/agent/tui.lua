@@ -60,7 +60,9 @@ end
 
 local function compact_args(name, args)
 	args = args or {}
-	if args.path then
+	if name == "grep" and args.pattern then
+		return compact_text("/" .. tostring(args.pattern) .. "/ " .. tostring(args.path or "."), 44)
+	elseif args.path then
 		local text = basename(args.path)
 		if name == "read" and (args.offset or args.limit) then
 			text = text .. " " .. tostring(args.offset or 1) .. ":" .. tostring(args.limit or "end")
@@ -86,6 +88,19 @@ local function event_key(event)
 	}, "\0")
 end
 
+local function snippet_line(value, limit)
+	value = response_text(value, 1200)
+	for line in (value .. "\n"):gmatch("(.-)\n") do
+		line = line:gsub("^%s*%d+:[%w]+:%s*", ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if line ~= "" then
+			line = line:gsub("%s+", " ")
+			local clipped = lcatui.width.truncate(line, limit or 48)
+			return clipped
+		end
+	end
+	return ""
+end
+
 local State = {}
 State.__index = State
 
@@ -106,6 +121,8 @@ function State.new(opts)
 		tools_by_id = {},
 		tool_queues = {},
 		tool_sequence = 0,
+		streams = {},
+		stream_sequence = 0,
 		failure = nil,
 		verification = nil,
 		disturbance = 0,
@@ -115,6 +132,61 @@ function State.new(opts)
 		cursor = 0,
 		clock = opts.clock or socket.gettime,
 	}, State)
+end
+
+function State:_stream(text, kind, tool, duration)
+	text = snippet_line(text, 58)
+	if text == "" then return nil end
+	self.stream_sequence = self.stream_sequence + 1
+	local stream = {
+		id = self.stream_sequence,
+		text = text,
+		kind = kind or "info",
+		tool = tool,
+		lane = tool and tool.lane or ((self.stream_sequence - 1) % 6 + 1),
+		direction = self.stream_sequence % 2 == 0 and -1 or 1,
+		age = 0,
+		duration = duration,
+	}
+	self.streams[#self.streams + 1] = stream
+	while #self.streams > 24 do table.remove(self.streams, 1) end
+	return stream
+end
+
+local function source_content(args)
+	args = args or {}
+	return args._raw_content or args.content or args.newText or ""
+end
+
+function State:_finish_streams(tool, event)
+	for _, stream in ipairs(self.streams) do
+		if stream.tool == tool and not stream.duration then stream.duration = stream.age + 0.35 end
+	end
+	local args, result = event.args or {}, event.result or {}
+	local name, path = tostring(event.name), basename(args.path)
+	local failed = result.is_error == true
+	if name == "edit" and not failed then
+		local removed = snippet_line(args.oldText, 42)
+		if removed == "" and args.start_line then
+			removed = "lines " .. tostring(args.start_line) .. "–" .. tostring(args.end_line or args.start_line)
+		end
+		if removed ~= "" then self:_stream("− " .. removed, "remove", tool, 3.8) end
+		local added = snippet_line(source_content(args), 46)
+		self:_stream("+ " .. (added ~= "" and added or path), "add", tool, 4.4)
+	elseif name == "write" and not failed then
+		local added = snippet_line(source_content(args), 42)
+		self:_stream("+ " .. path .. (added ~= "" and (" · " .. added) or ""), "add", tool, 4.5)
+	elseif (name == "read" or name == "grep") and not failed then
+		local excerpt = snippet_line(result.content, 46)
+		local subject = name == "grep" and ("/" .. tostring(args.pattern or "match") .. "/") or path
+		self:_stream(subject .. (excerpt ~= "" and (" · " .. excerpt) or ""), "read", tool, 4.2)
+	elseif name == "run" or name == "shell" then
+		local marker = failed and "× " or "◆ "
+		self:_stream(marker .. compact_args(name, args) .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 4.8)
+	else
+		local marker = failed and "× " or "◆ "
+		self:_stream(marker .. name .. (path ~= "" and (" · " .. path) or "") .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 3.8)
+	end
 end
 
 function State:notice(text, kind)
@@ -185,18 +257,23 @@ function State:tool_event(event)
 			args = compact_args(event.name, event.args),
 			status = "active",
 			started_at = self.clock(),
+			lane = ((self.tool_sequence - 1) % 6) + 1,
 		}
 		self.tools[#self.tools + 1] = tool
 		self.tools_by_id[id] = tool
 		local key = event_key(event)
 		self.tool_queues[key] = self.tool_queues[key] or {}
 		self.tool_queues[key][#self.tool_queues[key] + 1] = tool
+		self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool)
 	else
 		tool = self:_resolve_tool(event)
 		if not tool then
 			self.tool_sequence = self.tool_sequence + 1
 			local id = tostring(event.call_id or ("tool-" .. tostring(self.tool_sequence)))
-			tool = { id = id, name = tostring(event.name), args = compact_args(event.name, event.args), started_at = self.clock() }
+			tool = {
+				id = id, name = tostring(event.name), args = compact_args(event.name, event.args),
+				started_at = self.clock(), lane = ((self.tool_sequence - 1) % 6) + 1,
+			}
 			self.tools[#self.tools + 1] = tool
 			self.tools_by_id[id] = tool
 		end
@@ -204,6 +281,7 @@ function State:tool_event(event)
 		tool.status = event.result and event.result.is_error and "error"
 			or (event.result and event.result.ui_state == "deferred" and "deferred" or "ok")
 		tool.finished_at = self.clock()
+		self:_finish_streams(tool, event)
 		local queue = self.tool_queues[event_key(event)]
 		if queue then
 			for index, queued in ipairs(queue) do
@@ -469,6 +547,19 @@ local function center(buffer, row, text, style)
 	buffer:write(row, col, text, style, buffer.width - col + 1)
 end
 
+local function stream_position(stream, width)
+	local text_width = lcatui.width.string(stream.text)
+	local span = math.max(1, width - text_width - 2)
+	local progress
+	if stream.duration then
+		progress = clamp(stream.age / math.max(0.1, stream.duration), 0, 1)
+	else
+		progress = (stream.age / 7 + stream.id * 0.137) % 1
+	end
+	if stream.direction < 0 then progress = 1 - progress end
+	return 2 + math.floor(span * progress)
+end
+
 local App = {}
 App.__index = App
 
@@ -564,7 +655,8 @@ function App:render(frame_dt)
 		end
 	end
 	local vortices = {}
-	for row, tool in ipairs(visible_tools) do
+	for _, tool in ipairs(visible_tools) do
+		local row = clamp(tool.lane or 1, 1, world_rows)
 		local x = tool_position(tool.id, width, 1, world_rows)
 		vortices[#vortices + 1] = {
 			x = x, y = row, radius = tool.status == "active" and 7 or 4,
@@ -604,15 +696,21 @@ function App:render(frame_dt)
 		style = field_style,
 	})
 
-	for row, tool in ipairs(visible_tools) do
-		local x = tool_position(tool.id, width, 1, world_rows)
-		local glyph = tool.status == "active" and ({ "◜", "◝", "◞", "◟" })[math.floor(now * 9 + row) % 4 + 1]
-			or tool.status == "ok" and "◆" or tool.status == "error" and "×" or "◇"
-		local tool_style = tool.status == "error" and rgb(241, 79, 115, { "bold" })
-			or tool.status == "ok" and rgb(91, 224, 169, { "bold" }) or rgb(72, 221, 228, { "bold" })
-		local detail = tool.status == "active" and tool.args or tool.result
-		local label = glyph .. " " .. tool.name .. (detail ~= "" and (" · " .. compact_text(detail, 48)) or "")
-		buffer:write(row, x, label, tool_style, math.max(1, width - x))
+	local live_streams = {}
+	for _, stream in ipairs(self.state.streams) do
+		stream.age = stream.age + dt
+		if not stream.duration or stream.age <= stream.duration then live_streams[#live_streams + 1] = stream end
+	end
+	self.state.streams = live_streams
+	for _, stream in ipairs(live_streams) do
+		local row = clamp(stream.lane or 1, 1, world_rows)
+		local x = stream_position(stream, width)
+		local stream_style = stream.kind == "error" and rgb(241, 79, 115, { "bold" })
+			or stream.kind == "remove" and rgb(226, 102, 122)
+			or (stream.kind == "add" or stream.kind == "success") and rgb(91, 224, 169, { "bold" })
+			or stream.kind == "active" and rgb(72, 221, 228, { "bold" })
+			or rgb(132, 177, 181)
+		buffer:write(row, x, stream.text, stream_style, math.max(1, width - x))
 	end
 
 	if self.state.failure then
