@@ -262,6 +262,37 @@ test("completed assistant response settles kinetically in the center", function(
 	assert_contains(table.concat(middle, "\n"), "Supabase starter created. Build passes.")
 end)
 
+test("long markdown response wraps cleanly without a full-width dead band", function()
+	local now = 30
+	local state = tui.State.new({ clock = function() return now end })
+	state:assistant_complete([[This is a small **Vite + Supabase starter app**. It provides:
+
+- **Email magic-link authentication** via Supabase Auth.
+- A simple authenticated **notes app**.
+- A `public.notes` table with `id`, `user_id`, `body`, and `inserted_at`.
+- **Row-level security** so users can only access their own notes.
+
+The project includes environment setup and build instructions for local development.]])
+	now = 32
+	local app = tui.App.new({ backend = fake_backend({ width = 248, height = 69, color = true }), state = state })
+	for _ = 1, 24 do app:render(1 / 30) end
+	if #app.response_layout < 5 then error("tall response used too few lines") end
+	local settled, outside_glyphs = {}, 0
+	for _, region in ipairs(app.response_layout) do
+		local line = app.renderer.previous:plain_line(region.row)
+		settled[#settled + 1] = line
+		for col = 1, 248 do
+			if col < region.col - 3 or col > region.col + region.width + 2 then
+				if app.renderer.previous.rows[region.row][col].char ~= " " then outside_glyphs = outside_glyphs + 1 end
+			end
+		end
+	end
+	local text = table.concat(settled, "\n")
+	assert_contains(text, "• Email magic-link authentication")
+	if text:find("**", 1, true) then error("markdown emphasis leaked into terminal copy") end
+	if outside_glyphs < 20 then error("response mask still forms a full-width dead band") end
+end)
+
 test("submitted input clears the dock and is acknowledged before work", function()
 	local backend = fake_backend({ width = 100, height = 32 })
 	local app = tui.App.new({ backend = backend })

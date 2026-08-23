@@ -27,6 +27,19 @@ local function compact_text(value, limit)
 	return value
 end
 
+local function response_text(value, limit)
+	value = tostring(value or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+	value = value:gsub("[%z\1-\8\11\12\14-\31]", "")
+	limit = limit or 6000
+	if #value <= limit then return value end
+	local result, bytes = {}, 0
+	for _, char in ipairs(lcatui.width.chars(value)) do
+		if bytes + #char > limit then break end
+		result[#result + 1], bytes = char, bytes + #char
+	end
+	return table.concat(result) .. "\n…"
+end
+
 local function basename(value)
 	value = tostring(value or "")
 	return value:match("([^/]+)$") or value
@@ -212,7 +225,7 @@ function State:tool_event(event)
 end
 
 function State:assistant_complete(text)
-	self.assistant = compact_text(text, 1600)
+	self.assistant = response_text(text, 6000)
 	self.assistant_stream = ""
 	self.assistant_completed_at = self.clock()
 	self.mode = "complete"
@@ -443,22 +456,45 @@ local function center(buffer, row, text, style)
 end
 
 local function response_lines(text, width, maximum_lines)
-	local limit = math.max(24, math.min(96, width - 20))
-	local words, lines, line = {}, {}, ""
-	for word in compact_text(text, limit * maximum_lines):gmatch("%S+") do words[#words + 1] = word end
-	for _, word in ipairs(words) do
-		local candidate = line == "" and word or (line .. " " .. word)
-		if lcatui.width.string(candidate) <= limit then
-			line = candidate
-		else
-			if line ~= "" then lines[#lines + 1] = line end
-			line = lcatui.width.truncate(word, limit)
-			if #lines == maximum_lines then break end
+	local limit = math.max(24, math.min(88, width - 24))
+	local lines, overflow = {}, false
+	local function add_line(line)
+		if #lines >= maximum_lines then overflow = true; return false end
+		lines[#lines + 1] = line
+		return true
+	end
+	local function clean(line)
+		line = line:gsub("^%s+", ""):gsub("%s+$", "")
+		if line:match("^```") then return "" end
+		line = line:gsub("^#+%s*", "")
+		line = line:gsub("%[([^%]]+)%]%([^%)]+%)", "%1")
+		line = line:gsub("%*%*", ""):gsub("__", "")
+		line = line:gsub("^[-*+]%s+", "• ")
+		return line
+	end
+	for raw in (response_text(text, 6000) .. "\n"):gmatch("(.-)\n") do
+		local source = clean(raw)
+		if source ~= "" then
+			local line, continuation = "", source:sub(1, 2) == "• " and "  " or ""
+			for word in source:gmatch("%S+") do
+				word = lcatui.width.string(word) > limit and lcatui.width.truncate(word, limit - 1) .. "…" or word
+				local candidate = line == "" and word or (line .. " " .. word)
+				if lcatui.width.string(candidate) <= limit then
+					line = candidate
+				else
+					if not add_line(line) then break end
+					line = continuation .. word
+				end
+			end
+			if overflow then break end
+			if line ~= "" and not add_line(line) then break end
 		end
 	end
-	if line ~= "" and #lines < maximum_lines then lines[#lines + 1] = line end
-	if #lines == maximum_lines and #table.concat(lines, " ") < #compact_text(text, limit * maximum_lines) then
-		lines[#lines] = lcatui.width.truncate(lines[#lines], limit - 1) .. "…"
+	if #lines == 0 then lines[1] = "" end
+	if overflow then
+		local last = lines[#lines]:gsub("%s+%S*$", "")
+		if last == "" then last = lcatui.width.truncate(lines[#lines], limit - 2) end
+		lines[#lines] = last .. " …"
 	end
 	return lines
 end
@@ -486,6 +522,7 @@ function App.new(opts)
 		flow_height = nil,
 		flow_time = 0,
 		response_entities = nil,
+		response_layout = nil,
 		response_key = nil,
 		size_provider = opts.size_provider,
 		logged_size = nil,
@@ -534,21 +571,23 @@ function App:_flow_for(width, rows)
 end
 
 function App:_response_for(text, width, world_rows)
-	local lines = response_lines(text, width, 3)
+	local maximum_lines = math.max(3, math.min(10, math.floor(world_rows * 0.18)))
+	local lines = response_lines(text, width, maximum_lines)
 	local key = table.concat(lines, "\n") .. "\0" .. tostring(width) .. "x" .. tostring(world_rows)
 	if key ~= self.response_key then
-		local entities = {}
+		local entities, layout = {}, {}
 		local first_row = math.max(4, math.floor(world_rows * 0.50) - math.floor((#lines - 1) / 2))
 		for index, line in ipairs(lines) do
 			local col = math.max(3, math.floor((width - lcatui.width.string(line)) / 2) + 1)
+			layout[#layout + 1] = { row = first_row + index - 1, col = col, width = lcatui.width.string(line) }
 			local scattered = lcatui.kinetic.scatter(line, first_row + index - 1, col, {
 				width = width, height = world_rows,
 			}, 47 + index * 19)
 			for _, entity in ipairs(scattered) do entities[#entities + 1] = entity end
 		end
-		self.response_key, self.response_entities = key, entities
+		self.response_key, self.response_entities, self.response_layout = key, entities, layout
 	end
-	return self.response_entities, lines
+	return self.response_entities, self.response_layout, lines
 end
 
 function App:render(frame_dt)
@@ -558,6 +597,8 @@ function App:render(frame_dt)
 	local assistant = self.state.assistant_stream ~= "" and self.state.assistant_stream or self.state.assistant
 	local response_visible = assistant ~= "" and (self.state.mode == "streaming"
 		or self.state.mode == "complete" or self.state.mode == "listening")
+	local response_entities, response_layout
+	if response_visible then response_entities, response_layout = self:_response_for(assistant, width, world_rows) end
 	local notice = self.state.notices[#self.state.notices]
 	local top_reserved = 1
 	if self.state.prompt ~= "" then top_reserved = top_reserved + 1 end
@@ -614,9 +655,11 @@ function App:render(frame_dt)
 		core_y = world_rows * 0.47,
 		threshold = 0.13,
 		style = field_style,
-		mask = function(_, y)
+		mask = function(x, y)
 			if not (y > top_reserved and y < world_rows) then return false end
-			if response_visible and math.abs(y - world_rows * 0.50) < 3.2 then return false end
+			for _, region in ipairs(response_layout or {}) do
+				if y == region.row and x >= region.col - 2 and x <= region.col + region.width + 1 then return false end
+			end
 			return true
 		end,
 	})
@@ -672,12 +715,11 @@ function App:render(frame_dt)
 	end
 
 	if response_visible then
-		local entities = self:_response_for(assistant, width, world_rows)
 		local response_now = self.state.clock()
 		local started = self.state.mode == "streaming" and self.state.assistant_updated_at
 			or self.state.assistant_completed_at or self.state.assistant_started_at or response_now
 		local settle = clamp((response_now - started) / 1.25, 0, 1)
-		lcatui.kinetic.draw(buffer, entities, settle, {
+		lcatui.kinetic.draw(buffer, response_entities, settle, {
 			style = function(_, amount)
 				return rgb(122 + math.floor(amount * 104), 171 + math.floor(amount * 48),
 					176 + math.floor(amount * 55), { amount > 0.88 and "bold" or "dim" })
