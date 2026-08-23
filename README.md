@@ -80,6 +80,9 @@ separately from execution—for example, `model drafting edit · src/main.js ·
 The default drift treatment eases between sparse listening dust, a flowing
 model-composition ribbon, local tool eddies, failure turbulence, and a resolving
 verification pulse before settling back to dust.
+After a completed turn, the resting summary shows end-to-end work time and one
+rounded final model-context number, such as `✓ 48s · 56k tokens`, instead of a
+raw process result such as `exit 0`.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

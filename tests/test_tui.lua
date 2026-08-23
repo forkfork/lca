@@ -197,6 +197,24 @@ local function fake_backend(opts)
 	return backend
 end
 
+test("completed turn rests on elapsed time and one context token number", function()
+	local now = 100
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("make it better")
+	now = 148.4
+	state:assistant_complete("Done.", { tokens = 56320 })
+	assert_eq(state.completion_summary, "✓ 48s · 56k tokens")
+	state.verification = "exit 0"
+	state:listen()
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(0.1)
+	local middle = app.renderer.previous:plain_line(3)
+	assert_contains(middle, "✓ 48s · 56k tokens")
+	if middle:find("exit 0", 1, true) then error("raw exit code displaced the completion summary") end
+	state:submit("next request")
+	assert_eq(state.completion_summary, nil)
+end)
+
 test("parallel tool fragments occupy lanes and move with the current", function()
 	local backend = fake_backend({ width = 120, height = 32 })
 	local state = tui.State.new({ clock = function() return 10 end })

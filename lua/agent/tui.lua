@@ -122,6 +122,8 @@ function State.new(opts)
 		assistant_started_at = nil,
 		assistant_updated_at = nil,
 		assistant_completed_at = nil,
+		turn_started_at = nil,
+		completion_summary = nil,
 		notices = {},
 		plan = nil,
 		tools = {},
@@ -239,6 +241,8 @@ function State:submit(text)
 	self.disturbance = 0
 	self.proof = 0
 	self.cancelled = false
+	self.turn_started_at = self.clock()
+	self.completion_summary = nil
 	self.mode = "waiting"
 	self.model_phase = "model waiting"
 end
@@ -358,10 +362,31 @@ function State:tool_event(event)
 	return tool
 end
 
-function State:assistant_complete(text)
+local function format_duration(seconds)
+	seconds = math.max(0, tonumber(seconds) or 0)
+	if seconds < 60 then return tostring(math.floor(seconds + 0.5)) .. "s" end
+	local minutes = math.floor(seconds / 60)
+	local remainder = math.floor(seconds - minutes * 60 + 0.5)
+	if remainder == 60 then minutes, remainder = minutes + 1, 0 end
+	return tostring(minutes) .. "m " .. tostring(remainder) .. "s"
+end
+
+local function format_tokens(tokens)
+	tokens = math.max(0, tonumber(tokens) or 0)
+	if tokens >= 1000 then return tostring(math.floor(tokens / 1000 + 0.5)) .. "k tokens" end
+	return tostring(math.floor(tokens + 0.5)) .. " tokens"
+end
+
+function State:assistant_complete(text, metrics)
 	self.assistant = response_text(text, 6000)
 	self.assistant_stream = ""
 	self.assistant_completed_at = self.clock()
+	metrics = metrics or {}
+	local started_at = tonumber(metrics.started_at) or self.turn_started_at
+	local elapsed = tonumber(metrics.elapsed) or (started_at and self.assistant_completed_at - started_at)
+	if elapsed and metrics.tokens then
+		self.completion_summary = "✓ " .. format_duration(elapsed) .. " · " .. format_tokens(metrics.tokens)
+	end
 	self.mode = "complete"
 	self.model_phase = "assistant complete"
 end
@@ -893,6 +918,8 @@ function App:render(frame_dt)
 
 	if self.state.failure then
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
+	elseif self.state.completion_summary then
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.completion_summary, rgb(91, 224, 169, { "bold" }))
 	elseif self.state.verification then
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "◆ " .. compact_text(self.state.verification, width - 12), rgb(91, 224, 169, { "bold" }))
 	elseif self.state.cancelled then
@@ -1142,8 +1169,10 @@ function tui.run(options)
 					app.cancel_requested = false
 				elseif ok then
 					local final = protocol.strip_tool_results(protocol.strip_tool_calls(turn_result.text or ""))
-					app.state:assistant_complete(final)
 					session:add_assistant(turn_result.text, turn_result._output_items)
+					local model_tokens = session.last_usage and tonumber(session.last_usage.prompt_tokens)
+						or session:estimated_model_input_tokens_usage_aware()
+					app.state:assistant_complete(final, { tokens = model_tokens })
 					app:commit_assistant(final)
 					maybe_auto_compact()
 				else
