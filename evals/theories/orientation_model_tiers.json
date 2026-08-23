@@ -1,0 +1,57 @@
+{
+  "id": "orientation_model_tiers",
+  "title": "GPT-5.5 and GPT-5.6 tier comparison for project orientation",
+  "hypothesis": "At least one GPT-5.6 tier gives LCA a better quality, reliability, latency, and token-cost tradeoff than GPT-5.5 for a grounded project-orientation turn under the unchanged agent loop.",
+  "falsified_if": "No GPT-5.6 tier is non-inferior to GPT-5.5 on deterministic pass rate and mean score while improving at least one of latency, token use, or estimated API cost without a material regression in the others.",
+  "source_ids": [
+    "openai-gpt-5-6-guide-2026-08",
+    "openai-gpt-5-6-sol-2026-08",
+    "openai-gpt-5-6-terra-2026-08",
+    "openai-gpt-5-6-luna-2026-08",
+    "openai-gpt-5-5-2026-08",
+    "local-lca-orientation-run-2026-08-22"
+  ],
+  "control_variant": "gpt_5_5",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "gpt_5_5",
+      "model": "gpt-5.5",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "gpt_5_6_sol",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "gpt_5_6_terra",
+      "model": "gpt-5.6-terra",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "gpt_5_6_luna",
+      "model": "gpt-5.6-luna",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "deterministic_outcomes": [
+    "project identity and operating model",
+    "grounded documentation reads",
+    "distinctive implementation details",
+    "useful starting files",
+    "no unsupported verification claim",
+    "no mutations or command execution",
+    "bounded lookup and answer size"
+  ],
+  "efficiency_outcomes": [
+    "prompt, cached, cache-write, and output tokens",
+    "provider calls",
+    "elapsed milliseconds",
+    "response bytes",
+    "word count",
+    "estimated input, cached-input, and output cost at published prices"
+  ],
+  "decision_rule": "Do not replace GPT-5.5 or introduce routing from this scenario alone. A tier is an orientation candidate only if five runs are non-inferior on pass rate and mean score. Prefer the least expensive candidate inside a 10-point score band unless latency is materially worse. Any routing policy must then survive simple-prompt, auth-api, existing-codebase-edit, failure-recovery, and investigation comparisons."
+}

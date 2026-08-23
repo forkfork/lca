@@ -19,7 +19,7 @@ local options = {
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--transcript path]
+  lua bin/repl.lua [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
 ]])
 	os.exit(2)
 end
@@ -38,6 +38,12 @@ while index <= #arg do
 	elseif arg[index] == "--service-tier" then
 		options.service_tier = arg[index + 1]
 		index = index + 2
+	elseif arg[index] == "--native-tools" then
+		options.native_tool_calling = true
+		index = index + 1
+	elseif arg[index] == "--xml-tools" then
+		options.native_tool_calling = false
+		index = index + 1
 	elseif arg[index] == "--transcript" then
 		options.transcript = arg[index + 1]
 		index = index + 2

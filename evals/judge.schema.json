@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["score", "scope_judgment", "implementation_coherence", "final_answer_fidelity", "critical_issues", "rationale"],
+  "properties": {
+    "score": {"type": "integer", "minimum": 0, "maximum": 100},
+    "scope_judgment": {"type": "integer", "minimum": 0, "maximum": 5},
+    "implementation_coherence": {"type": "integer", "minimum": 0, "maximum": 5},
+    "final_answer_fidelity": {"type": "integer", "minimum": 0, "maximum": 5},
+    "critical_issues": {"type": "array", "items": {"type": "string"}},
+    "rationale": {"type": "string"}
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "auth_api",
+  "title": "Build and verify a production-conscious authentication API",
+  "prompt": "Build the authentication API described in README.md. Implement it completely, test it, and leave the repository ready to run. Keep the solution local and focused; do not add deployment infrastructure or unrelated features.",
+  "timeout_seconds": 900,
+  "grader": "grade.py",
+  "judge": true
+}

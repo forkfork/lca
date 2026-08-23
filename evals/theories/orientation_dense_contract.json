@@ -1,0 +1,37 @@
+{
+  "id": "orientation_dense_contract",
+  "title": "Maximize useful project-orientation information density",
+  "hypothesis": "An information-density contract can close the remaining orientation quality gap while retaining LCA's latency advantage over Codex.",
+  "falsified_if": "The treatment loses any deterministic pass, averages below 92, exceeds five mean investigation actions, averages more than 180 final-answer words, or averages 18 seconds or slower.",
+  "source_ids": ["local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "current",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    },
+    {
+      "id": "dense_contract",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "system_prompt_append": "For project-orientation questions, inspect authoritative documentation, package metadata, and representative source in one parallel batch when possible; do not run tests or builds merely to describe a project. Give a 130-180 word decision-useful synthesis containing: identity and purpose; the main user workflow; at least two distinctive architectural facts or boundaries; at least two concrete facts about what is currently implemented, stubbed, or missing; and exactly three useful starting files with a short reason for each. Explicitly distinguish documented intent from inspected implementation. Prefer dense facts over generic description or a broad file inventory."
+    }
+  ],
+  "deterministic_outcomes": [
+    "correct identity and core workflow",
+    "documented intent is separated from current implementation",
+    "no mutation or unnecessary execution",
+    "concise useful answer"
+  ],
+  "efficiency_outcomes": [
+    "mean score and section scores",
+    "distinctive details, implementation reality, and starting points",
+    "word count, actions, latency, and token use"
+  ],
+  "decision_rule": "Adopt only if both variants pass 5/5, treatment mean score is at least 92 and at least five points above control, treatment averages at most five investigation actions and 180 words, and mean latency remains below 18 seconds."
+}

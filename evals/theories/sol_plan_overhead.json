@@ -1,0 +1,38 @@
+{
+  "id": "sol_plan_overhead",
+  "title": "Measure visible-plan overhead on a broad Sol implementation task",
+  "hypothesis": "On the self-contained authentication fixture, keeping the plan mentally instead of calling update_plan removes bookkeeping turns without reducing implementation correctness, recovery, or verification.",
+  "falsified_if": "The no-visible-plan treatment loses any deterministic pass, reduces mean score, or fails to reduce mean model calls by at least two.",
+  "source_ids": ["openai-gpt-5-6-guide-2026-08", "local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "visible_plan",
+  "minimum_runs_per_cell": 2,
+  "scenarios": ["auth_api"],
+  "variants": [
+    {
+      "id": "visible_plan",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    },
+    {
+      "id": "mental_plan",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "system_prompt_append": "For this self-contained task, do not call update_plan. Track the work internally and proceed directly through inspection, implementation, and verification. This changes only plan reporting: retain the same care, dependency ordering, recovery from test failures, and final verification."
+    }
+  ],
+  "deterministic_outcomes": [
+    "authentication behavior and security requirements pass",
+    "the service remains runnable and focused",
+    "verification is actually executed",
+    "no unrelated scope or unsafe shortcuts"
+  ],
+  "efficiency_outcomes": [
+    "model and tool calls",
+    "elapsed milliseconds",
+    "prompt and output tokens",
+    "failed verification and recovery behavior"
+  ],
+  "decision_rule": "Remove visible planning from this task class only if both cells pass 2/2, treatment score is no worse, mean model calls fall by at least two, and verification/recovery evidence is no worse. Otherwise retain update_plan and investigate a lower-level way to combine plan reporting with useful tool calls."
+}

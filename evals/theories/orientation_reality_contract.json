@@ -1,0 +1,37 @@
+{
+  "id": "orientation_reality_contract",
+  "title": "Include documentation-versus-tree reality in project orientation",
+  "hypothesis": "Explicitly checking documented components against the repository tree closes LCA's remaining orientation-quality gap without sacrificing its latency advantage.",
+  "falsified_if": "The treatment loses any deterministic pass, averages below 94, exceeds five mean investigation actions, averages more than 180 words, or averages 20 seconds or slower.",
+  "source_ids": ["local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "current",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    },
+    {
+      "id": "reality_contract",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "system_prompt_append": "For project-orientation questions, inspect authoritative documentation, package metadata, the repository tree, and representative source in one parallel batch when possible; do not run tests or builds merely to describe a project. Give a 130-180 word decision-useful synthesis containing: identity and purpose; the main user workflow; at least two distinctive architectural facts or boundaries; and current implementation reality. For implementation reality, distinguish documented intent from inspected code, identify concrete stubs, and state whether any documented component, directory, or test area is absent when the inspected tree supports that conclusion. End with exactly three useful starting files and a short reason for each. Prefer dense facts over generic description or a broad inventory."
+    }
+  ],
+  "deterministic_outcomes": [
+    "correct identity and core workflow",
+    "documented intent, concrete stubs, and absent documented components are distinguished",
+    "no mutation or unnecessary execution",
+    "concise useful answer"
+  ],
+  "efficiency_outcomes": [
+    "mean score and implementation-reality score",
+    "word count and investigation actions",
+    "latency and token use against frozen LCA and Codex baselines"
+  ],
+  "decision_rule": "Adopt only if the treatment passes 5/5, averages at least 94, at most five investigation actions and 180 words, and less than 20 seconds. Compare with the frozen same-day baselines: Codex 93.3 points at 21.8 seconds and current LCA controls from the preceding randomized experiments."
+}

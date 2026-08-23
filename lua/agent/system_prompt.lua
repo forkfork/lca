@@ -1,5 +1,6 @@
 local project_context = require("agent.project_context")
 local project_index = require("agent.project_index")
+local runtime_inventory = require("agent.runtime_inventory")
 local registry = require("agent.tool_registry")
 
 local system_prompt = {}
@@ -28,14 +29,8 @@ local function context_section(files)
 	return "\n" .. table.concat(parts, "\n")
 end
 
-local function executable_available(name)
-	local command = "command -v " .. name .. " >/dev/null 2>&1"
-	local ok, why, code = os.execute(command)
-	return ok == true or ok == 0 or (why == "exit" and code == 0)
-end
-
 local function brave_search_section()
-	if not executable_available("bx") then
+	if not runtime_inventory.resolve("bx") then
 		return ""
 	end
 
@@ -86,7 +81,7 @@ function system_prompt.build(options)
 	return table.concat({
 		"You are an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.",
 		"",
-		registry.system_prompt(),
+		options.native_tool_calling and registry.native_system_prompt() or registry.system_prompt(),
 		"",
 		"## Context window",
 		"- You have a limited context window. When the conversation gets long, earlier messages will be summarized automatically. A summary will appear as a [Context from previous conversation] message.",
@@ -101,12 +96,19 @@ function system_prompt.build(options)
 		"- Prefer grep/find/ls over run for file exploration.",
 		"- Use run to verify code after writing or editing.",
 		"- NEVER ask for confirmation or permission. NEVER say \"Want me to...\", \"Shall I...\", \"Would you like me to...\". Just DO it. If the user asks you to do something, do it immediately with tools. No preamble, no asking.",
-		"- CRITICAL: If you emit ANY tool_call tags, your message must contain ONLY those tags — no text before, after, or between them. End your message immediately after the last </tool_call>. You will get results back and can respond then.",
+		options.native_tool_calling and "- Use native tools when evidence or action is needed; otherwise answer directly." or "- CRITICAL: If you emit ANY tool_call tags, your message must contain ONLY those tags — no text before, after, or between them. End your message immediately after the last </tool_call>. You will get results back and can respond then.",
 		"- After completing work, mention any important technical decision or tradeoff naturally, without a labeled note. Assume the user is technical; avoid generic reassurance.",
 		"- NEVER claim a file was read, changed, or tested unless a tool_result for that action is in the conversation.",
 		"- If a tool returns an error, acknowledge it. Do NOT pretend the operation succeeded.",
 		"- GROUNDING RULE: Every file path, line number, function name, and code snippet you cite MUST appear verbatim in a tool_result above. If you cannot find it in a tool_result, do not reference it. Do not cite paths like 'src/foo.lua' unless 'src/foo.lua' literally appeared in a find/ls/read result. When quoting code, copy-paste from the tool_result — never reconstruct from memory.",
+		"",
+		"## Verification sufficiency",
+		"- Gather enough evidence to resolve the active uncertainty, then stop gathering duplicate confirmation.",
+		"- When a check fails once but the inspected implementation and tests agree, rerun the documented check once and run one independent relevant test or probe. If both pass and no evidence conflicts, that is sufficient: do not rerun unchanged checks or add equivalent probes solely for confidence.",
+		"- When a failure reproduces or inspected source contradicts expected behavior, make the narrow fix and run the relevant documented verification once. Expand verification only if it fails or the change's concrete risk requires another distinct check.",
+		"- Do not run Git status or diff merely to prove that you made no edits; the visible tool history already establishes whether you mutated files. Use Git only when it resolves task-relevant uncertainty.",
 		mode_section(options.flow),
+		"\n" .. runtime_inventory.section(),
 		context_section(files),
 		brave_search_section(),
 		index ~= "" and ("\n" .. index) or "",

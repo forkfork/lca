@@ -7,7 +7,7 @@ local config = require("agent.config")
 local DEFAULT_SESSION_FILE = ".lca-session.json"
 local DEFAULT_HANDOFF_FILE = "HANDOFF.txt"
 local USAGE_HISTORY_LIMIT = 50
-local SYSTEM_PROMPT_VERSION = 11
+local SYSTEM_PROMPT_VERSION = 15
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -135,14 +135,35 @@ local function resolve_service_tier(value)
 	return value
 end
 
+local function native_tools_for_model(model)
+	return tostring(model or ""):match("^gpt%-5%.6%-sol") ~= nil
+end
+
 function session.create(options)
 	local cwd = current_dir()
+	local resolved_model = resolve_model(options)
+	local native_explicit = options.native_tool_calling ~= nil
+	local native_tool_calling
+	if native_explicit then
+		native_tool_calling = options.native_tool_calling == true
+	else
+		native_tool_calling = native_tools_for_model(resolved_model)
+	end
 	return setmetatable({
 		id = options.session_id or create_session_id(cwd),
 		credentials_path = options.credentials_path or config.default_credentials_path(),
-		model = resolve_model(options),
+		model = resolved_model,
 		reasoning_effort = resolve_reasoning_effort(options.reasoning_effort),
 		service_tier = resolve_service_tier(options.service_tier),
+		native_tool_calling = native_tool_calling,
+		native_tool_calling_explicit = native_explicit,
+			stream_tool_call_cap = tonumber(options.stream_tool_call_cap),
+			stream_duplicate_call_cap = tonumber(options.stream_duplicate_call_cap),
+			read_only_batch_cap = tonumber(options.read_only_batch_cap),
+			intra_turn_compaction = options.intra_turn_compaction,
+			context_compaction_threshold = tonumber(options.context_compaction_threshold),
+			context_hard_limit = tonumber(options.context_hard_limit),
+			compaction_keep_recent_tokens = tonumber(options.compaction_keep_recent_tokens),
 		flow = resolve_flow(options.flow),
 		cwd = cwd,
 		messages = {},
@@ -165,19 +186,25 @@ function session:add_user(text)
 	}
 end
 
-function session:add_assistant(text)
-	self.messages[#self.messages + 1] = {
+function session:add_assistant(text, provider_items)
+	local message = {
 		role = "assistant",
 		text = text,
 	}
+	if type(provider_items) == "table" and #provider_items > 0 then
+		message.provider_items = provider_items
+	end
+	self.messages[#self.messages + 1] = message
 end
 
-function session:add_tool_result(name, text)
-	self.messages[#self.messages + 1] = {
+function session:add_tool_result(name, text, native_call_id)
+	local message = {
 		role = "user",
 		text = text,
 		tool_name = name,
 	}
+	if native_call_id then message.native_call_id = native_call_id end
+	self.messages[#self.messages + 1] = message
 end
 
 function session:clear()
@@ -206,10 +233,12 @@ function session:record_turn_ast(state)
 end
 
 function session:get_system_prompt()
-	if type(self.system_prompt) ~= "string" or self.system_prompt == "" or self.system_prompt_version ~= SYSTEM_PROMPT_VERSION then
+	if type(self.system_prompt) ~= "string" or self.system_prompt == "" or self.system_prompt_version ~= SYSTEM_PROMPT_VERSION
+		or self.system_prompt_native_tools ~= self.native_tool_calling then
 		local system_prompt = require("agent.system_prompt")
-		self.system_prompt = system_prompt.build({ cwd = self.cwd, flow = self.flow })
+		self.system_prompt = system_prompt.build({ cwd = self.cwd, flow = self.flow, native_tool_calling = self.native_tool_calling })
 		self.system_prompt_version = SYSTEM_PROMPT_VERSION
+		self.system_prompt_native_tools = self.native_tool_calling
 	end
 	return self.system_prompt
 end
@@ -220,6 +249,7 @@ local function normalize_usage(usage, message_index)
 	end
 	local prompt_tokens = tonumber(usage.prompt_tokens or usage.input_tokens or usage.input)
 	local cached_tokens = tonumber(usage.cached_tokens or usage.cache_read or usage.cacheRead) or 0
+	local cache_write_tokens = tonumber(usage.cache_write_tokens or usage.cache_write or usage.cacheWrite) or 0
 	local output_tokens = tonumber(usage.output_tokens or usage.output) or 0
 	local total_tokens = tonumber(usage.total_tokens or usage.totalTokens or usage.total)
 	if not prompt_tokens and not total_tokens then
@@ -230,6 +260,7 @@ local function normalize_usage(usage, message_index)
 	return {
 		prompt_tokens = prompt_tokens,
 		cached_tokens = cached_tokens,
+		cache_write_tokens = cache_write_tokens,
 		output_tokens = output_tokens,
 		total_tokens = total_tokens,
 		cached_percent = prompt_tokens > 0 and (cached_tokens / prompt_tokens * 100) or 0,
@@ -387,10 +418,13 @@ function session:serialize()
 		model = self.model,
 		reasoning_effort = self.reasoning_effort,
 		service_tier = self.service_tier,
+		native_tool_calling = self.native_tool_calling,
+		native_tool_calling_explicit = self.native_tool_calling_explicit,
 		cwd = self.cwd,
 		messages = self.messages,
 		system_prompt = self.system_prompt,
 		system_prompt_version = self.system_prompt_version,
+		system_prompt_native_tools = self.system_prompt_native_tools,
 		compaction_summary = self.compaction_summary,
 		compaction_details = self.compaction_details,
 		plan = self.plan,
@@ -454,12 +488,17 @@ function session:load(path)
 	if type(data.messages) == "table" then
 		self.messages = data.messages
 	end
-	if data.system_prompt_version == SYSTEM_PROMPT_VERSION and type(data.system_prompt) == "string" and data.system_prompt ~= "" then
+	self.native_tool_calling = data.native_tool_calling == true
+	self.native_tool_calling_explicit = data.native_tool_calling_explicit == true
+	if data.system_prompt_version == SYSTEM_PROMPT_VERSION and type(data.system_prompt) == "string" and data.system_prompt ~= ""
+		and data.system_prompt_native_tools == self.native_tool_calling then
 		self.system_prompt = data.system_prompt
 		self.system_prompt_version = data.system_prompt_version
+		self.system_prompt_native_tools = data.system_prompt_native_tools
 	else
 		self.system_prompt = nil
 		self.system_prompt_version = nil
+		self.system_prompt_native_tools = nil
 	end
 	-- Restore compaction summary
 	if data.compaction_summary and data.compaction_summary ~= require("cjson").null then
@@ -505,6 +544,9 @@ function session:load(path)
 		self.credentials_path = data.credentials_path
 	end
 	self.model = model_for_credentials(self.credentials_path, self.model)
+	if not self.native_tool_calling_explicit then
+		self.native_tool_calling = native_tools_for_model(self.model)
+	end
 	if data.reasoning_effort and data.reasoning_effort ~= require("cjson").null then
 		self.reasoning_effort = resolve_reasoning_effort(data.reasoning_effort)
 	end
@@ -564,6 +606,7 @@ session.DEFAULT_SESSION_FILE = DEFAULT_SESSION_FILE
 session.DEFAULT_HANDOFF_FILE = DEFAULT_HANDOFF_FILE
 session.resolve_reasoning_effort = resolve_reasoning_effort
 session.resolve_service_tier = resolve_service_tier
+session.native_tools_for_model = native_tools_for_model
 session.resolve_flow = resolve_flow
 session.SYSTEM_PROMPT_VERSION = SYSTEM_PROMPT_VERSION
 return session

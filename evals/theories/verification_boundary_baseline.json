@@ -1,0 +1,22 @@
+{
+  "id": "verification_boundary_baseline",
+  "title": "LCA and Codex distinguish transient verification failure from a stable code regression",
+  "hypothesis": "LCA Sol gathers confirming evidence and avoids mutation when a realistic verification failure disappears, while making a narrow production fix when the same symptom is backed by a stable code defect, at a rate comparable to Codex CLI Sol.",
+  "falsified_if": "Equivalent engine trajectories grade differently, the transient harness state leaks between runs, the transient grader accepts mutation or an unsupported diagnosis, the stable grader accepts a no-op or out-of-scope change, or LCA repeatedly chooses the wrong mutation policy.",
+  "source_ids": ["codex-loop"],
+  "control_variant": "codex_cli_sol",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["transient_verification_failure", "stable_verification_regression"],
+  "variants": [
+    {"id": "codex_cli_sol", "engine": "codex_cli", "model": "gpt-5.6-sol"},
+    {"id": "lca_sol", "engine": "lca", "model": "gpt-5.6-sol", "system_prompt_profile": "current"}
+  ],
+  "deterministic_outcomes": [
+    "the reported verification failure is observed before recovery",
+    "the transient case reaches green without any mutation and reports the evidence accurately",
+    "the stable case mutates only billing/invoice.py after failure evidence",
+    "public and hidden behavior pass after the stable fix"
+  ],
+  "efficiency_outcomes": ["elapsed milliseconds", "model, tool, and verification counts", "prompt, cached, and output tokens"],
+  "decision_rule": "Require at least four of five LCA passes in each scenario. Change production only for a repeated LCA failure with deterministic causal evidence; otherwise keep the paired regression coverage without adding generic retry instructions to the system prompt."
+}

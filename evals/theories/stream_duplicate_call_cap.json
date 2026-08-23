@@ -1,0 +1,20 @@
+{
+  "id": "stream_duplicate_call_cap",
+  "title": "Stop provider output after a duplicate tool-call flood",
+  "hypothesis": "Stopping a Codex stream after its third duplicate complete valid tool call will preserve the unique executable prefix while reducing response size and long-tail latency.",
+  "falsified_if": "The cutoff causes any new deterministic failure or materially increases model/tool calls, response size, or latency because useful unique calls commonly arrive after the duplicate threshold.",
+  "source_ids": [],
+  "local_evidence": "Raw LCA eval transcripts contained 19-24 duplicate calls on tiny edit tasks even though the core later discarded them.",
+  "scenarios": ["repeated_text_edit", "stale_edit_recovery"],
+  "minimum_runs_per_cell": 5,
+  "control_variant": "uncapped_duplicates",
+  "variants": [
+    {"id": "uncapped_duplicates", "system_prompt_profile": "current", "edit_tool_profile": "tagged", "stream_duplicate_call_cap": 0},
+    {"id": "duplicate_cap_3", "system_prompt_profile": "current", "edit_tool_profile": "tagged", "stream_duplicate_call_cap": 3}
+  ],
+  "outcomes": {
+    "primary": ["pass_rate", "hard_gate_failure_categories"],
+    "secondary": ["stream_duplicate_caps_mean", "provider_response_chars_mean", "provider_response_bytes_mean", "elapsed_ms_mean", "llm_calls_mean", "tool_calls_mean", "duplicate_tool_calls_dropped_mean"]
+  },
+  "decision_rule": "Reject on any new deterministic correctness, concurrent-change, or scope failure. Otherwise adopt only if capped runs reduce transcript-derived response size or upper-tail latency without materially increasing model/tool calls. Provider token totals are diagnostic only because an intentional cutoff can omit the final usage event."
+}

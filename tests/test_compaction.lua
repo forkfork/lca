@@ -160,6 +160,42 @@ run_test("summary prompt includes recent turn ast evidence", function()
 	assert_contains(prompt, "Use it as grounding evidence")
 end)
 
+run_test("active-turn compaction keeps the complete current tool exchange", function()
+	local original_generate = compaction.generate_summary
+	compaction.generate_summary = function()
+		return "## Goal\nkeep latest correction"
+	end
+	local session = {
+		messages = {
+			{ role = "user", text = "old request" },
+			{ role = "assistant", text = "old response" },
+			{ role = "user", text = "latest correction" },
+			{ role = "assistant", text = '<tool_call name="read">\n{"path":"app.lua"}\n</tool_call>' },
+			{ role = "user", tool_name = "read", text = '<tool_result name="read" status="ok" path="app.lua">exact contents</tool_result>' },
+		},
+		last_usage = { total_tokens = 9999, message_index = 4 },
+		estimated_session_tokens = function(self)
+			return compaction.estimate_total(self.messages)
+		end,
+	}
+
+	local ok, compacted, removed = pcall(function()
+		return compaction.compact(session, {
+			bypass_threshold = true,
+			keep_recent_tokens = 1,
+			preserve_active_turn = true,
+		})
+	end)
+	compaction.generate_summary = original_generate
+	if not ok then error(compacted) end
+	assert_eq(compacted, true)
+	assert_eq(removed, 2)
+	assert_eq(session.messages[3].text, "latest correction")
+	assert_contains(session.messages[4].text, '<tool_call name="read">')
+	assert_contains(session.messages[5].text, "exact contents")
+	assert_eq(session.last_usage, nil, "compaction must invalidate usage tied to old message indices")
+end)
+
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")
 io.write(string.format("  %s passed, %s failed\n\n",
 	green(tostring(passed)), failed > 0 and red(tostring(failed)) or tostring(failed)))

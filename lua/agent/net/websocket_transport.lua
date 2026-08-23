@@ -77,6 +77,9 @@ end
 
 local function read_exact(sock, n, state, phase, timeout_sec, opts)
 	local deadline = now() + timeout_sec
+	if state.request_deadline and state.request_deadline < deadline then
+		deadline = state.request_deadline
+	end
 	local chunks = {}
 	local got = 0
 	while got < n do
@@ -95,7 +98,9 @@ local function read_exact(sock, n, state, phase, timeout_sec, opts)
 			got = got + #chunk
 		elseif err == "timeout" or err == "wantread" or err == "wantwrite" then
 			if now() >= deadline then
-				fail("timeout", phase, phase, state)
+				local total_expired = state.request_deadline and now() >= state.request_deadline
+				local deadline_kind = total_expired and "total" or phase
+				fail("timeout", deadline_kind, deadline_kind, state)
 			end
 			notify_wait(opts, phase)
 		else
@@ -333,6 +338,7 @@ local function normalize_deadlines(opts)
 	deadlines.write = deadlines.write or 15
 	deadlines.first_byte = deadlines.first_byte or 45
 	deadlines.idle = deadlines.idle or 300
+	deadlines.total = deadlines.total or 600
 	opts.deadlines = deadlines
 end
 
@@ -356,6 +362,7 @@ function ws.connect(opts)
 		conn.state = state
 		function conn:request(body, on_text)
 			local request_started_at = now()
+			self.state.request_deadline = request_started_at + opts.deadlines.total
 			local response_bytes_before = self.state.response_bytes
 			self.state.body_tail = ""
 			send_text(sock, body, self.state, opts)
@@ -383,6 +390,7 @@ function ws.connect(opts)
 				end
 			end
 			self.state.timings.total = now() - request_started_at
+			self.state.request_deadline = nil
 			return {
 				status = self.state.status or 101,
 				response_bytes = self.state.response_bytes - response_bytes_before,
@@ -425,5 +433,9 @@ function ws.request(opts)
 	end
 	error(result)
 end
+
+ws._test = {
+	read_exact = read_exact,
+}
 
 return ws

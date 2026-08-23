@@ -1,0 +1,9 @@
+{
+  "id": "failure_recovery",
+  "title": "Recover from a concurrent regression exposed by verification",
+  "prompt": "Implement the narrowly scoped shipping quote change described in README.md. Preserve backward compatibility and file scope, run the documented tests, diagnose any failure from its evidence, and finish with a passing verification.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "recovery_mutation": "recovery-mutation.json",
+  "judge": false
+}

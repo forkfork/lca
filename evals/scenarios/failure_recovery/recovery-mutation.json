@@ -1,0 +1,5 @@
+{
+  "path": "shipping/quotes.py",
+  "old_text": "ZERO_WEIGHT_CENTS = 0\n",
+  "new_text": "ZERO_WEIGHT_CENTS = 500\n"
+}

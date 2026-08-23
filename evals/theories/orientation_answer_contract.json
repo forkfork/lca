@@ -1,0 +1,37 @@
+{
+  "id": "orientation_answer_contract",
+  "title": "Give decision-useful project orientation without extra exploration",
+  "hypothesis": "A compact, model-agnostic orientation answer contract improves synthesis and starting-point quality without increasing investigation actions or latency.",
+  "falsified_if": "The treatment loses any deterministic pass, averages below the control score, adds more than one mean investigation action, or increases mean latency by more than 20 percent.",
+  "source_ids": ["local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "current",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    },
+    {
+      "id": "answer_contract",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "system_prompt_append": "For project-orientation questions, give a decision-useful mental model rather than a file inventory. Establish the project's identity and purpose, its main user workflow, important architectural boundaries, and the current implementation reality; distinguish documented intent from code that actually exists. End with 3-5 concrete starting files or directories and why each matters. Ground this with authoritative documentation, package metadata, and representative source when available. Do not run tests or builds merely to describe a project. Keep the final synthesis concise."
+    }
+  ],
+  "deterministic_outcomes": [
+    "correct project identity and core workflow",
+    "no documented intent presented as implemented fact",
+    "no mutation or unnecessary execution",
+    "concise usable answer"
+  ],
+  "efficiency_outcomes": [
+    "outcome, evidence, and efficiency section scores",
+    "starting points and distinctive details",
+    "investigation actions and elapsed milliseconds"
+  ],
+  "decision_rule": "Adopt the contract only if both variants pass 5/5, treatment mean score improves by at least five points, treatment starting-point and outcome means do not regress, mean investigation actions increase by at most one, and mean latency increases by at most 20 percent."
+}

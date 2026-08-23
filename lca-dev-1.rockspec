@@ -45,6 +45,7 @@ build = {
 		["agent.project_context"] = "lua/agent/project_context.lua",
 		["agent.project_index"] = "lua/agent/project_index.lua",
 		["agent.repl"] = "lua/agent/repl.lua",
+		["agent.runtime_inventory"] = "lua/agent/runtime_inventory.lua",
 		["agent.session"] = "lua/agent/session.lua",
 		["agent.system_prompt"] = "lua/agent/system_prompt.lua",
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",

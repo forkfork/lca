@@ -1,0 +1,20 @@
+{
+  "id": "edit_tool_resilience",
+  "title": "Tagged ranges versus exact replacement under ambiguity and stale state",
+  "hypothesis": "Tagged line ranges will require fewer recovery turns for repeated text and will reject stale target lines at least as reliably as exact oldText/newText replacement.",
+  "falsified_if": "Exact replacement matches or exceeds tagged deterministic pass rate on both scenarios without materially more failed mutations, model calls, response size, or latency.",
+  "source_ids": ["pi-edit", "aider-edit-formats"],
+  "scenarios": ["repeated_text_edit", "stale_edit_recovery"],
+  "minimum_runs_per_cell": 5,
+  "control_variant": "tagged",
+  "variants": [
+    {"id": "tagged", "system_prompt_profile": "current", "edit_tool_profile": "tagged"},
+    {"id": "exact", "system_prompt_profile": "current", "edit_tool_profile": "exact"}
+  ],
+  "outcomes": {
+    "primary": ["pass_rate", "hard_gate_failure_categories"],
+    "secondary": ["failed_mutations_mean", "stale_tag_failures_mean", "exact_no_match_failures_mean", "llm_calls_mean", "tool_calls_mean", "elapsed_ms_mean", "provider_response_chars_mean", "changed_lines_mean"]
+  },
+  "decision_rule": "Reject a format on any repeatable loss of the requested change, concurrent annotation, or scope control. If both remain correct, prefer the format with fewer recovery/model calls and lower response size across both scenarios. Combine these results with existing_codebase_edit before changing production; do not choose from a single scenario average.",
+  "measurement_amendment": "One exact stale-recovery run created .pytest_cache by running pytest before the documented unittest command. Its requested edit, injected annotation, and behavior were correct. Generated interpreter/test-runner caches are now excluded from scope grading; the invalid cell is replaced with a fresh run."
+}

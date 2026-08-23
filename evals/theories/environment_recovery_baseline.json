@@ -1,0 +1,36 @@
+{
+  "id": "environment_recovery_baseline",
+  "title": "LCA and Codex CLI recover from the same unavailable local runtime",
+  "hypothesis": "LCA with Sol can distinguish a deterministic local runtime failure from an application failure, choose an available local fallback, complete the requested production change, and verify it at a rate comparable to Codex CLI using the same model.",
+  "falsified_if": "The grader rewards code correctness without observing the environment failure and a later successful fallback, treats equivalent LCA and Codex actions differently, or LCA repeatedly edits environment or test files instead of recovering locally.",
+  "source_ids": ["codex-loop"],
+  "control_variant": "codex_cli_sol",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["environment_recovery"],
+  "variants": [
+    {
+      "id": "codex_cli_sol",
+      "engine": "codex_cli",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "id": "lca_sol",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "deterministic_outcomes": [
+    "unavailable pinned runtime observed before mutation",
+    "safe available interpreter used for relevant passing verification",
+    "requested public and hidden behavior",
+    "no changes to tests, documentation, or environment configuration"
+  ],
+  "efficiency_outcomes": [
+    "elapsed milliseconds",
+    "model and tool calls",
+    "number of command attempts",
+    "prompt, cached, and output tokens"
+  ],
+  "decision_rule": "Treat Codex as a reference rather than an oracle. If LCA passes fewer than four of five runs or trails Codex by at least two passes, inspect raw trajectories and implement only the smallest repeated causal loop or tool-result improvement; retain the scenario as a regression test."
+}

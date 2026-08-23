@@ -1213,7 +1213,7 @@ function repl.run(options)
 						local ttft = first_token_time and (first_token_time - start_time) or elapsed
 						ui.stream_stats(token_count, elapsed, ttft, result._response_meta)
 					end
-					session:add_assistant(result.text)
+					session:add_assistant(result.text, result._output_items)
 
 					maybe_auto_compact()
 

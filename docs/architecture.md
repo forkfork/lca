@@ -105,9 +105,10 @@ turn:
    batch of calls, append each `<tool_result>` as a user message, and call the
    model again.
 
-The loop allows up to 40 tool executions per user turn and caps each model
-requested batch at 6 tool calls. If the budget is exhausted, lca asks the model
-to stop using tools and answer from the gathered context.
+The loop allows up to 40 tool executions per user turn. General model-requested
+batches are capped at 10 calls, while wholly read-only inspection batches are
+capped at 6. If the budget is exhausted, lca asks the model to stop using tools
+and answer from the gathered context.
 
 ## Tool Protocol
 
@@ -211,8 +212,8 @@ MCP support is initialized by `bin/repl.lua` before the REPL starts:
 
 ## Session Persistence and Compaction
 
-`session.lua` stores credentials path, model, reasoning effort, cwd, messages,
-and the latest compaction summary. REPL sessions auto-save to
+`session.lua` stores credentials path, model, reasoning effort, native tool
+selection, cwd, messages, and the latest compaction summary. REPL sessions auto-save to
 `.lca-session.json` when there is conversation history, and `/save` and `/load`
 expose the same serialization explicitly.
 

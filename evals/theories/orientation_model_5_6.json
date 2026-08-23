@@ -1,0 +1,37 @@
+{
+  "id": "orientation_model_5_6",
+  "title": "GPT-5.6 Sol versus GPT-5.5 for project orientation",
+  "hypothesis": "GPT-5.6 Sol produces an equally grounded but more useful and token-efficient project orientation than GPT-5.5 under the same LCA agent loop.",
+  "falsified_if": "GPT-5.6 Sol has a lower deterministic pass rate or mean score, or does not improve at least one of answer quality, output tokens, or elapsed time without materially worsening the others.",
+  "source_ids": ["openai-gpt-5-6-guide-2026-08", "local-lca-orientation-run-2026-08-22"],
+  "control_variant": "gpt_5_5",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "gpt_5_5",
+      "model": "gpt-5.5",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "gpt_5_6_sol",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "deterministic_outcomes": [
+    "project identity and operating model",
+    "grounded documentation reads",
+    "no unsupported verification claim",
+    "no mutations or command execution",
+    "bounded lookup and answer size"
+  ],
+  "efficiency_outcomes": [
+    "prompt, cached, cache-write, and output tokens",
+    "provider calls",
+    "elapsed milliseconds",
+    "response bytes",
+    "word count"
+  ],
+  "decision_rule": "Adopt GPT-5.6 Sol for orientation only if five runs are non-inferior on deterministic pass rate and score and show a useful quality or efficiency gain. Do not generalize to coding tasks until auth, existing-codebase edit, recovery, and investigation scenarios also pass a model comparison."
+}

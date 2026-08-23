@@ -1,0 +1,20 @@
+{
+  "id": "stream_tool_call_cap",
+  "title": "Stop provider output after the core execution batch is complete",
+  "hypothesis": "Stopping Codex streaming after ten unique complete valid tool calls will preserve task correctness while reducing discarded output, latency, and oversized-response recovery.",
+  "falsified_if": "The cap creates a new hard-gate failure category or increases model calls/latency enough to erase the output savings.",
+  "source_ids": ["hn-pi-minimalism-2026-08"],
+  "scenarios": ["simple_prompt", "batch_many_files"],
+  "minimum_runs_per_cell": 5,
+  "control_variant": "uncapped",
+  "variants": [
+    {"id": "uncapped", "system_prompt_profile": "current", "stream_tool_call_cap": 0},
+    {"id": "cap_10", "system_prompt_profile": "current", "stream_tool_call_cap": 10}
+  ],
+  "outcomes": {
+    "primary": ["pass_rate", "hard_gate_failure_categories"],
+    "secondary": ["provider_response_chars_mean", "provider_response_bytes_mean", "elapsed_ms_mean", "llm_calls_mean", "tool_calls_mean", "usage_unavailable_calls_mean"]
+  },
+  "decision_rule": "Reject on any new deterministic hard-gate failure. Otherwise adopt only if capped runs reduce upper-tail response size or latency without a material increase in model or tool calls. Use five runs per cell, then confirm on a scenario that reliably emits more than ten unique calls before enabling by default.",
+  "measurement_amendment": "The pilot showed that intentional early stream termination can omit the provider's final usage event. Token totals are therefore censored for capped calls and were replaced after the pilot with transcript-derived response chars/bytes plus an explicit unavailable-usage count. Correctness and call-count outcomes are unchanged."
+}

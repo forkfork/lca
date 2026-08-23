@@ -50,8 +50,14 @@ credentials for the other providers in `~/.lca-credentials.json`.
 lca
 lca run "explain this project"
 lca run "add the feature" --model gpt-5.5 --reasoning low
+lca run "add the feature" --model gpt-5.6-sol
 lca repl
 ```
+
+GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
+Lua tool execution and tagged-edit safety while avoiding XML-emulated tool
+calls. Use `--xml-tools` to compare or temporarily fall back; `--native-tools`
+can opt another Codex model into the same adapter.
 
 Useful REPL commands: `/help`, `/status`, `/model`, `/reasoning`, `/clear`,
 `/exit`.

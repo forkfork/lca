@@ -1,0 +1,46 @@
+{
+  "id": "agent_loop_sol_comparison",
+  "title": "LCA and Codex CLI agent loops with GPT-5.6 Sol",
+  "hypothesis": "On the same fixtures, prompts, model, and reasoning effort, outcome-first grading can identify repeatable LCA agent-loop gaps without prescribing Codex's tool interface.",
+  "falsified_if": "Equivalent LCA and Codex semantic trajectories receive different outcome, safety, scope, or verification grades, or either adapter cannot complete the same unmodified fixture.",
+  "source_ids": ["codex-source", "openai-gpt-5-6-guide-2026-08", "local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "codex_cli_sol",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "project_orientation",
+    "existing_codebase_edit",
+    "multifile_order_cancellation",
+    "ambiguous_bug_investigation",
+    "auth_api"
+  ],
+  "variants": [
+    {
+      "id": "codex_cli_sol",
+      "engine": "codex_cli",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "id": "lca_sol",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "final repository behavior passes public and hidden checks",
+    "workspace changes remain within scenario scope",
+    "the agent performs required verification",
+    "multi-file features preserve architectural boundaries and hidden compatibility",
+    "orientation answers are grounded, accurate, concise, and non-mutating",
+    "simple prompts do not trigger unnecessary tools"
+  ],
+  "efficiency_outcomes": [
+    "elapsed milliseconds among passing runs",
+    "completed semantic actions and failed actions",
+    "prompt, cached, and output tokens reported within each harness",
+    "final answer size and required evidence"
+  ],
+  "decision_rule": "Treat each scenario independently. Diagnose an LCA gap only when Codex passes at least 2/3 runs and exceeds LCA by at least one pass or ten mean score points. Never compare raw llm_calls or absolute prompt-token cost across harnesses. Adopt an LCA change only after a separate controlled treatment preserves deterministic correctness and improves the affected trajectory measure."
+}

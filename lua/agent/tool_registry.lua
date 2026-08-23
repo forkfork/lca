@@ -68,6 +68,98 @@ function registry.mcp_tool_count()
 	return #mcp_tools
 end
 
+local function object_schema(properties, required)
+	local schema = {
+		type = "object",
+		properties = properties or {},
+		additionalProperties = false,
+	}
+	if required and #required > 0 then schema.required = required end
+	return schema
+end
+
+local native_tool_specs = {
+	ls = { "List directory entries.", object_schema({ path = { type = "string", description = "Directory path; defaults to the working directory." } }) },
+	read = { "Read a focused text-file slice with line numbers and stale-edit tags.", object_schema({
+		path = { type = "string" }, offset = { type = "integer", minimum = 1 }, limit = { type = "integer", minimum = 1, maximum = 300 },
+	}, { "path" }) },
+	find = { "List files recursively.", object_schema({
+		path = { type = "string" }, maxDepth = { type = "integer", minimum = 1 }, pattern = { type = "string" },
+	}) },
+	grep = { "Search file contents and return matching paths and lines.", object_schema({
+		pattern = { type = "string" }, path = { type = "string" }, glob = { type = "string" },
+	}, { "pattern" }) },
+	edit = { "Replace a tagged line range. Read the file first and copy its line numbers and four-character tags exactly.", object_schema({
+		path = { type = "string" }, start_line = { type = "integer", minimum = 1 }, start_tag = { type = "string" },
+		end_line = { type = "integer", minimum = 1 }, end_tag = { type = "string" }, content = { type = "string", description = "Literal replacement text; empty deletes the range." },
+	}, { "path", "start_line", "start_tag", "end_line", "end_tag", "content" }) },
+	write = { "Create or overwrite a file, creating parent directories when needed.", object_schema({
+		path = { type = "string" }, content = { type = "string", description = "Complete literal file content." },
+	}, { "path", "content" }) },
+	run = { "Execute a bounded shell command and return combined stdout and stderr.", object_schema({
+		command = { type = "string" }, timeout = { type = "integer", minimum = 1, description = "Timeout in milliseconds; default 120000." },
+	}, { "command" }) },
+	job_start = { "Start a durable background command and return its job id.", object_schema({
+		command = { type = "string" }, cwd = { type = "string" }, timeout = { type = "integer", minimum = 1 }, temporary = { type = "boolean" },
+	}, { "command" }) },
+	job_status = { "Inspect a durable background job.", object_schema({ id = { type = "string" }, cwd = { type = "string" } }, { "id" }) },
+	job_output = { "Read bounded output from a durable background job.", object_schema({
+		id = { type = "string" }, cwd = { type = "string" }, stream = { type = "string", enum = { "stdout", "stderr" } },
+		tail = { type = "integer", minimum = 1 }, offset = { type = "integer", minimum = 0 }, limit = { type = "integer", minimum = 1 }, search = { type = "string" },
+	}, { "id" }) },
+	job_stop = { "Stop a durable background job process group.", object_schema({ id = { type = "string" }, cwd = { type = "string" } }, { "id" }) },
+	job_wait = { "Wait briefly for a durable job and return its status and recent output.", object_schema({
+		id = { type = "string" }, cwd = { type = "string" }, timeout_ms = { type = "integer", minimum = 1 }, tail = { type = "integer", minimum = 1 }, stream = { type = "string", enum = { "stdout", "stderr" } },
+	}, { "id" }) },
+	update_plan = { "Replace the visible execution checklist; use at most one in_progress item.", object_schema({
+		plan = { type = "array", items = object_schema({ step = { type = "string" }, status = { type = "string", enum = { "pending", "in_progress", "completed" } } }, { "step", "status" }) },
+	}, { "plan" }) },
+}
+
+function registry.native_tools()
+	local definitions = {}
+	for _, name in ipairs(registry.names()) do
+		local spec = native_tool_specs[name]
+		if spec then
+			definitions[#definitions + 1] = { type = "function", name = name, description = spec[1], parameters = spec[2], strict = false }
+		else
+			for _, tool in ipairs(mcp_tools) do
+				if name == "mcp__" .. tool._server .. "__" .. tool.name then
+					definitions[#definitions + 1] = {
+						type = "function", name = name, description = tool.description or "MCP tool",
+						parameters = tool.inputSchema or object_schema(), strict = false,
+					}
+					break
+				end
+			end
+		end
+	end
+	return definitions
+end
+
+function registry.native_system_prompt()
+	return [[
+You have native tools for inspecting files, editing code, running commands, managing background jobs, and updating plans. Use them directly; never print or imitate tool-call markup.
+
+## Working strategy
+- For project-orientation questions, inspect authoritative documentation, package metadata, the repository tree, and representative source in one parallel batch when possible. Do not run tests or builds merely to describe a project.
+- Give a concise, decision-useful orientation: identity and purpose, the main user workflow, important architectural boundaries, and current implementation reality. Distinguish documented intent from inspected code, including concrete stubs and documented components absent from the tree when supported by evidence. End with exactly three useful starting files and why each matters.
+- Prefer targeted find/grep/read calls. Do not re-read content already returned unless it may have changed.
+- For edits, read the target first, then use its exact line numbers and four-character tags. Make the smallest coherent change and run focused verification.
+- Batch independent inspection calls when useful. Do not call read and edit/write for the same file in parallel.
+- Use run for bounded commands and job_start for servers, watchers, or long-running commands.
+- For substantial work, maintain a short execution plan. Skip plans for trivial requests.
+- Minimize model round trips without guessing across dependencies. In each response, call every independent tool whose arguments are already known.
+- For a bounded change affecting a few existing files, skip update_plan unless the task genuinely has multiple independent workstreams.
+- After inspection, batch non-overlapping tagged edits whose replacements are all known.
+- Once edits succeed, combine known focused checks into one run command using && when later checks do not need model judgment.
+- Do not split plan updates, edits, or redundant verification into separate model turns merely to narrate progress. Start a new tool round only when its arguments depend on results from the previous round.
+- Preserve existing project patterns and user changes. Avoid unrelated refactors and destructive git operations.
+- Never claim a file was read, changed, or tested unless the corresponding tool result established it.
+- If a tool fails, use its actual error to recover or explain the blocker.
+]]
+end
+
 function registry.mcp_prompt_section()
 	if #mcp_tools == 0 then return "" end
 

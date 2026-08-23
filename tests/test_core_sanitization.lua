@@ -31,10 +31,10 @@ package.loaded["agent.providers"] = {
 						end
 						return provider_response
 					end
-				if type(provider_response) == "function" then
-					return {
-						text = provider_response(request),
-					}
+			if type(provider_response) == "function" then
+					local value = provider_response(request)
+					if type(value) == "table" then return value end
+					return { text = value }
 				end
 				return {
 					text = provider_response,
@@ -46,6 +46,7 @@ package.loaded["agent.providers"] = {
 
 local core = require("agent.core")
 local session_module = require("agent.session")
+local read_tool = require("agent.tools.read")
 
 local passed = 0
 local failed = 0
@@ -198,6 +199,165 @@ test("duplicate-heavy tool batch is surfaced to next model turn", function()
 	end
 end)
 
+test("provider stream cap is surfaced to the next model turn", function()
+	provider_calls = 0
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("Streaming tool%-call cap reached") then
+				return "done after stream cap"
+			end
+		end
+		local calls = {}
+		for i = 1, 10 do
+			calls[#calls + 1] = '<tool_call name="update_plan">'
+			calls[#calls + 1] = '{"plan":[{"step":"step ' .. tostring(i) .. '","status":"pending"}]}'
+			calls[#calls + 1] = "</tool_call>"
+		end
+		return {
+			text = table.concat(calls, "\n"),
+			_stream_tool_cap_reached = true,
+		}
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger stream cap")
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "done after stream cap" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if provider_calls ~= 2 then
+		error("expected 2 provider calls, got " .. tostring(provider_calls))
+	end
+end)
+
+test("provider duplicate stream cap is surfaced to the next model turn", function()
+	provider_calls = 0
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("Streaming duplicate%-call cap reached") then
+				return "done after duplicate stream cap"
+			end
+		end
+		return {
+			text = table.concat({
+				'<tool_call name="ls">',
+				'{"path":"."}',
+				"</tool_call>",
+			}, "\n"),
+			_stream_duplicate_cap_reached = true,
+		}
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("trigger duplicate stream cap")
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "done after duplicate stream cap" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if provider_calls ~= 2 then
+		error("expected 2 provider calls, got " .. tostring(provider_calls))
+	end
+end)
+
+test("context reserve compacts completed history between tool calls", function()
+	provider_calls = 0
+	summary_request = nil
+	local main_calls = 0
+	provider_response = function(request)
+		if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
+			summary_request = request
+			return "## Goal\nHonor the latest correction."
+		end
+		main_calls = main_calls + 1
+		if main_calls == 1 then
+			return table.concat({
+				'<tool_call name="ls">',
+				'{"path":"."}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "done after intra-turn compaction"
+	end
+
+	local session = session_module.create({
+		context_compaction_threshold = 50,
+		compaction_keep_recent_tokens = 1,
+	})
+	session.cwd = project_dir
+	session:add_user("old request")
+	session:add_assistant("old answer")
+	session:add_user("latest correction")
+	session.estimated_model_input_tokens_usage_aware = function(self)
+		return #self.messages <= 3 and 10 or 100
+	end
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "done after intra-turn compaction" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if not summary_request then
+		error("expected an intra-turn summary request")
+	end
+	if not tostring(summary_request.messages[1].text):find("old request", 1, true) then
+		error("completed history was not sent to summarization")
+	end
+	local joined = {}
+	for _, message in ipairs(last_request.messages or {}) do
+		joined[#joined + 1] = tostring(message.text or "")
+	end
+	joined = table.concat(joined, "\n")
+	if not joined:find("latest correction", 1, true) or not joined:find('<tool_result name="ls"', 1, true) then
+		error("active turn was split during compaction")
+	end
+end)
+
+test("later read cannot invalidate an earlier mutation in one response", function()
+	provider_calls = 0
+	local target = os.tmpname() .. "_dependency_prefix.txt"
+	local file = assert(io.open(target, "w"))
+	file:write("old\n")
+	file:close()
+	local tag = read_tool.line_tag(1, "old")
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("Tool dependency boundary reached", 1, true) then
+				return "done after dependency boundary"
+			end
+		end
+		return table.concat({
+			'<tool_call name="edit">',
+			'{"path":"' .. target .. '","start_line":1,"start_tag":"' .. tag .. '","end_line":1,"end_tag":"' .. tag .. '"}',
+			"new",
+			"</tool_call>",
+			'<tool_call name="read">',
+			'{"path":"' .. target .. '"}',
+			"</tool_call>",
+		}, "\n")
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("edit then inspect")
+	local result = core.run_session(session, nil, nil, nil)
+	local updated_file = assert(io.open(target, "r"))
+	local updated = updated_file:read("*a")
+	updated_file:close()
+	os.remove(target)
+
+	if result.text ~= "done after dependency boundary" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if not updated:match("^new\n*$") then
+		error("earlier mutation was not executed: " .. tostring(updated))
+	end
+	local first_assistant = session.messages[2] and session.messages[2].text or ""
+	if first_assistant:find('<tool_call name="read">', 1, true) then
+		error("deferred read was stored as executed assistant history")
+	end
+end)
+
 test("read-only batch cap steers away from broad inventory", function()
 	provider_calls = 0
 	local first_response = {}
@@ -226,7 +386,7 @@ test("read-only batch cap steers away from broad inventory", function()
 	local found = false
 	for _, message in ipairs(session.messages) do
 		local text = tostring(message.text or "")
-		if text:find("only the first 5 inspection calls ran", 1, true)
+		if text:find("only the first 6 inspection calls ran", 1, true)
 			and text:find("Stop broad workspace inventory", 1, true)
 		then
 			found = true
@@ -235,6 +395,33 @@ test("read-only batch cap steers away from broad inventory", function()
 	end
 	if not found then
 		error("missing read-only batch cap steering message")
+	end
+end)
+
+test("read-only batch cap can be overridden without changing the general cap", function()
+	provider_calls = 0
+	local first_response = {}
+	for i = 1, 7 do
+		first_response[#first_response + 1] = '<tool_call name="ls">'
+		first_response[#first_response + 1] = '{"path":"missing-custom-' .. tostring(i) .. '"}'
+		first_response[#first_response + 1] = "</tool_call>"
+	end
+	provider_response = function(request)
+		for _, message in ipairs(request.messages or {}) do
+			if tostring(message.text or ""):find("only the first 4 inspection calls ran", 1, true) then
+				return "done after custom read-only cap"
+			end
+		end
+		return table.concat(first_response, "\n")
+	end
+
+	local session = session_module.create({ read_only_batch_cap = 4 })
+	session.cwd = project_dir
+	session:add_user("trigger custom inventory cap")
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "done after custom read-only cap" then
+		error("unexpected result: " .. tostring(result.text))
 	end
 end)
 

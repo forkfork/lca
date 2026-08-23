@@ -184,6 +184,39 @@ run_test("system prompt is frozen for cache stability", function()
 	assert_eq(second:get_system_prompt(), prompt_before)
 end)
 
+run_test("system prompt bounds duplicate verification evidence", function()
+	local s = session_module.create({ model = "gpt-5.6-sol" })
+	local prompt = s:get_system_prompt()
+	if not prompt:find("## Verification sufficiency", 1, true) then
+		error("verification sufficiency section missing")
+	end
+	if not prompt:find("do not rerun unchanged checks", 1, true) then
+		error("duplicate verification boundary missing")
+	end
+	if not prompt:find("run the relevant documented verification once", 1, true) then
+		error("post-fix verification requirement missing")
+	end
+end)
+
+run_test("Sol defaults to native tools with an explicit XML fallback", function()
+	local native = session_module.create({ model = "gpt-5.6-sol" })
+	assert_eq(native.native_tool_calling, true)
+	assert_eq(native.native_tool_calling_explicit, false)
+	local xml = session_module.create({ model = "gpt-5.6-sol", native_tool_calling = false })
+	assert_eq(xml.native_tool_calling, false)
+	assert_eq(xml.native_tool_calling_explicit, true)
+end)
+
+run_test("native tool selection survives session save and load", function()
+	local path = tmp_dir .. "/session-native-tools.json"
+	local first = session_module.create({ model = "gpt-5.6-sol", native_tool_calling = false })
+	assert(first:save(path))
+	local second = session_module.create({})
+	assert(second:load(path))
+	assert_eq(second.native_tool_calling, false)
+	assert_eq(second.native_tool_calling_explicit, true)
+end)
+
 run_test("old saved system prompt is rebuilt after prompt version changes", function()
 	local path = tmp_dir .. "/session-old-system-prompt.json"
 	write_file(path, [[{

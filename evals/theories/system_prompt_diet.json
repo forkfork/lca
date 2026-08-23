@@ -1,0 +1,33 @@
+{
+  "id": "system_prompt_diet",
+  "title": "A smaller harness prompt preserves correctness while reducing agent overhead",
+  "hypothesis": "Consolidating generic context-management and overlapping response guidance, while retaining grounding, verification, tool protocol, and project context, will not reduce task pass rate and will reduce at least one of model calls, tool calls, elapsed time, or token use.",
+  "falsified_if": "The lean profile materially lowers pass rate, introduces a hard-gate failure category, or produces no repeatable efficiency improvement.",
+  "source_ids": [
+    "hn-pi-minimalism-2026-08",
+    "claude-context-rules-2026",
+    "context-files-ablation"
+  ],
+  "scenarios": ["simple_prompt", "auth_api"],
+  "minimum_runs_per_cell": 5,
+  "control_variant": "current",
+  "variants": [
+    {
+      "id": "current",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "lean",
+      "system_prompt_profile": "lean"
+    }
+  ],
+  "outcomes": {
+    "primary": ["pass_rate", "hard_gate_failure_categories"],
+    "secondary": ["score_mean", "tool_calls_mean", "llm_calls_mean", "elapsed_ms_mean", "prompt_tokens_mean", "output_tokens_mean"],
+    "hard_gates": [
+      "No regression on simple_prompt",
+      "No new auth_api hard-gate failure category"
+    ]
+  },
+  "decision_rule": "With at least five runs per scenario/variant, reject the treatment on any new deterministic hard-gate regression. Otherwise require non-inferior aggregate pass rate and a repeatable improvement in at least one secondary metric without material deterioration in the others. Confirm promising results with 20 runs per cell before changing production LCA."
+}

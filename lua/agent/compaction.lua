@@ -489,13 +489,14 @@ function compaction.should_compact(messages)
 	return context_limits.should_compact(tokens)
 end
 
-function compaction.find_cut_point(messages)
+function compaction.find_cut_point(messages, keep_recent_tokens)
 	local accumulated = 0
 	local cut_index = 1
+	keep_recent_tokens = math.max(1, tonumber(keep_recent_tokens) or KEEP_RECENT_TOKENS)
 
 	for i = #messages, 1, -1 do
 		accumulated = accumulated + compaction.estimate_tokens(messages[i])
-		if accumulated >= KEEP_RECENT_TOKENS then
+		if accumulated >= keep_recent_tokens then
 			cut_index = i
 			break
 		end
@@ -574,7 +575,19 @@ function compaction.compact(session, opts)
 	if opts.force then
 		cut_index = #session.messages + 1
 	else
-		cut_index = compaction.find_cut_point(session.messages)
+		cut_index = compaction.find_cut_point(session.messages, opts.keep_recent_tokens)
+	end
+
+	-- During an active agent turn, never summarize only part of that turn. Keep the
+	-- latest human message and every assistant/tool message that follows it intact.
+	if opts.preserve_active_turn then
+		for i = #session.messages, 1, -1 do
+			local message = session.messages[i]
+			if message.role == "user" and not message.tool_name then
+				cut_index = math.min(cut_index, i)
+				break
+			end
+		end
 	end
 
 	-- Nothing worth summarizing
@@ -621,6 +634,9 @@ function compaction.compact(session, opts)
 	for _, msg in ipairs(kept_messages) do
 		session.messages[#session.messages + 1] = msg
 	end
+	-- Provider usage referred to the replaced message indices and token prefix. It
+	-- cannot safely seed estimates for the compacted transcript.
+	session.last_usage = nil
 
 	return true, #messages_to_summarize, compaction.estimate_total(session.messages)
 end

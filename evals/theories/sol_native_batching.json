@@ -1,0 +1,38 @@
+{
+  "id": "sol_native_batching",
+  "title": "Reduce avoidable Sol native-tool round trips",
+  "hypothesis": "Explicit dependency-aware batching guidance reduces model calls on bounded edits without weakening tagged-edit correctness or verification.",
+  "falsified_if": "The treatment has any failed edit run, increases failed mutations, or does not reduce mean model calls by at least 20 percent versus the native control.",
+  "source_ids": ["openai-responses-function-calling-2026-08-22", "local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "native_current",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["existing_codebase_edit"],
+  "variants": [
+    {
+      "id": "native_current",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    },
+    {
+      "id": "native_batched",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "system_prompt_append": "Minimize model round trips without guessing across dependencies. In each response, call every independent tool whose arguments are already known. For a bounded change affecting a few existing files, skip update_plan unless the task genuinely has multiple independent workstreams. After inspection, batch non-overlapping tagged edits whose replacements are all known. Once edits succeed, combine known focused checks into one run command using && when later checks do not need model judgment. Do not split plan updates, edits, or redundant verification into separate model turns merely to narrate progress. Start a new tool round only when its arguments depend on results from the previous round."
+    }
+  ],
+  "deterministic_outcomes": [
+    "all required behavior implemented",
+    "tagged edits succeed without stale or failed mutations",
+    "focused verification passes",
+    "no unrelated file writes"
+  ],
+  "efficiency_outcomes": [
+    "model and tool calls",
+    "elapsed milliseconds",
+    "prompt and output tokens",
+    "batch caps and duplicate calls"
+  ],
+  "decision_rule": "Adopt the batching guidance if both variants remain 3/3, treatment mean model calls improves by at least 20 percent, no treatment run exceeds seven model calls, and failed mutations remain zero."
+}

@@ -1,0 +1,16 @@
+{
+  "messages": [
+    {"role": "user", "text": "test"},
+    {"role": "assistant", "text": "<tool_call name=\"run\">\n{\"command\":\"make test\"}\n</tool_call>"},
+    {
+      "role": "user",
+      "tool_name": "run",
+      "text": "<tool_result name=\"run\" status=\"ok\">\nAll 184 tests passed.\n",
+      "repeat_text": "test_case ... PASS\n",
+      "repeat_count": 700
+    },
+    {"role": "assistant", "text": "The full test suite passed."},
+    {"role": "user", "text": "hello"},
+    {"role": "assistant", "text": "Hello!"}
+  ]
+}

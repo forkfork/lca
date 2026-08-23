@@ -1,0 +1,8 @@
+{
+  "id": "repeated_text_edit",
+  "title": "Surgically edit one occurrence among repeated configuration blocks",
+  "prompt": "Make the narrowly scoped pipeline configuration change described in README.md. Preserve every other pipeline and file byte-for-byte, run the tests, and report the result.",
+  "timeout_seconds": 480,
+  "grader": "grade.py",
+  "judge": false
+}

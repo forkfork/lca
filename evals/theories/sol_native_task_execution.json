@@ -1,0 +1,38 @@
+{
+  "id": "sol_native_task_execution",
+  "title": "Validate Sol native tools on editing and implementation tasks",
+  "hypothesis": "The native tool adapter preserves LCA's tagged-edit safety and improves complete implementation trajectories, not only read-only project orientation.",
+  "falsified_if": "Native Sol cannot complete tagged edits, loses call correlation during multi-step work, skips focused verification, or performs worse than XML on the existing-codebase or authentication scenarios.",
+  "source_ids": ["openai-responses-function-calling-2026-08-22", "local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "xml",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["existing_codebase_edit", "auth_api"],
+  "variants": [
+    {
+      "id": "xml",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": false
+    },
+    {
+      "id": "native",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "correct bounded edit or implementation",
+    "successful call-id continuation across multiple tool turns",
+    "tagged edits remain stale-safe",
+    "focused verification executes and passes",
+    "no unrelated changes"
+  ],
+  "efficiency_outcomes": [
+    "tool and provider calls",
+    "prompt, cached, and output tokens",
+    "elapsed milliseconds",
+    "duplicate or capped calls"
+  ],
+  "decision_rule": "Enable native tools for interactive Sol sessions only if native completes both pilot scenarios without protocol errors, then confirm with three randomized runs per cell. Require native to match or exceed XML pass rate while preserving edit safety and bounded tool use."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "orientation_5_6_grounding",
+  "title": "Ground GPT-5.6 project orientation in authoritative repository files",
+  "hypothesis": "A narrow project-orientation grounding rule prevents GPT-5.6 Sol from answering from the shallow project index while preserving concise output.",
+  "falsified_if": "The grounding treatment does not improve pass rate to at least 4/5, or increases mean lookup count beyond five or mean answer length beyond 220 words.",
+  "source_ids": ["local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "current",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation", "simple_prompt"],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "grounded",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "system_prompt_append": "The project index is navigation metadata, not sufficient evidence for describing the current repository. When the user asks what the current project is, your entire first response must be read tool_call tags for its README and at least one relevant architecture or package file. Do not announce that you will inspect; perform the reads in that same response. Answer only after their tool results arrive. Ground implementation-status and verification claims in evidence gathered during the current turn. Give the project identity, purpose, distinctive operating model, and two to four useful starting files concisely."
+    }
+  ],
+  "deterministic_outcomes": [
+    "authoritative README and architecture reads",
+    "correct project identity and operating model",
+    "no unsupported verification claim",
+    "no mutation or command execution",
+    "bounded investigation and answer length"
+  ],
+  "efficiency_outcomes": [
+    "tool and provider calls",
+    "prompt and output tokens",
+    "elapsed milliseconds",
+    "answer word count"
+  ],
+  "decision_rule": "Accept the grounding rule for GPT-5.6 orientation if it passes at least 4/5, improves pass rate by at least 60 percentage points over control, and keeps every run within five lookups and 220 words. Validate it as a negative control on simple_prompt before production use."
+}

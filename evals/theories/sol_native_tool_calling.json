@@ -1,0 +1,38 @@
+{
+  "id": "sol_native_tool_calling",
+  "title": "Use Sol's native function calling instead of XML-emulated tools",
+  "hypothesis": "Giving GPT-5.6 Sol structured function definitions and correlated function outputs improves grounded agent behavior without making simple prompts invoke tools unnecessarily.",
+  "falsified_if": "Native calling does not materially improve project-orientation evidence and outcome scores, fails to complete a multi-step tool turn, or causes any simple arithmetic run to use a tool.",
+  "source_ids": ["openai-responses-function-calling-2026-08-22", "local-orientation-model-comparison-2026-08-22"],
+  "control_variant": "xml",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation", "simple_prompt"],
+  "variants": [
+    {
+      "id": "xml",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": false
+    },
+    {
+      "id": "native",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "authoritative repository inspection before orientation answer",
+    "correct project identity and operating model",
+    "successful native call-id continuation across tool results",
+    "no tool call for simple arithmetic",
+    "no mutation during project orientation"
+  ],
+  "efficiency_outcomes": [
+    "tool and provider calls",
+    "prompt, cached, and output tokens",
+    "elapsed milliseconds",
+    "answer word count"
+  ],
+  "decision_rule": "Adopt native calling for Sol only if five-run cells show at least 4/5 project-orientation passes, no simple-prompt tool calls, no protocol failures, and better mean orientation score than XML without a material latency regression. Then validate editing and auth implementation separately before making it the interactive default."
+}

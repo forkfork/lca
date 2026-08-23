@@ -1,4 +1,5 @@
 local json = require("agent.util.json")
+local cjson = require("cjson")
 local config = require("agent.config")
 local transport = require("agent.net.http_transport")
 local websocket_transport = require("agent.net.websocket_transport")
@@ -16,6 +17,8 @@ local TOTAL_TIMEOUT_SEC = 600
 local POST_TOOL_THRESHOLD = 800
 local MAX_OUTPUT_TEXT_CHARS = 200000
 local MAX_SSE_LINE_BYTES = 262144
+local DEFAULT_STREAM_TOOL_CALL_CAP = 10
+local DEFAULT_STREAM_DUPLICATE_CALL_CAP = 3
 local PROMPT_CACHE_KEY_OVERRIDE = nil
 local DEFAULT_SERVICE_TIER = "priority"
 local DUMP_REQUEST_DIR = nil
@@ -23,6 +26,7 @@ local LOG_RAW_USAGE = false
 local WEBSOCKET_ENABLED = true
 local WEBSOCKET_UPGRADE_TIMEOUT_SEC = 5
 local WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC = 8
+local WEBSOCKET_RESPONSE_TIMEOUT_SEC = 180
 local WEBSOCKET_CONNECT_ATTEMPTS = 3
 local WEBSOCKET_REUSE = true
 
@@ -152,7 +156,26 @@ local function invalidate_credentials_cache()
 	end
 end
 
-local function input_json(messages)
+local function input_json(messages, native_tool_calling)
+	if native_tool_calling then
+		local items = {}
+		for _, message in ipairs(messages) do
+			if type(message.provider_items) == "table" and #message.provider_items > 0 then
+				for _, item in ipairs(message.provider_items) do items[#items + 1] = item end
+			elseif message.native_call_id then
+				items[#items + 1] = { type = "function_call_output", call_id = message.native_call_id, output = message.text or "" }
+			else
+				if message.role ~= "user" and message.role ~= "assistant" then
+					error("unsupported message role: " .. tostring(message.role))
+				end
+				items[#items + 1] = {
+					role = message.role,
+					content = { { type = message.role == "assistant" and "output_text" or "input_text", text = message.text or "" } },
+				}
+			end
+		end
+		return json.encode(items)
+	end
 	local merged = {}
 	for _, message in ipairs(messages) do
 		if message.role ~= "user" and message.role ~= "assistant" then
@@ -188,9 +211,17 @@ local function request_body(request)
 		'"store":false,',
 		'"stream":true,',
 		'"instructions":' .. json.string(request.system_prompt or "You are a helpful assistant.") .. ",",
-		'"input":' .. input_json(request.messages or {}) .. ",",
+		'"input":' .. input_json(request.messages or {}, request.native_tool_calling) .. ",",
 		'"text":{"verbosity":"low"},',
 	}
+	if request.native_tool_calling then
+		local registry = require("agent.tool_registry")
+		local tools = registry.native_tools()
+		tools[#tools + 1] = { type = "web_search" }
+		parts[#parts + 1] = '"tools":' .. json.encode(tools) .. ","
+		parts[#parts + 1] = '"tool_choice":"auto",'
+		parts[#parts + 1] = '"parallel_tool_calls":true,'
+	end
 	if request_prompt_cache_key and request_prompt_cache_key ~= "" then
 		parts[#parts + 1] = '"prompt_cache_key":' .. json.string(request_prompt_cache_key) .. ","
 	end
@@ -416,6 +447,7 @@ local function usage_from_payload(payload)
 	local details = usage.prompt_tokens_details or usage.input_tokens_details or {}
 	local prompt_tokens = usage_number(usage.prompt_tokens) or usage_number(usage.input_tokens)
 	local cached_tokens = usage_number(details.cached_tokens) or 0
+	local cache_write_tokens = usage_number(details.cache_write_tokens) or 0
 	local output_tokens = usage_number(usage.completion_tokens) or usage_number(usage.output_tokens) or 0
 	local total_tokens = usage_number(usage.total_tokens) or usage_number(usage.totalTokens)
 	if not prompt_tokens and cached_tokens == 0 then
@@ -424,6 +456,7 @@ local function usage_from_payload(payload)
 	return {
 		prompt_tokens = prompt_tokens,
 		cached_tokens = cached_tokens,
+		cache_write_tokens = cache_write_tokens,
 		output_tokens = output_tokens,
 		total_tokens = total_tokens or ((prompt_tokens or 0) + output_tokens),
 		raw_usage = usage,
@@ -439,6 +472,20 @@ local function compact_sample(text, max_len)
 		return text:sub(1, max_len) .. "...[" .. tostring(#text) .. " chars]"
 	end
 	return text
+end
+
+local function normalize_output_item(item)
+	-- lua-cjson decodes an empty JSON array as an empty Lua table and would
+	-- otherwise encode it back as {}. Responses reasoning items require summary
+	-- to remain an array when replayed.
+	if type(item) == "table" and item.type == "reasoning" then
+		for _, field in ipairs({ "summary", "content" }) do
+			if type(item[field]) == "table" and next(item[field]) == nil then
+				item[field] = cjson.empty_array
+			end
+		end
+	end
+	return item
 end
 
 local function new_sse_stats()
@@ -496,7 +543,7 @@ local function format_event_type_counts(stats)
 	return #parts > 0 and table.concat(parts, ",") or "(none)"
 end
 
-local function process_event_payload(payload, on_delta, on_usage, stats)
+local function process_event_payload(payload, on_delta, on_usage, stats, on_output_item)
 	stats.last_payload_sample = compact_sample(payload, 500)
 	local event_type = json.field(payload, "type")
 	if event_type then
@@ -526,10 +573,16 @@ local function process_event_payload(payload, on_delta, on_usage, stats)
 			end
 		end
 	end
+	if event_type == "response.output_item.done" and on_output_item then
+		local ok, event = pcall(json.decode, payload)
+		if ok and type(event) == "table" and type(event.item) == "table" then
+			on_output_item(normalize_output_item(event.item))
+		end
+	end
 	return event_type
 end
 
-local function sse_parser(on_delta, on_usage, on_abort, stats)
+local function sse_parser(on_delta, on_usage, on_abort, stats, on_output_item)
 	local line_buffer = ""
 	stats = stats or new_sse_stats()
 	return function(chunk)
@@ -556,7 +609,7 @@ local function sse_parser(on_delta, on_usage, on_abort, stats)
 				local payload = line:match("^data:%s*(.+)$")
 				if payload then
 					stats.data_lines = stats.data_lines + 1
-					local processed = process_event_payload(payload, on_delta, on_usage, stats)
+					local processed = process_event_payload(payload, on_delta, on_usage, stats, on_output_item)
 					if processed == false then
 						return false
 					end
@@ -651,6 +704,41 @@ local function canonical_tool_text(text)
 		return only_tools
 	end
 	return text
+end
+
+local function complete_valid_tool_call_stats(text)
+	local ok_protocol, protocol = pcall(require, "agent.tool_protocol")
+	local ok_registry, registry = pcall(require, "agent.tool_registry")
+	if not ok_protocol or not ok_registry or not protocol.extract_all_tool_calls then
+		return { total = 0, unique = 0, duplicates = 0 }
+	end
+	local seen = {}
+	local total = 0
+	local unique = 0
+	for _, call in ipairs(protocol.extract_all_tool_calls(text or "")) do
+		if registry.is_valid(call.name) then
+			total = total + 1
+			local args = {}
+			for key, value in pairs(call.args or {}) do
+				if key ~= "_raw_content" then args[key] = value end
+			end
+			local ok, encoded = pcall(json.encode, args)
+			local key = table.concat({
+				tostring(call.name),
+				ok and tostring(encoded) or tostring(call.raw or ""),
+				tostring(call.args and call.args._raw_content or ""),
+			}, "\0")
+			if not seen[key] then
+				seen[key] = true
+				unique = unique + 1
+			end
+		end
+	end
+	return { total = total, unique = unique, duplicates = total - unique }
+end
+
+local function unique_complete_valid_tool_call_count(text)
+	return complete_valid_tool_call_stats(text).unique
 end
 
 local function log_sample(text, limit)
@@ -828,6 +916,7 @@ end
 local function websocket_deadlines(request)
 	local deadlines = default_deadlines(request)
 	deadlines.first_byte = WEBSOCKET_UPGRADE_TIMEOUT_SEC
+	deadlines.total = math.min(deadlines.total, WEBSOCKET_RESPONSE_TIMEOUT_SEC)
 	return deadlines
 end
 
@@ -867,6 +956,7 @@ end
 
 local function do_complete_websocket(request, credentials, body, on_token)
 	local chunks = {}
+	local output_items = {}
 	local sse_stats = new_sse_stats()
 	local full_stream = ""
 	local tool_call_seen = false
@@ -876,6 +966,14 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	local abort_reason = nil
 	local usage = nil
 	local completed = false
+	local stream_tool_cap = tonumber(request.stream_tool_call_cap)
+	if stream_tool_cap == nil then stream_tool_cap = DEFAULT_STREAM_TOOL_CALL_CAP end
+	stream_tool_cap = math.max(0, math.floor(stream_tool_cap))
+	local stream_tool_cap_reached = false
+	local stream_duplicate_cap = tonumber(request.stream_duplicate_call_cap)
+	if stream_duplicate_cap == nil then stream_duplicate_cap = DEFAULT_STREAM_DUPLICATE_CALL_CAP end
+	stream_duplicate_cap = math.max(0, math.floor(stream_duplicate_cap))
+	local stream_duplicate_cap_reached = false
 
 	local function on_delta(delta)
 		chunks[#chunks + 1] = delta
@@ -895,12 +993,31 @@ local function do_complete_websocket(request, credentials, body, on_token)
 		if not tool_call_seen and full_stream:find("<tool_call") then
 			tool_call_seen = true
 		end
+		local closed_advanced = false
 		if tool_call_seen then
 			local close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
 			while close_pos do
 				last_tool_call_end = close_pos + CLOSE_TOOL_CALL_LEN - 1
 				tool_call_closed = true
+				closed_advanced = true
 				close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
+			end
+		end
+		if closed_advanced and (stream_tool_cap > 0 or stream_duplicate_cap > 0) then
+			local call_stats = complete_valid_tool_call_stats(full_stream)
+			if stream_tool_cap > 0 and call_stats.unique >= stream_tool_cap then
+				cutoff = true
+				stream_tool_cap_reached = true
+				debug_log("[codex] websocket stream tool-call cap reached unique_calls=%d cap=%d response_chars=%d",
+					call_stats.unique, stream_tool_cap, #full_stream)
+				return false
+			end
+			if stream_duplicate_cap > 0 and call_stats.duplicates >= stream_duplicate_cap then
+				cutoff = true
+				stream_duplicate_cap_reached = true
+				debug_log("[codex] websocket stream duplicate-call cap reached total_calls=%d unique_calls=%d duplicates=%d cap=%d response_chars=%d",
+					call_stats.total, call_stats.unique, call_stats.duplicates, stream_duplicate_cap, #full_stream)
+				return false
 			end
 		end
 		if tool_call_closed then
@@ -943,7 +1060,9 @@ local function do_complete_websocket(request, credentials, body, on_token)
 				sse_stats.max_line_bytes = math.max(sse_stats.max_line_bytes, #payload)
 				local event_type = process_event_payload(payload, on_delta, function(next_usage)
 					usage = next_usage
-				end, sse_stats)
+				end, sse_stats, function(item)
+					output_items[#output_items + 1] = item
+				end)
 				if event_type == "response.completed" then
 					completed = true
 					return false
@@ -1045,6 +1164,7 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	end
 	result.sse_stats = sse_stats
 	result.text = table.concat(chunks)
+	result.output_items = output_items
 	if cutoff or tool_call_seen then
 		local canonical = canonical_tool_text(result.text)
 		if canonical ~= result.text then
@@ -1054,6 +1174,8 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	end
 	result.usage = usage
 	result.early_cutoff = cutoff
+	result.stream_tool_cap_reached = stream_tool_cap_reached
+	result.stream_duplicate_cap_reached = stream_duplicate_cap_reached
 	result.abort_reason = abort_reason
 	result.transport = "websocket"
 	if not completed and not cutoff and not abort_reason then
@@ -1067,6 +1189,7 @@ end
 
 local function do_complete(request, credentials, body, on_token)
 	local chunks = {}
+	local output_items = {}
 	local sse_stats = new_sse_stats()
 	local full_stream = ""
 	local tool_call_seen = false
@@ -1075,6 +1198,14 @@ local function do_complete(request, credentials, body, on_token)
 	local cutoff = false
 	local abort_reason = nil
 	local usage = nil
+	local stream_tool_cap = tonumber(request.stream_tool_call_cap)
+	if stream_tool_cap == nil then stream_tool_cap = DEFAULT_STREAM_TOOL_CALL_CAP end
+	stream_tool_cap = math.max(0, math.floor(stream_tool_cap))
+	local stream_tool_cap_reached = false
+	local stream_duplicate_cap = tonumber(request.stream_duplicate_call_cap)
+	if stream_duplicate_cap == nil then stream_duplicate_cap = DEFAULT_STREAM_DUPLICATE_CALL_CAP end
+	stream_duplicate_cap = math.max(0, math.floor(stream_duplicate_cap))
+	local stream_duplicate_cap_reached = false
 	local result, err = transport.request({
 		host = request.host or CODEX_HOST,
 		port = request.port or 443,
@@ -1104,14 +1235,33 @@ local function do_complete(request, credentials, body, on_token)
 			if not tool_call_seen and full_stream:find("<tool_call") then
 				tool_call_seen = true
 			end
-				if tool_call_seen then
-					local close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
-					while close_pos do
-						last_tool_call_end = close_pos + CLOSE_TOOL_CALL_LEN - 1
-						tool_call_closed = true
-						close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
-					end
+			local closed_advanced = false
+			if tool_call_seen then
+				local close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
+				while close_pos do
+					last_tool_call_end = close_pos + CLOSE_TOOL_CALL_LEN - 1
+					tool_call_closed = true
+					closed_advanced = true
+					close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
 				end
+			end
+			if closed_advanced and (stream_tool_cap > 0 or stream_duplicate_cap > 0) then
+				local call_stats = complete_valid_tool_call_stats(full_stream)
+				if stream_tool_cap > 0 and call_stats.unique >= stream_tool_cap then
+					cutoff = true
+					stream_tool_cap_reached = true
+					debug_log("[codex] stream tool-call cap reached unique_calls=%d cap=%d response_chars=%d",
+						call_stats.unique, stream_tool_cap, #full_stream)
+					return false
+				end
+				if stream_duplicate_cap > 0 and call_stats.duplicates >= stream_duplicate_cap then
+					cutoff = true
+					stream_duplicate_cap_reached = true
+					debug_log("[codex] stream duplicate-call cap reached total_calls=%d unique_calls=%d duplicates=%d cap=%d response_chars=%d",
+						call_stats.total, call_stats.unique, call_stats.duplicates, stream_duplicate_cap, #full_stream)
+					return false
+				end
+			end
 				if tool_call_closed then
 					local after = full_stream:sub(last_tool_call_end + 1)
 					local tail_kind = post_tool_tail_kind(after)
@@ -1135,7 +1285,9 @@ local function do_complete(request, credentials, body, on_token)
 				tonumber(size) or 0,
 				MAX_SSE_LINE_BYTES
 			)
-		end, sse_stats),
+		end, sse_stats, function(item)
+			output_items[#output_items + 1] = item
+		end),
 	})
 
 	if err then
@@ -1160,6 +1312,7 @@ local function do_complete(request, credentials, body, on_token)
 	end
 	result.sse_stats = sse_stats
 	result.text = table.concat(chunks)
+	result.output_items = output_items
 	if cutoff or tool_call_seen then
 		local canonical = canonical_tool_text(result.text)
 		if canonical ~= result.text then
@@ -1169,9 +1322,35 @@ local function do_complete(request, credentials, body, on_token)
 	end
 	result.usage = usage
 	result.early_cutoff = cutoff
+	result.stream_tool_cap_reached = stream_tool_cap_reached
+	result.stream_duplicate_cap_reached = stream_duplicate_cap_reached
 	result.abort_reason = abort_reason
 	result.transport = "http"
 	return result
+end
+
+local function native_tool_calls(output_items)
+	local calls = {}
+	for _, item in ipairs(output_items or {}) do
+		if item.type == "function_call" then
+			local args = {}
+			if type(item.arguments) == "string" and item.arguments ~= "" then
+				local ok, decoded = pcall(json.decode, item.arguments)
+				if not ok or type(decoded) ~= "table" then
+					return nil, "invalid native arguments for " .. tostring(item.name) .. ": " .. tostring(decoded)
+				end
+				args = decoded
+			end
+			calls[#calls + 1] = {
+				name = item.name,
+				args = args,
+				raw = item.arguments or "{}",
+				native_call_id = item.call_id,
+				native_item_id = item.id,
+			}
+		end
+	end
+	return calls
 end
 
 function codex.complete(request, on_token)
@@ -1211,6 +1390,10 @@ function codex.complete(request, on_token)
 			result, err = do_complete(request, credentials, body, on_token)
 		end
 		if result then
+			local parsed_native_calls, native_parse_error = native_tool_calls(result.output_items)
+			if request.native_tool_calling and native_parse_error then
+				error("Codex native tool call error: " .. native_parse_error)
+			end
 			debug_log("[codex] attempt %d succeeded transport=%s http_status=%s response_chars=%d response_bytes=%d timing=%s",
 				attempt + 1,
 				tostring(result.transport or "http"),
@@ -1271,7 +1454,7 @@ function codex.complete(request, on_token)
 				end
 			elseif result.abort_reason then
 				error("Codex stream aborted: " .. tostring(result.abort_reason))
-			elseif result.text == "" and body_tail ~= "" then
+			elseif result.text == "" and #(parsed_native_calls or {}) == 0 and body_tail ~= "" then
 				if is_auth_error(body_tail) then
 					invalidate_credentials_cache()
 					last_error = "Codex auth error: " .. body_tail:sub(1, 500)
@@ -1286,6 +1469,8 @@ function codex.complete(request, on_token)
 			else
 				return {
 					text = result.text,
+					_output_items = result.output_items,
+					_native_tool_calls = request.native_tool_calling and parsed_native_calls or nil,
 					_usage = result.usage,
 					_usage_status = result.usage and "available" or (result.early_cutoff and "early_cutoff" or "missing_usage_event"),
 					_http_status = result.status,
@@ -1293,6 +1478,8 @@ function codex.complete(request, on_token)
 					_response_bytes = result.response_bytes,
 					_partial_salvage = result.partial_salvage or nil,
 					_partial_salvaged_calls = result.partial_salvaged_calls,
+					_stream_tool_cap_reached = result.stream_tool_cap_reached or nil,
+					_stream_duplicate_cap_reached = result.stream_duplicate_cap_reached or nil,
 					_transport = result.transport,
 					_transport_reused = result.websocket_reused or nil,
 					_transport_fallback = result.websocket_fallback or nil,
@@ -1345,13 +1532,20 @@ end
 
 codex._request_body = request_body
 codex._input_json = input_json
+codex._native_tool_calls = native_tool_calls
+codex._normalize_output_item = normalize_output_item
 codex._canonical_tool_text = canonical_tool_text
 codex._canonical_tool_debug_summary = canonical_tool_debug_summary
 codex._complete_tool_calls_prefix = complete_tool_calls_prefix
 codex._salvage_partial_tool_response = salvage_partial_tool_response
 codex._post_tool_tail_kind = post_tool_tail_kind
 codex._should_cut_after_tool = should_cut_after_tool
+codex._unique_complete_valid_tool_call_count = unique_complete_valid_tool_call_count
+codex._complete_valid_tool_call_stats = complete_valid_tool_call_stats
+codex._default_stream_tool_call_cap = DEFAULT_STREAM_TOOL_CALL_CAP
+codex._default_stream_duplicate_call_cap = DEFAULT_STREAM_DUPLICATE_CALL_CAP
 codex._default_deadlines = default_deadlines
+codex._websocket_deadlines = websocket_deadlines
 codex._prompt_cache_key = prompt_cache_key
 codex._usage_from_payload = usage_from_payload
 codex._headers = codex_headers

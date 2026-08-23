@@ -1,0 +1,44 @@
+{
+  "id": "read_only_discovery_cap",
+  "title": "Allow one additional read-only call for bounded architectural discovery",
+  "hypothesis": "Increasing only the core read-only batch allowance from five to six lets Sol inspect a small layered codebase and its tests in one round, reducing model turns or latency without increasing mutation concurrency, broad exploration, or correctness failures.",
+  "falsified_if": "The treatment loses any deterministic pass, increases mean model calls or latency on the multi-file scenario, triggers unnecessary tools on the simple prompt, or weakens existing-codebase verification and scope control.",
+  "source_ids": ["codex-loop", "openai-responses-function-calling-2026-08-22"],
+  "control_variant": "read_cap_5",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "multifile_order_cancellation",
+    "existing_codebase_edit",
+    "simple_prompt"
+  ],
+  "variants": [
+    {
+      "id": "read_cap_5",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "read_only_batch_cap": 5
+    },
+    {
+      "id": "read_cap_6",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "read_only_batch_cap": 6
+    }
+  ],
+  "deterministic_outcomes": [
+    "multi-file behavior, architecture, scope, and verification all pass",
+    "existing-codebase behavior, scope, and verification all pass",
+    "simple prompt remains one model call with zero tools"
+  ],
+  "efficiency_outcomes": [
+    "model calls and elapsed milliseconds",
+    "core batch caps and tool calls",
+    "prompt, cached, and output tokens",
+    "verification and mutation counts"
+  ],
+  "decision_rule": "Adopt six only if every treatment run passes, the simple prompt remains one model call with zero tools, existing-codebase scope and verification remain intact, and the multi-file treatment reduces mean model calls or latency without worsening the other by more than ten percent. Otherwise retain five."
+}

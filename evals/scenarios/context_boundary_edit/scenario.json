@@ -1,0 +1,10 @@
+{
+  "id": "context_boundary_edit",
+  "title": "Continue a corrected edit task across an intra-turn context boundary",
+  "prompt": "Continue the active pipeline task from the conversation. Inspect the checkout, implement the latest correction, run the documented tests, and report the result.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "seed_context": "seed-context.json",
+  "context_pressure_after_first_tool": 12100,
+  "judge": false
+}

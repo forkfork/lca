@@ -4,7 +4,10 @@ local DEFAULT_CONTEXT_WINDOW = 200000
 local DEFAULT_RESERVE_TOKENS = 16384
 
 local MODEL_CONTEXT_WINDOWS = {
-	["gpt-5.5"] = 200000,
+	["gpt-5.5"] = 1050000,
+	["gpt-5.6-sol"] = 1050000,
+	["gpt-5.6-terra"] = 1050000,
+	["gpt-5.6-luna"] = 1050000,
 	["gpt-5.4"] = 400000,
 	["gpt-5"] = 400000,
 	["gpt-5-mini"] = 400000,
@@ -13,6 +16,13 @@ local MODEL_CONTEXT_WINDOWS = {
 	["deepseek-v4-pro"] = 1000000,
 	["deepseek-chat"] = 1000000,
 	["deepseek-reasoner"] = 1000000,
+}
+
+local MODEL_MAX_INPUT_TOKENS = {
+	["gpt-5.5"] = 922000,
+	["gpt-5.6-sol"] = 922000,
+	["gpt-5.6-terra"] = 922000,
+	["gpt-5.6-luna"] = 922000,
 }
 
 function context_limits.context_window(model)
@@ -36,8 +46,13 @@ function context_limits.reserve_tokens()
 	return DEFAULT_RESERVE_TOKENS
 end
 
+function context_limits.max_input_tokens(model)
+	return MODEL_MAX_INPUT_TOKENS[tostring(model or "")]
+		or context_limits.context_window(model)
+end
+
 function context_limits.auto_compact_threshold(model)
-	return math.max(1, context_limits.context_window(model) - context_limits.reserve_tokens())
+	return math.max(1, context_limits.max_input_tokens(model) - context_limits.reserve_tokens())
 end
 
 function context_limits.should_compact(tokens, model)

@@ -1,0 +1,290 @@
+{
+  "retrieved_at": "2026-08-22",
+  "sources": [
+    {
+      "id": "pi-source",
+      "level": 1,
+      "title": "Pi monorepo",
+      "url": "https://github.com/earendil-works/pi-mono/tree/c49906ec77788625aacbdc53ebca6fbe65bd20f5",
+      "commit": "c49906ec77788625aacbdc53ebca6fbe65bd20f5"
+    },
+    {
+      "id": "pi-edit",
+      "level": 1,
+      "title": "Pi edit tool",
+      "url": "https://github.com/earendil-works/pi-mono/blob/c49906ec77788625aacbdc53ebca6fbe65bd20f5/packages/coding-agent/src/core/tools/edit.ts"
+    },
+    {
+      "id": "pi-edit-diff",
+      "level": 1,
+      "title": "Pi edit matching and diff implementation",
+      "url": "https://github.com/earendil-works/pi-mono/blob/c49906ec77788625aacbdc53ebca6fbe65bd20f5/packages/coding-agent/src/core/tools/edit-diff.ts"
+    },
+    {
+      "id": "pi-compaction",
+      "level": 1,
+      "title": "Pi compaction internals",
+      "url": "https://github.com/earendil-works/pi-mono/blob/c49906ec77788625aacbdc53ebca6fbe65bd20f5/packages/coding-agent/docs/compaction.md"
+    },
+    {
+      "id": "codex-source",
+      "level": 1,
+      "title": "OpenAI Codex repository",
+      "url": "https://github.com/openai/codex/tree/4f39251a010a8bd7d692d25fb33832ff06f1635a",
+      "commit": "4f39251a010a8bd7d692d25fb33832ff06f1635a"
+    },
+    {
+      "id": "codex-loop",
+      "level": 2,
+      "title": "Unrolling the Codex agent loop",
+      "url": "https://openai.com/index/unrolling-the-codex-agent-loop/"
+    },
+    {
+      "id": "codex-patch",
+      "level": 1,
+      "title": "Codex apply_patch instructions",
+      "url": "https://github.com/openai/codex/blob/4f39251a010a8bd7d692d25fb33832ff06f1635a/codex-rs/core/prompt_with_apply_patch_instructions.md"
+    },
+    {
+      "id": "codex-compact",
+      "level": 1,
+      "title": "Codex local compaction implementation",
+      "url": "https://github.com/openai/codex/blob/4f39251a010a8bd7d692d25fb33832ff06f1635a/codex-rs/core/src/compact.rs"
+    },
+    {
+      "id": "aider-source",
+      "level": 1,
+      "title": "Aider repository",
+      "url": "https://github.com/Aider-AI/aider/tree/5dc9490bb35f9729ef2c95d00a19ccd30c26339c",
+      "commit": "5dc9490bb35f9729ef2c95d00a19ccd30c26339c"
+    },
+    {
+      "id": "aider-edit-formats",
+      "level": 2,
+      "title": "Aider edit formats",
+      "url": "https://aider.chat/docs/more/edit-formats.html"
+    },
+    {
+      "id": "aider-benchmarks",
+      "level": 2,
+      "title": "Aider benchmark methodology and edit-format notes",
+      "url": "https://aider.chat/docs/leaderboards/notes.html"
+    },
+    {
+      "id": "aider-architect",
+      "level": 2,
+      "title": "Separating code reasoning and editing",
+      "url": "https://aider.chat/2024/09/26/architect.html"
+    },
+    {
+      "id": "anthropic-best-practices",
+      "level": 2,
+      "title": "Claude Code best practices",
+      "url": "https://www.anthropic.com/engineering/claude-code-best-practices"
+    },
+    {
+      "id": "anthropic-managed-agents",
+      "level": 2,
+      "title": "Scaling managed agents: decoupling the brain from the hands",
+      "url": "https://www.anthropic.com/engineering/managed-agents"
+    },
+    {
+      "id": "factory-compression",
+      "level": 2,
+      "title": "Compressing context",
+      "url": "https://factory.ai/news/compressing-context"
+    },
+    {
+      "id": "factory-deferred-context",
+      "level": 2,
+      "title": "Deferred Context Engine",
+      "url": "https://factory.ai/news/deferred-context-engine"
+    },
+    {
+      "id": "diff-xyz",
+      "level": 1,
+      "title": "Diff-XYZ: A Benchmark for Evaluating Diff Understanding",
+      "url": "https://arxiv.org/html/2510.12487v1"
+    },
+    {
+      "id": "pi-x-compaction",
+      "level": 3,
+      "title": "Mario Zechner on customizable Pi compaction",
+      "url": "https://x.com/badlogicgames/status/2035688125712699722"
+    },
+    {
+      "id": "hn-continuous-context",
+      "level": 4,
+      "title": "Ask HN: What is the best way to provide continuous context to models?",
+      "url": "https://news.ycombinator.com/item?id=46626639"
+    },
+    {
+      "id": "hn-compaction-pi",
+      "level": 4,
+      "title": "How Compaction Works in Pi discussion",
+      "url": "https://news.ycombinator.com/item?id=49289654"
+    },
+    {
+      "id": "reddit-task-boundaries",
+      "level": 4,
+      "title": "Codex users discuss reset versus compaction",
+      "url": "https://www.reddit.com/r/codex/comments/1pysquo/do_you_reset_context_start_a_new_chat_every_time/"
+    },
+    {
+      "id": "reddit-compaction-failures",
+      "level": 4,
+      "title": "Codex users report compaction loss",
+      "url": "https://www.reddit.com/r/codex/comments/1qvrhmq/context_compacted_is_holy_awful/"
+    },
+    {
+      "id": "claude-session-management",
+      "level": 2,
+      "title": "Using Claude Code: session management and 1M context",
+      "url": "https://claude.com/blog/using-claude-code-session-management-and-1m-context"
+    },
+    {
+      "id": "claude-context-rules-2026",
+      "level": 2,
+      "title": "The new rules of context engineering for Claude 5 generation models",
+      "url": "https://claude.com/blog/the-new-rules-of-context-engineering-for-claude-5-generation-models"
+    },
+    {
+      "id": "context-files-ablation",
+      "level": 1,
+      "title": "Do Context Files Help Coding Agents? A Two-Agent Ablation Study on Real Repositories",
+      "url": "https://arxiv.org/abs/2607.27250"
+    },
+    {
+      "id": "agents-md-smells",
+      "level": 1,
+      "title": "Configuration Smells in AGENTS.md Files",
+      "url": "https://arxiv.org/abs/2606.15828"
+    },
+    {
+      "id": "reddit-codex-frequent-compaction-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-08",
+      "retrieved_at": "2026-08-22",
+      "title": "Codex users report automatic compaction every 10–20 minutes",
+      "url": "https://www.reddit.com/r/codex/comments/1vis8uv/context_automatically_compacted_every_1020_minutes/"
+    },
+    {
+      "id": "reddit-long-running-agents-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-04",
+      "retrieved_at": "2026-08-22",
+      "title": "Claude Code users discuss agents running for weeks without context explosion",
+      "url": "https://www.reddit.com/r/ClaudeCode/comments/1vfo0kk/how_can_agents_run_for_weeks_without_context/"
+    },
+    {
+      "id": "reddit-codex-context-size-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-10",
+      "retrieved_at": "2026-08-22",
+      "title": "Codex users compare smaller contexts, fresh sessions, and subagents",
+      "url": "https://www.reddit.com/r/codex/comments/1vl0pl9/context_too_small/"
+    },
+    {
+      "id": "hn-pi-minimalism-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-06",
+      "retrieved_at": "2026-08-22",
+      "title": "HN discussion: Pi's Minimalism Is Its Advantage",
+      "url": "https://news.ycombinator.com/item?id=49176038"
+    },
+    {
+      "id": "reddit-long-session-compaction-cost-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-16",
+      "retrieved_at": "2026-08-22",
+      "title": "Claude Code users debate compaction cost in week-long sessions",
+      "url": "https://www.reddit.com/r/ClaudeCode/comments/1vprvec/til_just_compacting_really_long_sessions_doesnt/"
+    },
+    {
+      "id": "reddit-fresh-session-handoff-worse-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-10",
+      "retrieved_at": "2026-08-22",
+      "title": "Practitioner reports explicit compaction handoff beating a fresh session",
+      "url": "https://www.reddit.com/r/ClaudeCode/comments/1vkk8ef/back_to_claude_couldnt_break_the_addition/"
+    },
+    {
+      "id": "reddit-active-context-anchor-2026-07",
+      "role": "discovery-feed",
+      "published_at": "2026-07-30",
+      "retrieved_at": "2026-08-22",
+      "title": "Claude Code users discuss active-context anchors across compaction",
+      "url": "https://www.reddit.com/r/ClaudeCode/comments/1vallnw/claude_after_compaction/"
+    },
+    {
+      "id": "openai-gpt-5-6-guide-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "Using GPT-5.6",
+      "url": "https://developers.openai.com/api/docs/guides/latest-model"
+    },
+    {
+      "id": "openai-programmatic-tool-calling-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "Programmatic Tool Calling",
+      "url": "https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling"
+    },
+    {
+      "id": "openai-prompt-caching-5-6-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "Prompt caching",
+      "url": "https://developers.openai.com/api/docs/guides/prompt-caching"
+    },
+    {
+      "id": "openai-gpt-5-6-sol-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "GPT-5.6 Sol model",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol"
+    },
+    {
+      "id": "openai-gpt-5-6-terra-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "GPT-5.6 Terra model",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra"
+    },
+    {
+      "id": "openai-gpt-5-6-luna-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "GPT-5.6 Luna model",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna"
+    },
+    {
+      "id": "openai-gpt-5-5-2026-08",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "GPT-5.5 model",
+      "url": "https://developers.openai.com/api/docs/models/gpt-5.5"
+    },
+    {
+      "id": "local-lca-orientation-run-2026-08-22",
+      "role": "local-evidence",
+      "retrieved_at": "2026-08-22",
+      "title": "Observed LCA project-orientation run and timestamped agent-loop log",
+      "url": "local:/tmp/lca/logs/lca-20260822-155611-81368.log"
+    },
+    {
+      "id": "local-orientation-model-comparison-2026-08-22",
+      "role": "local-evidence",
+      "retrieved_at": "2026-08-22",
+      "title": "Local project-orientation model comparison trajectories",
+      "url": "local:evals/results"
+    },
+    {
+      "id": "openai-responses-function-calling-2026-08-22",
+      "role": "mechanism-check",
+      "retrieved_at": "2026-08-22",
+      "title": "OpenAI Responses API create response and latest-model guidance",
+      "url": "https://developers.openai.com/api/reference/cli/resources/responses/methods/create"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "intra_turn_context_reserve",
+  "title": "Compact completed history before a multi-tool turn crosses its context reserve",
+  "hypothesis": "Checking the reserve before every model call and compacting only completed history will let an active edit/test turn survive a context boundary without losing the latest correction or splitting tool protocol, while adding no work below the boundary.",
+  "falsified_if": "The treatment loses the corrected values, scope restriction, active tool exchange, or verification; fails to avoid the injected hard boundary; or adds compaction/model calls to the below-boundary simple prompt.",
+  "source_ids": ["hn-pi-minimalism-2026-08", "pi-compaction", "reddit-codex-frequent-compaction-2026-08"],
+  "local_evidence": "LCA's REPL checked automatic compaction only after core.run_session returned, while one run_session can perform up to forty model/tool steps. Compaction also retained usage metadata tied to the replaced message indices.",
+  "scenarios": ["context_boundary_edit", "simple_prompt"],
+  "minimum_runs_per_cell": 5,
+  "control_variant": "turn_boundary_only",
+  "variants": [
+    {"id": "turn_boundary_only", "system_prompt_profile": "current", "intra_turn_compaction": false, "context_compaction_threshold": 12000, "context_hard_limit": 12000, "compaction_keep_recent_tokens": 1},
+    {"id": "intra_turn_reserve", "system_prompt_profile": "current", "intra_turn_compaction": true, "context_compaction_threshold": 12000, "context_hard_limit": 12000, "compaction_keep_recent_tokens": 1}
+  ],
+  "outcomes": {
+    "primary": ["pass_rate", "hard_gate_failure_categories", "intra_turn_compactions_mean", "context_hard_limit_stops_mean"],
+    "secondary": ["provider_successful_calls_mean", "tool_calls_mean", "elapsed_ms_mean", "provider_response_bytes_mean", "verification_runs_mean"]
+  },
+  "decision_rule": "Reject on any treatment loss of the latest correction, scope, active-turn protocol, or verification. Accept the reserve check only if every boundary treatment run completes, boundary controls reproducibly stop at the injected limit, and neither simple-prompt variant compacts or adds model/tool calls. The artificial small limit validates boundary behavior, not real 200k-token latency or summary quality at full scale."
+}

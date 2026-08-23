@@ -1,5 +1,6 @@
 local providers = require("agent.providers")
 local compaction = require("agent.compaction")
+local context_limits = require("agent.context_limits")
 local parallel = require("agent.parallel")
 local protocol = require("agent.tool_protocol")
 local system_prompt = require("agent.system_prompt")
@@ -11,7 +12,7 @@ local core = {}
 local MAX_TOOL_STEPS = 40
 local INSANITYWOLF_MAX_TOOL_STEPS = 80
 local MAX_BATCH_SIZE = 10
-local MAX_READ_ONLY_BATCH_SIZE = 5
+local MAX_READ_ONLY_BATCH_SIZE = 6
 local SLIM_CONTEXT_TOKENS = 60000
 local MAX_CONSECUTIVE_READ_ONLY_BATCHES = 5
 local INSANITYWOLF_TOOL_RESERVE = 8
@@ -58,6 +59,37 @@ local READ_ONLY_TOOLS = {
 	ls = true,
 	read = true,
 }
+
+local FILE_MUTATION_TOOLS = {
+	edit = true,
+	write = true,
+}
+
+local function file_target(tc, cwd)
+	local args = tc.args or {}
+	if not args.path or args.path == "" then return nil end
+	return path_util.resolve(args.path, cwd or ".")
+end
+
+-- A model sometimes emits a useful mutation and then speculative follow-up reads in
+-- one response. Tool results are unavailable while that response is being generated,
+-- so execute the coherent prefix instead of allowing a later read to invalidate the
+-- earlier mutation in parallel.execute_batch.
+local function dependency_safe_prefix(batch, cwd)
+	local mutated = {}
+	for index, tc in ipairs(batch) do
+		local target = file_target(tc, cwd)
+		if tc.name == "read" and target and mutated[target] then
+			local prefix = {}
+			for i = 1, index - 1 do prefix[i] = batch[i] end
+			return prefix, #batch - index + 1, target
+		end
+		if FILE_MUTATION_TOOLS[tc.name] and target then
+			mutated[target] = true
+		end
+	end
+	return batch, 0, nil
+end
 
 local function batch_is_read_only(batch)
 	if #batch == 0 then return false end
@@ -231,6 +263,21 @@ local function tool_calls_text(tool_calls)
 	return table.concat(parts, "\n")
 end
 
+local function provider_items_for_batch(output_items, batch)
+	if type(output_items) ~= "table" then return nil end
+	local accepted = {}
+	for _, call in ipairs(batch or {}) do
+		if call.native_call_id then accepted[call.native_call_id] = true end
+	end
+	local filtered = {}
+	for _, item in ipairs(output_items) do
+		if item.type ~= "function_call" or accepted[item.call_id] then
+			filtered[#filtered + 1] = item
+		end
+	end
+	return filtered
+end
+
 local function recent_read_keys(session)
 	local keys = {}
 	local modified = {}
@@ -303,6 +350,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 	local false_protocol_apology_retries = 0
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
 	local max_tool_steps = session.flow == "insanitywolf" and INSANITYWOLF_MAX_TOOL_STEPS or MAX_TOOL_STEPS
+	local intra_turn_compactions = 0
 
 	local function response_meta(response)
 		if not response then return last_response_meta end
@@ -313,6 +361,61 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			_response_bytes = response._response_bytes,
 			_http_status = response._http_status,
 		}
+	end
+
+	local function prepare_model_context(step)
+		local tokens = session:estimated_model_input_tokens_usage_aware()
+		local threshold = tonumber(session.context_compaction_threshold)
+			or context_limits.auto_compact_threshold(session.model)
+		local enabled = session.intra_turn_compaction ~= false
+		if session.context_compaction_threshold ~= nil or session.context_hard_limit ~= nil then
+			log("[context] reserve check step=%d tokens=%d threshold=%d enabled=%s messages=%d",
+				step, tokens, threshold, tostring(enabled), #session.messages)
+		end
+		if enabled and threshold > 0 and tokens >= threshold then
+			log("[context] intra-turn compaction requested step=%d tokens=%d threshold=%d messages=%d",
+				step, tokens, threshold, #session.messages)
+			local ok, compacted, removed, remaining = pcall(function()
+				return compaction.compact(session, {
+					bypass_threshold = true,
+					keep_recent_tokens = session.compaction_keep_recent_tokens,
+					preserve_active_turn = true,
+				})
+			end)
+			if not ok then
+				log("[context] intra-turn compaction failed: %s", tostring(compacted))
+			elseif compacted then
+				intra_turn_compactions = intra_turn_compactions + 1
+				session.context_compaction_count = (tonumber(session.context_compaction_count) or 0) + 1
+				log("[context] intra-turn compaction complete step=%d removed=%d remaining_tokens=%d messages=%d",
+					step, tonumber(removed) or 0, tonumber(remaining) or 0, #session.messages)
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "compacted active turn context",
+					})
+				end
+			else
+				log("[context] intra-turn compaction skipped step=%d (no completed history)", step)
+			end
+			tokens = session:estimated_model_input_tokens_usage_aware()
+		end
+
+		local hard_limit = tonumber(session.context_hard_limit)
+			or context_limits.max_input_tokens(session.model)
+		if hard_limit and hard_limit > 0 and tokens >= hard_limit then
+			local text = string.format(
+				"Stopped before exceeding the context limit (%d estimated tokens >= %d). Context could not be reduced below the limit without splitting the active turn.",
+				tokens,
+				hard_limit
+			)
+			log("[context] hard limit stopped model call step=%d tokens=%d limit=%d", step, tokens, hard_limit)
+			return false, text
+		end
+		return true
 	end
 
 	for step = 1, MAX_TOOL_STEPS do
@@ -379,7 +482,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 				end
 			end
 		end
-		do
+			do
 			local coalesced, coalesced_count, coalesced_bytes = compaction.coalesce_slimmed_history(session)
 			if coalesced then
 				log("[context] coalesced slimmed history messages=%d bytes_removed=%d remaining_messages=%d session_tokens=%d",
@@ -398,9 +501,19 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 					})
 				end
 			end
-		end
+			end
 
-		log_separator(string.format("LLM CALL #%d", step))
+			local context_ok, context_error = prepare_model_context(step)
+			if not context_ok then
+				return {
+					text = context_error,
+					events = events,
+					_response_meta = last_response_meta,
+					_context_compactions = intra_turn_compactions,
+				}
+			end
+
+			log_separator(string.format("LLM CALL #%d", step))
 		log("Sending %d messages to model", #session.messages)
 
 		local response = provider.complete({
@@ -411,6 +524,9 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			service_tier = session.service_tier,
 			system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 			messages = session.messages,
+			stream_tool_call_cap = session.stream_tool_call_cap,
+			stream_duplicate_call_cap = session.stream_duplicate_call_cap,
+			native_tool_calling = session.native_tool_calling,
 			on_wait = on_wait,
 		}, on_token)
 		last_response_meta = response_meta(response)
@@ -449,7 +565,8 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			end
 		end
 
-		local raw_tool_calls = protocol.extract_all_tool_calls(response.text)
+		local raw_tool_calls = session.native_tool_calling and (response._native_tool_calls or {})
+			or protocol.extract_all_tool_calls(response.text)
 		-- Filter out tool calls with invalid names (e.g. examples in prose)
 		local registry = require("agent.tool_registry")
 		local tool_calls = {}
@@ -461,7 +578,12 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 				invalid_tool_names[#invalid_tool_names + 1] = tostring(tc.name)
 			end
 		end
-		if #raw_tool_calls > 0 or (response.text or ""):find("<tool_call", 1, true) then
+		if session.native_tool_calling then
+			log("[tool-protocol] native_calls=%d valid_calls=%d invalid_names=%s output_items=%d",
+				#raw_tool_calls, #tool_calls,
+				#invalid_tool_names > 0 and table.concat(invalid_tool_names, ",") or "(none)",
+				#(response._output_items or {}))
+		elseif #raw_tool_calls > 0 or (response.text or ""):find("<tool_call", 1, true) then
 			log("[tool-protocol] raw_calls=%d valid_calls=%d invalid_names=%s contains_open=%s contains_close=%s response_sample=%s",
 				#raw_tool_calls,
 				#tool_calls,
@@ -485,6 +607,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			return {
 				text = text,
 				events = events,
+				_output_items = response._output_items,
 				_response_meta = last_response_meta,
 			}
 		end
@@ -534,14 +657,19 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 		end
 
 		local raw_read_only_batch = batch_is_read_only(tool_calls)
-		local effective_batch_cap = raw_read_only_batch and MAX_READ_ONLY_BATCH_SIZE > 0
-			and math.min(MAX_BATCH_SIZE, MAX_READ_ONLY_BATCH_SIZE)
+		local read_only_batch_cap = tonumber(session.read_only_batch_cap)
+		if read_only_batch_cap == nil then read_only_batch_cap = MAX_READ_ONLY_BATCH_SIZE end
+		read_only_batch_cap = math.max(0, math.floor(read_only_batch_cap))
+		local effective_batch_cap = raw_read_only_batch and read_only_batch_cap > 0
+			and math.min(MAX_BATCH_SIZE, read_only_batch_cap)
 			or MAX_BATCH_SIZE
 
 		-- Enforce tool budget and per-batch cap
 		local batch = {}
 		local dropped_for_batch_cap = 0
 		local dropped_for_duplicate = 0
+		local dropped_for_dependency = 0
+		local dependency_target
 		local seen_tool_calls = {}
 		for i, tc in ipairs(tool_calls) do
 			local key = tool_call_key(tc)
@@ -565,6 +693,12 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			end
 			batch[#batch + 1] = tc
 			::continue_tool_call::
+		end
+		batch, dropped_for_dependency, dependency_target = dependency_safe_prefix(batch, session.cwd)
+		if dropped_for_dependency > 0 then
+			total_tool_executions = total_tool_executions - dropped_for_dependency
+			log("DEPENDENCY PREFIX stopped before read-after-mutation target=%s deferred=%d",
+				tostring(dependency_target), dropped_for_dependency)
 		end
 		if dropped_for_duplicate >= 2 or (dropped_for_duplicate > 0 and dropped_for_duplicate >= math.ceil(#tool_calls / 2)) then
 			session:add_user(table.concat({
@@ -634,7 +768,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			local clean_response = tool_calls_text(batch)
 
 			-- Execute tool calls (parallel for read-only, sequential for mutating)
-			session:add_assistant(clean_response)
+			session:add_assistant(clean_response, provider_items_for_batch(response._output_items, batch))
 			if session.record_usage then
 				session:record_usage(response._usage, #session.messages)
 			end
@@ -679,10 +813,10 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 				local result = batch_results[i]
 				if result then
 					local msg = protocol.tool_result_message(tc.name, result, tc.args)
-					session:add_tool_result(tc.name, msg)
+					session:add_tool_result(tc.name, msg, tc.native_call_id)
 				end
 			end
-			if dropped_for_batch_cap > 0 then
+			if dropped_for_batch_cap > 0 and dropped_for_dependency == 0 then
 				local cap_message
 				if raw_read_only_batch and effective_batch_cap < MAX_BATCH_SIZE then
 					cap_message = table.concat({
@@ -702,6 +836,37 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 						status = (raw_read_only_batch and effective_batch_cap < MAX_BATCH_SIZE and "read-only batch cap deferred  " or "batch cap deferred  ") .. tostring(dropped_for_batch_cap) .. " tools",
 					})
 				end
+			end
+			if dropped_for_dependency > 0 then
+				local total_deferred = dropped_for_dependency + dropped_for_batch_cap
+				session:add_user(table.concat({
+					"Tool dependency boundary reached: only the first " .. tostring(#batch) .. " calls ran; " .. tostring(total_deferred) .. " later calls were deferred.",
+					"A later read targeted a file modified earlier in the same response, but mutation results were not yet available while that response was generated.",
+					"Continue from the executed results. Re-read the modified file now if needed, then make any remaining changes in a new batch.",
+				}, "\n"))
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "dependency boundary deferred  " .. tostring(dropped_for_dependency) .. " tools",
+					})
+				end
+			end
+			if response._stream_tool_cap_reached and dropped_for_batch_cap == 0 and dropped_for_dependency == 0 then
+				session:add_user(table.concat({
+					"Streaming tool-call cap reached: only the first " .. tostring(#batch) .. " unique complete tool calls were accepted.",
+					"Continue from their results. Emit another bounded batch only if more work remains.",
+				}, "\n"))
+				log("[tool-protocol] provider stream cap surfaced accepted_calls=%d", #batch)
+			end
+			if response._stream_duplicate_cap_reached and dropped_for_batch_cap == 0 and dropped_for_dependency == 0 then
+				session:add_user(table.concat({
+					"Streaming duplicate-call cap reached: repeated copies of tool calls were cut off after the unique calls shown above were accepted.",
+					"Continue from their results. Do not repeat identical calls unless a result explicitly requires a retry.",
+				}, "\n"))
+				log("[tool-protocol] provider duplicate stream cap surfaced accepted_calls=%d", #batch)
 			end
 
 			local direct_text = direct_tool_result_text(session, batch, batch_results)
@@ -832,12 +997,22 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 	else
 		session:add_user("Tool budget reached. Stop using tools now and answer from the information already gathered.")
 	end
+	local final_context_ok, final_context_error = prepare_model_context(MAX_TOOL_STEPS + 1)
+	if not final_context_ok then
+		return {
+			text = final_context_error,
+			events = events,
+			_response_meta = last_response_meta,
+			_context_compactions = intra_turn_compactions,
+		}
+	end
 	local response = provider.complete({
 		credentials_path = session.credentials_path,
 		session_id = session.id,
 		model = session.model,
 		reasoning_effort = session.reasoning_effort,
 		service_tier = session.service_tier,
+		native_tool_calling = session.native_tool_calling,
 		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 		messages = session.messages,
 		on_wait = on_wait,
@@ -854,8 +1029,11 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 	return {
 		text = text ~= "" and text or "Stopped after " .. MAX_TOOL_STEPS .. " tool steps.",
 		events = events,
+		_output_items = response._output_items,
 		_response_meta = last_response_meta,
 	}
 end
+
+core._dependency_safe_prefix = dependency_safe_prefix
 
 return core

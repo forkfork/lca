@@ -1,0 +1,8 @@
+{
+  "id": "simple_prompt",
+  "title": "A simple prompt does not trigger overthinking",
+  "prompt": "What is 17 multiplied by 23?",
+  "timeout_seconds": 120,
+  "grader": "grade.py",
+  "judge": false
+}

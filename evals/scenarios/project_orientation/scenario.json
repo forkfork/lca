@@ -1,0 +1,9 @@
+{
+  "id": "project_orientation",
+  "title": "Explain an unfamiliar project accurately and concisely",
+  "prompt": "what is this project?",
+  "timeout_seconds": 300,
+  "grader": "grade.py",
+  "judge": true,
+  "judge_criteria": "Rate outcome quality separately from evidence quality. For outcome, ask whether the answer gives a useful mental model: identity, purpose, plan/apply workflow, architectural boundaries, current implementation state, and useful starting points. For evidence, credit authoritative repository content regardless of whether it was gathered with file tools or bounded read-only shell discovery. Penalize material false claims, especially confusing documented intent with implemented code, and transient claims such as tests passing unless supported in the current turn. Prefer concise synthesis over inventory."
+}

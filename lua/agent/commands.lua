@@ -103,6 +103,7 @@ local function format_context_report(session, limit)
 	local model_tokens = session_tokens + system_tokens + mcp_prompt_tokens
 	local mcp_result_tokens = session:estimated_mcp_tokens()
 	local context_window = context_limits.context_window(session.model)
+	local max_input_tokens = context_limits.max_input_tokens(session.model)
 	local reserve_tokens = context_limits.reserve_tokens()
 	local auto_compact_threshold = context_limits.auto_compact_threshold(session.model)
 
@@ -114,6 +115,7 @@ local function format_context_report(session, limit)
 		"  MCP prompt:  " .. format_token_count(mcp_prompt_tokens) .. " tokens",
 		"  MCP results: " .. format_token_count(mcp_result_tokens) .. " tokens",
 		"  window:      " .. format_token_count(context_window) .. " tokens",
+		"  max input:   " .. format_token_count(max_input_tokens) .. " tokens",
 		"  reserve:     " .. format_token_count(reserve_tokens) .. " tokens",
 		"  auto compact:" .. (auto_compact_threshold <= 0 and " disabled" or (" " .. format_token_count(auto_compact_threshold) .. " tokens")),
 		"  compacted:   " .. (session.compaction_summary and "yes" or "no"),
@@ -126,6 +128,7 @@ local function format_context_report(session, limit)
 		lines[#lines + 1] = "  trailing:    " .. format_token_count(usage_estimate.trailing_tokens) .. " tokens"
 		local usage = session.last_usage or {}
 		lines[#lines + 1] = "  cache read:  " .. format_token_count(tonumber(usage.cached_tokens) or 0) .. " tokens"
+		lines[#lines + 1] = "  cache write: " .. format_token_count(tonumber(usage.cache_write_tokens) or 0) .. " tokens"
 		local trend = format_cache_trend(session.usage_history)
 		if trend then
 			lines[#lines + 1] = "  cache trend: " .. trend
@@ -350,6 +353,11 @@ function commands.dispatch(line, session, ui)
 			ui.error("usage: /model <id>")
 		else
 			session.model = rest
+			if not session.native_tool_calling_explicit then
+				session.native_tool_calling = require("agent.session").native_tools_for_model(rest)
+				session.system_prompt = nil
+				session.system_prompt_version = nil
+			end
 			ui.muted("model: " .. session.model)
 		end
 	elseif name == "reasoning" then

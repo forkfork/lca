@@ -287,6 +287,16 @@ test("tool is advertised with usage guidance", function()
 	assert(prompt:find("do not combine `git commit` and `git push`", 1, true), "missing commit/push split guidance")
 end)
 
+test("native prompt requests evidence-dense project orientation", function()
+	local prompt = registry.native_system_prompt()
+	assert(prompt:find("authoritative documentation", 1, true), "missing authoritative orientation sources")
+	assert(prompt:find("repository tree", 1, true), "missing tree inspection guidance")
+	assert(prompt:find("documented intent", 1, true), "missing intent-versus-code guidance")
+	assert(prompt:find("components absent from the tree", 1, true), "missing absent-component guidance")
+	assert(prompt:find("exactly three useful starting files", 1, true), "missing bounded starting points")
+	assert(not prompt:find("Rill", 1, true), "orientation guidance must not name the eval fixture")
+end)
+
 if failed > 0 then
 	error(tostring(failed) .. " test(s) failed")
 end

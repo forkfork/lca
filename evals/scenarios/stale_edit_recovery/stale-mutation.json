@@ -1,0 +1,5 @@
+{
+  "path": "runtime/settings.py",
+  "old_text": "    \"request_timeout_seconds\": 30,\n",
+  "new_text": "    \"request_timeout_seconds\": 30,  # managed by operations\n"
+}

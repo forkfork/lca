@@ -1,0 +1,3 @@
+#!/bin/sh
+printf "%s\n" "pyenv: version '3.12.4' is not installed (set by .python-version)" >&2
+exit 127

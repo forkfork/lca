@@ -1,0 +1,8 @@
+{
+  "id": "existing_codebase_edit",
+  "title": "Add a bounded discount feature to an existing Python package",
+  "prompt": "Implement the bounded-discount change described in README.md. Work with the existing design, make the smallest coherent source changes, run the existing tests, and leave the repository ready to use. Do not modify README.md or the existing tests.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "judge": true
+}

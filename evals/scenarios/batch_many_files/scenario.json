@@ -1,0 +1,8 @@
+{
+  "id": "batch_many_files",
+  "title": "Complete a task requiring more files than one tool batch permits",
+  "prompt": "Create every output file specified in README.md exactly as requested. Verify the result and keep the repository otherwise unchanged.",
+  "timeout_seconds": 300,
+  "grader": "grade.py",
+  "judge": false
+}

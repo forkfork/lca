@@ -1,0 +1,19 @@
+{
+  "id": "edit_tool_exact_vs_tagged",
+  "title": "Tagged line ranges versus exact text replacement on existing code",
+  "hypothesis": "Tagged range edits will preserve correctness while requiring fewer model turns and failed mutations than unique oldText/newText replacement on focused multi-file changes.",
+  "falsified_if": "Exact replacement has equal deterministic pass rate and no material regression in failed mutations, model calls, response size, or latency; or tagged edits introduce a failure category absent from exact replacement.",
+  "source_ids": ["pi-edit", "aider-edit-formats"],
+  "scenarios": ["existing_codebase_edit"],
+  "minimum_runs_per_cell": 5,
+  "control_variant": "tagged",
+  "variants": [
+    {"id": "tagged", "system_prompt_profile": "current", "edit_tool_profile": "tagged"},
+    {"id": "exact", "system_prompt_profile": "current", "edit_tool_profile": "exact"}
+  ],
+  "outcomes": {
+    "primary": ["pass_rate", "hard_gate_failure_categories"],
+    "secondary": ["failed_mutations_mean", "existing_file_writes_count_mean", "changed_lines_mean", "llm_calls_mean", "tool_calls_mean", "elapsed_ms_mean", "provider_response_chars_mean", "duplicate_tool_calls_dropped_mean"]
+  },
+  "decision_rule": "Reject either format on a repeatable deterministic correctness or scope failure. If both pass, prefer the format with fewer failed mutations and existing-file overwrites; use model calls, response size, changed lines, and latency as secondary evidence. Do not change production from five runs per cell alone: confirm the winner on at least two additional edit scenarios covering ambiguous repeated text and stale-file recovery."
+}

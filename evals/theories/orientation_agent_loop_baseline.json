@@ -1,0 +1,42 @@
+{
+  "id": "orientation_agent_loop_baseline",
+  "title": "LCA and Codex CLI on the same project-orientation fixture",
+  "hypothesis": "A same-model Codex CLI reference identifies useful investigation and synthesis behavior that LCA's current agent loop should match without requiring the same tool interface.",
+  "falsified_if": "The normalized grader cannot rank human-preferred reference answers consistently, or the engines cannot be run against the same fixture and outcome contract.",
+  "source_ids": ["codex-source", "local-lca-orientation-run-2026-08-22"],
+  "control_variant": "codex_cli_sol",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "codex_cli_sol",
+      "engine": "codex_cli",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "id": "lca_sol",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "lca_5_5",
+      "engine": "lca",
+      "model": "gpt-5.5",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "deterministic_outcomes": [
+    "correct and useful project mental model",
+    "accurate current implementation state",
+    "semantic evidence quality independent of tool interface",
+    "no material false claims, mutation, or unnecessary execution"
+  ],
+  "efficiency_outcomes": [
+    "elapsed milliseconds",
+    "investigation actions",
+    "prompt, cached, and output tokens",
+    "answer length"
+  ],
+  "decision_rule": "Use Codex as a reference distribution, not an automatic oracle. Do not change LCA from this comparison unless human calibration agrees with the outcome/evidence ordering and at least five runs per cell show a repeatable gap."
+}

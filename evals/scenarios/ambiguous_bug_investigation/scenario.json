@@ -1,0 +1,8 @@
+{
+  "id": "ambiguous_bug_investigation",
+  "title": "Trace and fix a cross-customer checkout cache bug",
+  "prompt": "Investigate and fix the checkout pricing bug reported in README.md. Establish the failure from repository evidence, trace the relevant code path instead of patching the assertion, preserve useful caching and existing behavior, run the documented tests, and leave the repository green. Do not modify README.md or tests.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "judge": true
+}

@@ -1,0 +1,36 @@
+{
+  "id": "fresh_orientation_context",
+  "title": "Start independent orientation prompts without auto-resumed task history",
+  "hypothesis": "A fresh session produces a more accurate, concise project orientation with lower context cost than automatically resuming unrelated prior task history.",
+  "falsified_if": "Fresh context reduces deterministic pass rate or mean score, or fails to remove stale verification claims without a material prompt-token reduction.",
+  "source_ids": ["local-lca-orientation-run-2026-08-22"],
+  "control_variant": "auto_resumed",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["project_orientation"],
+  "variants": [
+    {
+      "id": "auto_resumed",
+      "system_prompt_profile": "current",
+      "seed_context": "irrelevant-session.json"
+    },
+    {
+      "id": "fresh",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "deterministic_outcomes": [
+    "project identity and operating model",
+    "grounded documentation reads",
+    "no unsupported verification claim",
+    "no mutations or command execution",
+    "bounded lookup and answer size"
+  ],
+  "efficiency_outcomes": [
+    "prompt tokens",
+    "provider calls",
+    "elapsed milliseconds",
+    "response bytes",
+    "word count"
+  ],
+  "decision_rule": "Prefer fresh startup for independent CLI invocations if it is non-inferior on pass rate and score, eliminates stale-history claims, and reduces mean prompt tokens by at least 20%. Keep explicit resume available for intentional continuation."
+}

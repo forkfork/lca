@@ -1,0 +1,9 @@
+{
+  "id": "multifile_order_cancellation",
+  "title": "Add idempotent cancellation across an existing layered order package",
+  "prompt": "Implement the order-cancellation feature described in README.md. First understand the existing model, repository, service, and API boundaries. Preserve the existing behavior, keep the implementation coherent with those layers, run the documented tests, and leave the repository ready to use. Do not modify README.md or the existing tests.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "judge": true,
+  "judge_criteria": "Pay particular attention to whether idempotency and audit ownership live in a coherent layer, whether API error mapping is consistent with the existing design, and whether the implementation preserves existing shipping and query behavior. Do not reward a particular edit/tool sequence."
+}

@@ -1,0 +1,37 @@
+{
+  "id": "evidence_sufficiency",
+  "title": "Reduce redundant verification after causal evidence is sufficient",
+  "hypothesis": "A compact evidence-sufficiency rule reduces LCA Sol's repeated verification and tool calls without causing premature no-fix conclusions, missed stable regressions, or under-verified existing-codebase edits.",
+  "falsified_if": "The treatment reduces any scenario's correctness or safety pass rate, fails to retain at least four of five passes per cell, skips the required post-edit verification, or does not reduce mean verification commands by at least 25 percent on the transient scenario.",
+  "source_ids": ["codex-loop"],
+  "control_variant": "current",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["transient_verification_failure", "stable_verification_regression", "existing_codebase_edit"],
+  "variants": [
+    {
+      "id": "current",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "evidence_sufficient",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "system_prompt_append": "## Verification sufficiency\n- Gather enough evidence to resolve the active uncertainty, then stop gathering duplicate confirmation.\n- When a check fails once but the inspected implementation and tests agree, rerun the documented check once and run one independent relevant test or probe. If both pass and no evidence conflicts, that is sufficient: do not rerun unchanged checks or add equivalent probes solely for confidence.\n- When a failure reproduces or inspected source contradicts expected behavior, make the narrow fix and run the relevant documented verification once. Expand verification only if it fails or the change's concrete risk requires another distinct check.\n- Do not run Git status or diff merely to prove that you made no edits; the visible tool history already establishes whether you mutated files. Use Git only when it resolves task-relevant uncertainty."
+    }
+  ],
+  "deterministic_outcomes": [
+    "transient failure reaches green without any mutation and is reported accurately",
+    "stable failure is observed, fixed only in billing/invoice.py, and verified green",
+    "existing-codebase behavior and hidden compatibility pass after a scoped edit",
+    "every production mutation is followed by relevant successful verification"
+  ],
+  "efficiency_outcomes": [
+    "verification, tool, and model-call counts",
+    "elapsed milliseconds",
+    "prompt, cached, and output tokens"
+  ],
+  "decision_rule": "Adopt the smallest successful rule only if every treatment cell passes at least four of five runs, outcome/evidence/safety rates are no worse than control, transient mean verification commands fall by at least 25 percent, and existing-codebase verification remains intact. Otherwise retain the startup inventory and reject or narrow this treatment."
+}
