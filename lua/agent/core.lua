@@ -333,9 +333,10 @@ function core.run_once(prompt, options)
 	return response.text
 end
 
-function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
+function core.run_session(session, on_token, on_tool, on_thinking, on_wait, control)
 	local provider = get_provider(session.credentials_path)
 	local events = {}
+	control = control or {}
 
 	log_separator("SESSION START")
 	log("Messages in context: %d", #session.messages)
@@ -349,6 +350,13 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 	local insanitywolf_budget_warned = false
 	local false_protocol_apology_retries = 0
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
+	local function is_cancelled()
+		if type(control.cancelled) == "function" then
+			return control.cancelled() == true
+		end
+		return repl_ok and repl_mod.cancelled == true
+	end
+	local tool_call_sequence = 0
 	local max_tool_steps = session.flow == "insanitywolf" and INSANITYWOLF_MAX_TOOL_STEPS or MAX_TOOL_STEPS
 	local intra_turn_compactions = 0
 
@@ -420,7 +428,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 
 	for step = 1, MAX_TOOL_STEPS do
 		-- Check for cancellation
-		if repl_ok and repl_mod.cancelled then
+		if is_cancelled() then
 			log_separator("CANCELLED BY USER")
 			return {
 				text = "",
@@ -527,12 +535,13 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			stream_tool_call_cap = session.stream_tool_call_cap,
 			stream_duplicate_call_cap = session.stream_duplicate_call_cap,
 			native_tool_calling = session.native_tool_calling,
+			cancelled = is_cancelled,
 			on_wait = on_wait,
 		}, on_token)
 		last_response_meta = response_meta(response)
 
 		-- Check for cancellation after LLM call
-		if repl_ok and repl_mod.cancelled then
+		if is_cancelled() then
 			log_separator("CANCELLED BY USER")
 			return {
 				text = response.text or "",
@@ -691,6 +700,8 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 				log("TOOL BUDGET HIT mid-batch at call %d/%d", i, #tool_calls)
 				break
 			end
+			tool_call_sequence = tool_call_sequence + 1
+			tc.runtime_call_id = tc.native_call_id or ("tool-" .. tostring(tool_call_sequence))
 			batch[#batch + 1] = tc
 			::continue_tool_call::
 		end
@@ -806,6 +817,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 				cwd = session.cwd,
 				session = session,
 				recent_read_keys = recent_read_keys(session),
+				cancelled = is_cancelled,
 			}, batch_on_tool)
 			last_batch_tool_executions = #batch
 
@@ -937,7 +949,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 							checkpoint_tokens = new_tokens,
 						})
 					end
-					if repl_ok and repl_mod.cancelled then
+					if is_cancelled() then
 						log_separator("CANCELLED BY USER")
 						return {
 							text = "",
@@ -949,7 +961,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 			end
 
 			-- Check for cancellation after tool execution
-			if repl_ok and repl_mod.cancelled then
+			if is_cancelled() then
 				log_separator("CANCELLED BY USER")
 				return {
 					text = "",
@@ -1015,6 +1027,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait)
 		native_tool_calling = session.native_tool_calling,
 		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
 		messages = session.messages,
+		cancelled = is_cancelled,
 		on_wait = on_wait,
 	}, on_token)
 	last_response_meta = response_meta(response)

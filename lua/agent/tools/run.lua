@@ -163,9 +163,15 @@ function run.execute(args, context)
 	end)
 
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
+	local function is_cancelled()
+		if type(context.cancelled) == "function" then
+			return context.cancelled() == true
+		end
+		return repl_ok and repl_mod.cancelled == true
+	end
 	while not done do
 		uv.run("once")
-		if repl_ok and repl_mod.cancelled then
+		if is_cancelled() then
 			timed_out = true  -- reuse timeout path for cleanup
 			kill_process_tree(pid, handle, "sigterm")
 			break
@@ -203,8 +209,7 @@ function run.execute(args, context)
 	output, truncated = truncate_output(output)
 
 	if timed_out then
-		local repl2_ok, repl2_mod = pcall(require, "agent.repl")
-		if repl2_ok and repl2_mod.cancelled then
+		if is_cancelled() then
 			output = output .. "\n[cancelled by user]"
 			return {
 				is_error = true,

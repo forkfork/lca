@@ -19,7 +19,7 @@ local options = {
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
+  lua bin/repl.lua [--tui] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
 ]])
 	os.exit(2)
 end
@@ -50,6 +50,9 @@ while index <= #arg do
 	elseif arg[index] == "--mcp-config" then
 		options.mcp_config = arg[index + 1]
 		index = index + 2
+	elseif arg[index] == "--tui" then
+		options.tui = true
+		index = index + 1
 	elseif arg[index] == "--help" then
 		usage()
 	else
@@ -67,7 +70,6 @@ end
 
 local core = require("agent.core")
 local registry = require("agent.tool_registry")
-local repl = require("agent.repl")
 
 local function mkdir_if_missing(path)
 	local ok, err = uv.fs_mkdir(path, tonumber("755", 8))
@@ -118,17 +120,19 @@ core.debug_log(
 
 -- Initialize MCP servers
 local mcp_tools = registry.init_mcp(options.mcp_config)
-if #mcp_tools > 0 then
+options.mcp_tool_count = #mcp_tools
+if #mcp_tools > 0 and not options.tui then
 	io.write(string.format("\27[2m  %d MCP tools from %s\27[0m\n",
 		#mcp_tools, table.concat(require("agent.mcp").connected_servers(), ", ")))
 end
 
-local ok, err = pcall(function()
-	repl.run(options)
+local frontend = options.tui and require("agent.tui") or require("agent.repl")
+local ok, result, frontend_err = pcall(function()
+	return frontend.run(options)
 end)
 
-if not ok then
-	pcall(function() repl.cleanup_terminal() end)
-	io.stderr:write("error: " .. tostring(err) .. "\n")
+if not ok or (options.tui and result == nil) then
+	if frontend.cleanup_terminal then pcall(function() frontend.cleanup_terminal() end) end
+	io.stderr:write("error: " .. tostring(ok and frontend_err or result) .. "\n")
 	os.exit(1)
 end

@@ -24,6 +24,7 @@ scripts/
 lua/agent/
   core.lua                 model/tool loop, transcript logging, tool budgets
   repl.lua                 interactive prompt, streaming display, cancellation
+  tui.lua                  opt-in lcatui full-screen runtime adapter
   commands.lua             slash commands
   session.lua              conversation state, model options, save/load
   compaction.lua           long-context summarization
@@ -76,6 +77,11 @@ lua/agent/
    `<tool_call>` XML are hidden from the normal terminal view.
 5. After a turn completes, the assistant text is appended to the session and
    compaction may summarize older messages if the context is near the limit.
+
+With `--tui`, `bin/repl.lua` selects `agent.tui` instead. That adapter owns the
+alternate screen, raw input, and lcatui projection while calling the same
+`core.run_session` engine. The classic `agent.repl` and `agent.ui` path is not
+loaded by the TUI frontend.
 
 Ctrl-C has two meanings in the REPL: during an active model/tool turn it sets a
 cancellation flag checked by the core loop and sequential tool runner; at an idle

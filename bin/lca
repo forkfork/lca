@@ -54,12 +54,13 @@ local function parse_luarocks_prefix(lua_version)
 	return table.concat(parts, " ") .. " "
 end
 
-local function lua_can_run_lca(candidate, prefix)
+local function lua_can_run_lca(candidate, prefix, require_tui)
 	local probe = "pcall(require,'luarocks.loader'); require('luv'); require('cjson')"
+	if require_tui then probe = probe .. "; require('lcatui')" end
 	return command_succeeds((prefix or "") .. shell_quote(candidate) .. " -e " .. shell_quote(probe) .. " >/dev/null 2>&1")
 end
 
-local function lua_command_prefix()
+local function lua_command_prefix(require_tui)
 	local candidates = {}
 	for _, candidate in ipairs({
 		os.getenv("LCA_LUA"),
@@ -77,12 +78,12 @@ local function lua_command_prefix()
 	for _, candidate in ipairs(candidates) do
 		if candidate and candidate ~= "" and not seen[candidate] and executable_exists(candidate) then
 			seen[candidate] = true
-			if lua_can_run_lca(candidate) then
+			if lua_can_run_lca(candidate, nil, require_tui) then
 				return shell_quote(candidate)
 			end
 			local version = lua_version_name(candidate)
 			local prefix = version and parse_luarocks_prefix(version) or nil
-			if prefix and lua_can_run_lca(candidate, prefix) then
+			if prefix and lua_can_run_lca(candidate, prefix, require_tui) then
 				return prefix .. shell_quote(candidate)
 			end
 		end
@@ -94,14 +95,16 @@ end
 local function usage()
 	io.stderr:write([[
 Usage:
-  lca [repl options]
-  lca repl [repl options]
+  lca [--tui] [repl options]
+  lca repl [--tui] [repl options]
   lca run <prompt> [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools]
   lca login <openai|bedrock|deepseek> [login options]
   lca auth <login|refresh> [auth options]
 
 Examples:
   lca
+  lca --tui
+  lca repl --tui
   lca repl --model gpt-5.6-sol
   lca run "Explain this project"
   lca login openai
@@ -150,7 +153,13 @@ local executable = target.installed
 local local_file = io.open(target.local_path, "r")
 if local_file then
 	local_file:close()
-	executable = lua_command_prefix() .. " " .. shell_quote(target.local_path)
+	local require_tui = false
+	if subcommand == "repl" then
+		for index = start_index, #arg do
+			if arg[index] == "--tui" then require_tui = true; break end
+		end
+	end
+	executable = lua_command_prefix(require_tui) .. " " .. shell_quote(target.local_path)
 end
 
 local parts = { executable }

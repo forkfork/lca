@@ -1,11 +1,15 @@
 ROCKSPEC ?= lca-dev-1.rockspec
+LCATUI_ROCKSPEC ?= /home/tim/git/lcatui/lcatui-dev-1.rockspec
 LUAROCKS ?= luarocks
 LUA_VERSION ?= 5.4
 
-.PHONY: local rock test check eval eval-list
+.PHONY: local local-lcatui rock test check eval eval-list
 
-local:
+local: local-lcatui
 	$(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC)
+
+local-lcatui:
+	cd $(dir $(LCATUI_ROCKSPEC)) && $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(notdir $(LCATUI_ROCKSPEC))
 
 rock:
 	$(LUAROCKS) --lua-version=$(LUA_VERSION) pack $(ROCKSPEC)

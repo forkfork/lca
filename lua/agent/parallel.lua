@@ -44,9 +44,13 @@ local START_EVENT_TOOLS = {
 	write = true,
 }
 
-local function emit_start(on_tool, tc)
+local function event_call_id(tc, index)
+	return tc.runtime_call_id or tc.native_call_id or (index and ("batch-" .. tostring(index)) or nil)
+end
+
+local function emit_start(on_tool, tc, index)
 	if on_tool and START_EVENT_TOOLS[tc.name] then
-		on_tool({ type = "tool", phase = "start", name = tc.name, args = tc.args })
+		on_tool({ type = "tool", phase = "start", call_id = event_call_id(tc, index), name = tc.name, args = tc.args })
 	end
 end
 
@@ -421,6 +425,12 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	local shell_batch = {}
 	local other_batch = {}
 	local repl_ok, repl_mod = pcall(require, "agent.repl")
+	local function is_cancelled()
+		if type(context.cancelled) == "function" then
+			return context.cancelled() == true
+		end
+		return repl_ok and repl_mod.cancelled == true
+	end
 
 	for i, tc in ipairs(tool_calls) do
 		if SHELL_TOOLS[tc.name] then
@@ -485,7 +495,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		local pending = #shell_batch
 
 		for _, item in ipairs(shell_batch) do
-			emit_start(on_tool, item.tc)
+			emit_start(on_tool, item.tc, item.index)
 			spawn_and_collect(item.cmd, function(output, exit_code)
 				local result = format_result(item.tc.name, item.tc.args, output, exit_code)
 				results[item.index] = result
@@ -493,7 +503,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 					results[duplicate_index] = result
 				end
 				if on_tool then
-					on_tool({ type = "tool", name = item.tc.name, args = item.tc.args, result = result })
+					on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), name = item.tc.name, args = item.tc.args, result = result })
 				end
 				pending = pending - 1
 			end)
@@ -501,18 +511,18 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 
 		while pending > 0 do
 			uv.run("once")
-			if repl_ok and repl_mod.cancelled then break end
+			if is_cancelled() then break end
 		end
 	elseif #shell_batch == 1 then
 		local item = shell_batch[1]
-		emit_start(on_tool, item.tc)
+		emit_start(on_tool, item.tc, item.index)
 		local result = registry.execute(item.tc.name, item.tc.args, context)
 		results[item.index] = result
 		for _, duplicate_index in ipairs(item.duplicates or {}) do
 			results[duplicate_index] = result
 		end
 		if on_tool then
-			on_tool({ type = "tool", name = item.tc.name, args = item.tc.args, result = result })
+			on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), name = item.tc.name, args = item.tc.args, result = result })
 		end
 	end
 
@@ -525,7 +535,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	local pending_job_start = false
 	for _, item in ipairs(other_batch) do
 		-- Check cancellation between sequential tool executions
-		if repl_ok and repl_mod.cancelled then break end
+		if is_cancelled() then break end
 		local tc = item.tc
 		local mutation_target = file_mutation_target(tc, context)
 		local result
@@ -546,8 +556,8 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			end)
 			local any_success = false
 			for _, group_item in ipairs(edit_group) do
-				if repl_ok and repl_mod.cancelled then break end
-				emit_start(on_tool, group_item.tc)
+				if is_cancelled() then break end
+				emit_start(on_tool, group_item.tc, group_item.index)
 				local group_result = registry.execute(group_item.tc.name, group_item.tc.args, context)
 				results[group_item.index] = group_result
 				if group_result and not group_result.is_error then
@@ -556,7 +566,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 					mutation_failed = true
 				end
 				if on_tool then
-					on_tool({ type = "tool", name = group_item.tc.name, args = group_item.tc.args, result = group_result })
+					on_tool({ type = "tool", call_id = event_call_id(group_item.tc, group_item.index), name = group_item.tc.name, args = group_item.tc.args, result = group_result })
 				end
 			end
 			result_emitted = true
@@ -573,7 +583,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		elseif tc.name == "read" and read_batch_bytes >= MAX_READ_BATCH_BYTES then
 			result = read_budget_result(MAX_READ_BATCH_BYTES)
 		else
-			emit_start(on_tool, tc)
+			emit_start(on_tool, tc, item.index)
 			result = registry.execute(tc.name, tc.args, context)
 			if mutation_target and result and not result.is_error then
 				mutated_targets[mutation_target] = true
@@ -593,7 +603,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		end
 		results[item.index] = result
 		if on_tool and not result_emitted then
-			on_tool({ type = "tool", name = tc.name, args = tc.args, result = result })
+			on_tool({ type = "tool", call_id = event_call_id(tc, item.index), name = tc.name, args = tc.args, result = result })
 		end
 	end
 

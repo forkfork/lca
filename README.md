@@ -52,7 +52,13 @@ lca run "explain this project"
 lca run "add the feature" --model gpt-5.5 --reasoning low
 lca run "add the feature" --model gpt-5.6-sol
 lca repl
+lca --tui
+lca repl --tui
 ```
+
+`--tui` enables the opt-in full-screen living-current interface. Without that
+flag, the existing readline interface and terminal output are unchanged. The
+TUI requires a POSIX terminal and the sibling `lcatui` Lua rock.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool
@@ -85,6 +91,14 @@ make local   # install this checkout into local LuaRocks
 make rock    # pack lca-dev-1.src.rock
 make test    # run all Lua tests
 make check   # make local, then make test
+```
+
+`make local` first installs
+`/home/tim/git/lcatui/lcatui-dev-1.rockspec`, then installs LCA. Override the
+sibling checkout location when needed:
+
+```bash
+make local LCATUI_ROCKSPEC=/path/to/lcatui/lcatui-dev-1.rockspec
 ```
 
 See `docs/architecture.md` for the module layout.

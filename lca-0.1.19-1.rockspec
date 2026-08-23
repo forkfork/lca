@@ -25,6 +25,7 @@ dependencies = {
 	"luv",
 	"linenoise-luv >= 0.1.3",
 	"luaposix",
+	"lcatui",
 }
 build = {
 	type = "builtin",
@@ -48,6 +49,7 @@ build = {
 		["agent.runtime_inventory"] = "lua/agent/runtime_inventory.lua",
 		["agent.session"] = "lua/agent/session.lua",
 		["agent.system_prompt"] = "lua/agent/system_prompt.lua",
+		["agent.tui"] = "lua/agent/tui.lua",
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",
 		["agent.tool_registry"] = "lua/agent/tool_registry.lua",
 		["agent.turn_state"] = "lua/agent/turn_state.lua",

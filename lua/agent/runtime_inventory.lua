@@ -16,10 +16,10 @@ local function path_directories(path_value)
 	local directories = {}
 	local seen = {}
 	for directory in (tostring(path_value or "") .. ":"):gmatch("(.-):") do
-		if directory == "" then directory = "." end
-		if not seen[directory] then
-			seen[directory] = true
-			directories[#directories + 1] = directory
+		local resolved_directory = directory == "" and "." or directory
+		if not seen[resolved_directory] then
+			seen[resolved_directory] = true
+			directories[#directories + 1] = resolved_directory
 		end
 	end
 	return directories
