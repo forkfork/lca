@@ -151,6 +151,13 @@ function State.new(opts)
 		stream_sequence = 0,
 		handoffs = {},
 		handoff_sequence = 0,
+		transfers = {},
+		transfer_sequence = 0,
+		file_memory = {},
+		file_order = {},
+		turn_touched_paths = {},
+		turn_changed_paths = {},
+		verification_label = nil,
 		recoveries = {},
 		resolved_recovery = nil,
 		turn_sequence = 0,
@@ -225,6 +232,63 @@ local function focused_plan_step(plan)
 		if item.step and item.step ~= "" then return item end
 	end
 	return nil
+end
+
+local function verification_label(command)
+	command = tostring(command or ""):lower()
+	if command:find("build", 1, true) then return "build passed" end
+	if command:find("test", 1, true) or command:find("spec", 1, true) then return "tests passed" end
+	if command:find("lint", 1, true) or command:find("check", 1, true) then return "checks passed" end
+	return "verified"
+end
+
+function State:_remember_file(path, update)
+	path = tostring(path or "")
+	if path == "" then return nil end
+	update = update or {}
+	local memory = self.file_memory[path] or {
+		path = path, filename = basename(path), touches = 0, state = "dormant",
+	}
+	memory.touches = memory.touches + 1
+	memory.touched_at = self.clock()
+	memory.turn = self.turn_sequence
+	for key, value in pairs(update) do memory[key] = value end
+	self.file_memory[path] = memory
+	for index, ordered_path in ipairs(self.file_order) do
+		if ordered_path == path then table.remove(self.file_order, index); break end
+	end
+	self.file_order[#self.file_order + 1] = path
+	self.turn_touched_paths[path] = true
+	while #self.file_order > 8 do
+		local remove_at
+		for index, candidate_path in ipairs(self.file_order) do
+			local candidate = self.file_memory[candidate_path]
+			if candidate and candidate.state ~= "failed" and candidate.state ~= "changed" then remove_at = index; break end
+		end
+		if not remove_at then break end
+		local removed = table.remove(self.file_order, remove_at)
+		self.file_memory[removed] = nil
+	end
+	return memory
+end
+
+function State:_transfer(from, to, kind, duration)
+	self.transfer_sequence = self.transfer_sequence + 1
+	self.transfers[#self.transfers + 1] = {
+		id = self.transfer_sequence, from = from, to = to, kind = kind,
+		age = 0, duration = duration or 1.35,
+	}
+	while #self.transfers > 16 do table.remove(self.transfers, 1) end
+end
+
+function State:working_files(limit)
+	local result = {}
+	for index = #self.file_order, 1, -1 do
+		local memory = self.file_memory[self.file_order[index]]
+		if memory then result[#result + 1] = memory end
+		if #result >= (limit or 6) then break end
+	end
+	return result
 end
 
 local function result_filename(name, args, result)
@@ -382,6 +446,15 @@ function State:submit(text)
 	self.turn_started_at = self.clock()
 	self.completion_summary = nil
 	self.handoffs = {}
+	self.transfers = {}
+	self.turn_touched_paths = {}
+	self.turn_changed_paths = {}
+	self.verification_label = nil
+	for _, memory in pairs(self.file_memory) do
+		if memory.state == "reading" or memory.state == "editing" or memory.state == "writing" or memory.state == "read_error" then
+			memory.state = "dormant"
+		end
+	end
 	for _, recovery in pairs(self.recoveries) do
 		if recovery.stream then
 			if not recovery.stream.duration then recovery.stream.duration = recovery.stream.age + 0.5 end
@@ -451,6 +524,16 @@ function State:tool_event(event)
 		self.tool_queues[key] = self.tool_queues[key] or {}
 		self.tool_queues[key][#self.tool_queues[key] + 1] = tool
 		local event_args = event.args or {}
+		if FILE_TOOLS[event.name] and event_args.path then
+			local mutation = FILE_MUTATION_TOOLS[event.name]
+			self:_remember_file(event_args.path, {
+				verb = event.name, state = mutation and event.name == "write" and "writing" or mutation and "editing" or "reading",
+				tool_id = tool.id, summary = nil,
+			})
+			local file_endpoint = { kind = "file", path = tostring(event_args.path) }
+			if mutation then self:_transfer({ kind = "core" }, file_endpoint, "write")
+			else self:_transfer(file_endpoint, { kind = "core" }, "read") end
+		end
 		local key = recovery_key(event_args)
 		local recovery = key and self.recoveries[key]
 		local plan_item = event.name == "update_plan" and focused_plan_step(event_args.plan)
@@ -506,6 +589,23 @@ function State:tool_event(event)
 			or (event.result and event.result.ui_state == "deferred" and "deferred" or "ok")
 		tool.finished_at = self.clock()
 		self:_finish_streams(tool, event)
+		local args, result = event.args or {}, event.result or {}
+		if FILE_TOOLS[event.name] and args.path then
+			local failed = result.is_error == true
+			local mutation = FILE_MUTATION_TOOLS[event.name]
+			local state = failed and (mutation and "failed" or "read_error") or mutation and "changed" or "read"
+			local memory_update = {
+				verb = event.name, state = state, tool_id = tool.id,
+				summary = compact_text(result.summary or result.content or (failed and "failed" or "done"), 52),
+			}
+			if mutation then memory_update.scar = failed end
+			self:_remember_file(args.path, memory_update)
+			if not failed and FILE_MUTATION_TOOLS[event.name] then
+				self.turn_changed_paths[tostring(args.path)] = true
+				-- A later mutation invalidates earlier proof from the same turn.
+				self.verification_label, self.verification, self.proof = nil, nil, 0
+			end
+		end
 		local queue = self.tool_queues[event_key(event)]
 		if queue then
 			for index, queued in ipairs(queue) do
@@ -519,15 +619,25 @@ function State:tool_event(event)
 			if event.result and event.result.is_error then
 				self.failure = tool.result ~= "" and tool.result or "command failed"
 				self.verification = nil
+				self.verification_label = nil
 				self.disturbance = 1
 				self.proof = 0
 				self.mode = "failed"
 			else
 				self.verification = tool.result ~= "" and tool.result or "verification passed"
+				self.verification_label = verification_label((event.args or {}).command)
 				self.failure = nil
 				self.disturbance = 0
 				self.proof = 1
 				self.mode = "verified"
+				for path in pairs(self.turn_changed_paths) do
+					local memory = self.file_memory[path]
+					if memory then
+						memory.state = "verified"
+						memory.verified_at = self.clock()
+						self:_transfer({ kind = "tool", id = tool.id }, { kind = "file", path = path }, "proof", 1.6)
+					end
+				end
 			end
 		end
 	end
@@ -563,11 +673,18 @@ function State:assistant_complete(text, metrics)
 	local started_at = tonumber(metrics.started_at) or self.turn_started_at
 	local elapsed = tonumber(metrics.elapsed) or (started_at and self.assistant_completed_at - started_at)
 	if elapsed and metrics.tokens and next(self.recoveries) == nil then
-		self.completion_summary = "✓ " .. format_duration(elapsed) .. " · " .. format_tokens(metrics.tokens)
+		local segments = {}
+		local changed = 0
+		for _ in pairs(self.turn_changed_paths) do changed = changed + 1 end
+		if changed > 0 then segments[#segments + 1] = tostring(changed) .. (changed == 1 and " file" or " files") end
+		if self.verification_label then segments[#segments + 1] = self.verification_label end
+		segments[#segments + 1] = format_duration(elapsed)
+		segments[#segments + 1] = format_tokens(metrics.tokens)
 		if metrics.cache_percent ~= nil then
 			local cached = clamp(tonumber(metrics.cache_percent) or 0, 0, 100)
-			self.completion_summary = self.completion_summary .. " · " .. tostring(math.floor(cached + 0.5)) .. "% cached"
+			segments[#segments + 1] = tostring(math.floor(cached + 0.5)) .. "% cached"
 		end
+		self.completion_summary = "✓ " .. table.concat(segments, " · ")
 	end
 	self.mode = "complete"
 	self.model_phase = "assistant complete"
@@ -707,6 +824,11 @@ function Input:feed(byte, busy)
 	end
 
 	local first = self.buffer:byte(1)
+	if first == 9 then
+		self.buffer = ""
+		if not busy and #self.editor.chars == 0 then return { type = "focus_next" } end
+		return nil
+	end
 	if first == 3 then self.buffer = ""; return { type = busy and "cancel" or "exit" } end
 	if first == 4 then
 		self.buffer = ""
@@ -904,7 +1026,7 @@ local function completion_pop(buffer, row, text, age)
 	return true
 end
 
-local function living_divider(buffer, row, width, label, kind, time, previous_label, molt_progress)
+local function living_divider(buffer, row, width, label, kind, time, previous_label, molt_progress, plan)
 	local quiet = rgb(40, 65, 70, { "dim" })
 	buffer:write(row, 1, string.rep("─", width), quiet, width)
 	if not label or label == "" then return end
@@ -950,6 +1072,18 @@ local function living_divider(buffer, row, width, label, kind, time, previous_la
 	local pulse = 1 + (math.floor((tonumber(time) or 0) * 9) % span)
 	buffer:set(row, pulse, "━", cell_style)
 	buffer:set(row, width - pulse + 1, "━", cell_style)
+	if kind == "task" and type(plan) == "table" then
+		local available = math.max(0, math.floor((start - 3) / 2))
+		local count = math.min(#plan, available, 8)
+		for index = 1, count do
+			local item = plan[index]
+			local glyph = item.status == "completed" and "●" or item.status == "in_progress" and "◉" or "○"
+			local style = item.status == "completed" and rgb(76, 178, 143, { "dim" })
+				or item.status == "in_progress" and rgb(194, 158, 224, { "bold" })
+				or rgb(62, 83, 91, { "dim" })
+			buffer:set(row, 2 + (index - 1) * 2, glyph, style)
+		end
+	end
 end
 
 local FILE_MORPHS = {
@@ -1139,6 +1273,7 @@ function App.new(opts)
 		divider_kind = "quiet",
 		divider_previous_label = nil,
 		divider_molt_started = 0,
+		focus_path = nil,
 	}, App)
 end
 
@@ -1211,6 +1346,28 @@ function App:auto_advance_effect()
 	return true
 end
 
+function App:focus_next()
+	local files = self.state:working_files(6)
+	if #files == 0 then self.focus_path = nil; self.state:notice("working set is empty"); return false end
+	local current = 0
+	for index, memory in ipairs(files) do if memory.path == self.focus_path then current = index; break end end
+	if current >= #files then self.focus_path = nil
+	else self.focus_path = files[current + 1].path end
+	return self.focus_path ~= nil
+end
+
+function App:_focus_status(now)
+	if not self.focus_path then return nil end
+	local memory = self.state.file_memory[self.focus_path]
+	if not memory then self.focus_path = nil; return nil end
+	local files, index = self.state:working_files(6), 1
+	for candidate, item in ipairs(files) do if item.path == memory.path then index = candidate; break end end
+	local detail = { "focus " .. tostring(index) .. "/" .. tostring(#files), memory.verb or "file", memory.filename, memory.state }
+	if memory.summary and memory.summary ~= "" then detail[#detail + 1] = memory.summary end
+	if memory.touched_at then detail[#detail + 1] = format_duration(math.max(0, now - memory.touched_at)) .. " ago" end
+	return table.concat(detail, " · ")
+end
+
 function App:_divider_transition(label, kind)
 	kind = kind or "quiet"
 	if label ~= self.divider_label or kind ~= self.divider_kind then
@@ -1241,6 +1398,7 @@ function App:render(frame_dt)
 	local dt = frame_dt == nil and clamp(now - self.last_frame, 0, 0.1) or frame_dt
 	self.last_frame = now
 	local user_typing = self.editor:text() ~= ""
+	if user_typing then self.focus_path = nil end
 	local target_motion_scale = user_typing and 0.28 or 1
 	local motion_ease = 1 - math.exp(-(user_typing and 8 or 5) * math.max(0, dt))
 	self.motion_scale = self.motion_scale + (target_motion_scale - self.motion_scale) * motion_ease
@@ -1259,6 +1417,12 @@ function App:render(frame_dt)
 		if handoff.age <= handoff.duration then live_handoffs[#live_handoffs + 1] = handoff end
 	end
 	self.state.handoffs = live_handoffs
+	local live_transfers = {}
+	for _, transfer in ipairs(self.state.transfers) do
+		transfer.age = transfer.age + dt
+		if transfer.age <= transfer.duration then live_transfers[#live_transfers + 1] = transfer end
+	end
+	self.state.transfers = live_transfers
 	local foreground_streams, foreground_set, ordered_streams, foreground_rows = conduct_streams(live_streams, world_rows)
 	self.foreground_streams = foreground_streams
 	local listening = self.state.mode == "listening"
@@ -1274,6 +1438,7 @@ function App:render(frame_dt)
 		end
 	end
 	local vortices = {}
+	local tool_positions = {}
 	for _, tool in ipairs(visible_tools) do
 		local row = clamp(tool.lane or 1, 1, world_rows)
 		local x = tool_position(tool.id, width, 1, world_rows)
@@ -1291,6 +1456,19 @@ function App:render(frame_dt)
 			failed = tool.status == "error",
 			resolved = tool.status == "ok",
 			direction = (#tool.id % 2 == 0) and -1 or 1,
+		}
+		tool_positions[tool.id] = { x = x, y = row }
+	end
+	local memory_positions = {}
+	for _, memory in ipairs(self.state:working_files(6)) do
+		local x, y = tool_position("file:" .. memory.path, width, 1, world_rows)
+		memory_positions[memory.path] = { x = x, y = y, memory = memory }
+		vortices[#vortices + 1] = {
+			id = "file:" .. memory.path, x = x, y = y,
+			radius = memory.state == "failed" and 8 or memory.state == "changed" and 6 or 4,
+			strength = memory.state == "dormant" and 0.12 or memory.state == "read" and 0.22 or 0.46,
+			failed = memory.state == "failed" or memory.state == "read_error" or memory.scar == true,
+			resolved = memory.state == "verified", memory = true,
 		}
 	end
 	if failed then
@@ -1351,6 +1529,57 @@ function App:render(frame_dt)
 		if progress >= 1 then self.effect_transition_from = nil end
 	else
 		tui_effects.render(self.effect, buffer, effect_context)
+	end
+
+	local function transfer_point(endpoint)
+		if endpoint.kind == "core" then return width * 0.5, (world_rows + 1) * 0.5 end
+		if endpoint.kind == "file" then
+			local position = memory_positions[endpoint.path]
+			if position then return position.x, position.y end
+			return tool_position("file:" .. tostring(endpoint.path), width, 1, world_rows)
+		end
+		if endpoint.kind == "tool" then
+			local position = tool_positions[endpoint.id]
+			if position then return position.x, position.y end
+			return tool_position(tostring(endpoint.id), width, 1, world_rows)
+		end
+		return width * 0.5, (world_rows + 1) * 0.5
+	end
+
+	for _, transfer in ipairs(live_transfers) do
+		local x1, y1 = transfer_point(transfer.from)
+		local x2, y2 = transfer_point(transfer.to)
+		local style = transfer.kind == "proof" and rgb(91, 224, 169, { "bold" })
+			or transfer.kind == "write" and rgb(180, 125, 222, { "bold" })
+			or rgb(79, 188, 194, { "bold" })
+		for mark = 1, 5 do
+			local fraction = mark / 6
+			local x = clamp(math.floor(x1 + (x2 - x1) * fraction + 0.5), 1, width)
+			local y = clamp(math.floor(y1 + (y2 - y1) * fraction + 0.5), 1, world_rows)
+			buffer:set(y, x, "·", rgb(style.fg[1], style.fg[2], style.fg[3], { "dim" }))
+		end
+		local progress = clamp(transfer.age / transfer.duration, 0, 1)
+		local eased = 1 - (1 - progress) ^ 2
+		local x = clamp(math.floor(x1 + (x2 - x1) * eased + 0.5), 1, width)
+		local y = clamp(math.floor(y1 + (y2 - y1) * eased + 0.5), 1, world_rows)
+		buffer:set(y, x, transfer.kind == "proof" and "◆" or transfer.kind == "write" and "✦" or "◇", style)
+	end
+
+	for _, position in pairs(memory_positions) do
+		local memory = position.memory
+		local focused = self.focus_path == memory.path
+		local marker = focused and "◎" or (memory.state == "failed" or memory.state == "read_error" or memory.scar) and "×"
+			or memory.state == "verified" and "✦"
+			or memory.state == "changed" and "◆"
+			or (memory.state == "editing" or memory.state == "writing") and "◉"
+			or memory.state == "read" and "◇" or "·"
+		local style = focused and rgb(238, 190, 91, { "bold" })
+			or (memory.state == "failed" or memory.state == "read_error" or memory.scar) and rgb(226, 69, 106, { "bold" })
+			or memory.state == "verified" and rgb(91, 224, 169, { "bold" })
+			or memory.state == "changed" and rgb(180, 125, 222, { "bold" })
+			or memory.state == "dormant" and rgb(55, 91, 99, { "dim" })
+			or rgb(79, 188, 194)
+		buffer:set(position.y, position.x, marker, style)
 	end
 
 	for _, handoff in ipairs(live_handoffs) do
@@ -1447,7 +1676,7 @@ function App:render(frame_dt)
 	local divider_label, divider_kind = self.state:divider_status(state_now)
 	local current_label, current_kind, previous_label, molt_progress = self:_divider_transition(divider_label, divider_kind)
 	living_divider(screen, top_divider_row, width, current_label, current_kind, self.flow_time,
-		previous_label, molt_progress)
+		previous_label, molt_progress, self.state.plan)
 	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
 	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
 	screen:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
@@ -1455,7 +1684,9 @@ function App:render(frame_dt)
 		or "listening · Enter submits · Ctrl-D exits"
 	local active_count = #self.state:active_tools()
 	if active_count > 0 then status = status .. " · " .. tostring(active_count) .. " tools active" end
-	if notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
+	local focus_status = self:_focus_status(state_now)
+	if focus_status then status = compact_text(focus_status, width - 18) .. " · Tab next"
+	elseif notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
 	screen:write(status_row, 2, "LCA · " .. self.state.model_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
 	self.state:set_input(self.editor:text(), self.editor:display_cursor())
 	local cursor_col = math.min(width, 10 + self.editor:display_cursor())
@@ -1494,6 +1725,7 @@ function App:_handle_action(action)
 	if not action then return end
 	if action.type == "exit" then self.exit_requested = true
 	elseif action.type == "cancel" then self.cancel_requested = true; self.state:cancel("cancelling")
+	elseif action.type == "focus_next" then self:focus_next()
 	elseif action.type == "submit" then
 		if action.text ~= "" then self.submitted[#self.submitted + 1] = action.text end
 	end

@@ -94,6 +94,9 @@ verification pulse before settling back to dust.
 After a completed turn, the resting summary shows end-to-end work time and one
 rounded final model-context number, such as `✓ 48s · 56k tokens`, instead of a
 raw process result such as `exit 0`.
+When applicable, the same harvest includes the number of changed files and a
+real verification classification, for example
+`✓ 4 files · tests passed · 48s · 56k tokens`.
 When the final provider response includes prompt-cache telemetry, the same
 summary appends its rounded cache share, for example
 `✓ 48s · 56k tokens · 96% cached`. A reported zero remains visible, while
@@ -111,6 +114,17 @@ The bar also conducts busy batches: the highest-value event in each lane keeps
 its readable label while older activity falls back to faint trail particles.
 Reads skim, searches scatter, edits and writes pull toward assembly, builds
 pulse, and plan steps behave like waypoints.
+It retains a compact living working set for the current TUI session. Reads
+carry a signal from a stable file organism into the model, edits carry one back
+out, and successful verification returns proof to every changed file. Dormant,
+read, changed, failed, and verified files remain distinguishable across turns;
+a failed mutation keeps its scar through source refresh and only heals after a
+real successful retry.
+When the input dock is empty, `Tab` cycles a focus lens over the six most recent
+files. The status row then exposes the real operation, filename, state, compact
+result, and age; cycling past the final file or beginning to type dismisses the
+lens. During planned work, compact `● ◉ ○` spores show completed, current, and
+pending steps without duplicating the current task label.
 The upper boundary is also a quiet semantic membrane. During work it carries
 one current plan task or recovery state, then becomes an unlabelled line while
 listening. Generic phases such as `model waiting` remain in the current rather

@@ -453,6 +453,119 @@ test("recent changed files hand off into verification", function()
 	if state.handoffs[1].age <= 0 then error("handoff pulse did not advance") end
 end)
 
+test("working set remembers file state and real causal direction across a turn", function()
+	local now = 10
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("inspect change and verify")
+	state:tool_event(start("read-a", "read", { path = "lua/agent/core.lua" }))
+	local memory = state.file_memory["lua/agent/core.lua"]
+	assert_eq(memory.state, "reading")
+	assert_eq(state.transfers[#state.transfers].from.kind, "file")
+	assert_eq(state.transfers[#state.transfers].to.kind, "core")
+	state:tool_event(finish("read-a", "read", { path = "lua/agent/core.lua" }, { is_error = false, summary = "120 lines" }))
+	assert_eq(memory.state, "read")
+	state:tool_event(start("edit-a", "edit", { path = "lua/agent/core.lua" }))
+	assert_eq(memory.state, "editing")
+	assert_eq(state.transfers[#state.transfers].from.kind, "core")
+	assert_eq(state.transfers[#state.transfers].to.kind, "file")
+	state:tool_event(finish("edit-a", "edit", { path = "lua/agent/core.lua" }, { is_error = false, summary = "replaced 4 lines" }))
+	assert_eq(memory.state, "changed")
+	state:tool_event(start("test-a", "run", { command = "make test" }))
+	state:tool_event(finish("test-a", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
+	assert_eq(memory.state, "verified")
+	assert_eq(state.verification_label, "tests passed")
+	local proof = state.transfers[#state.transfers]
+	assert_eq(proof.kind, "proof")
+	assert_eq(proof.from.kind, "tool")
+	assert_eq(proof.to.path, "lua/agent/core.lua")
+	state:listen()
+	assert_eq(state:working_files()[1], memory)
+	now = 20
+	state:submit("touch it again")
+	assert_eq(state.file_memory["lua/agent/core.lua"], memory)
+end)
+
+test("working-set scar survives refresh and heals only after mutation retry", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(finish("edit-fail", "edit", { path = "src/main.js" }, {
+		is_error = true, summary = "stale tag",
+	}))
+	local memory = state.file_memory["src/main.js"]
+	assert_eq(memory.state, "failed")
+	assert_eq(memory.scar, true)
+	state:tool_event(finish("refresh", "read", { path = "src/main.js" }, {
+		is_error = false, summary = "70 lines",
+	}))
+	assert_eq(memory.state, "read")
+	assert_eq(memory.scar, true)
+	state:tool_event(finish("retry", "edit", { path = "src/main.js" }, {
+		is_error = false, summary = "replaced 10 lines",
+	}))
+	assert_eq(memory.state, "changed")
+	assert_eq(memory.scar, false)
+end)
+
+test("turn harvest reports changed files verification time tokens and cache", function()
+	local now = 100
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("change two files")
+	state:tool_event(finish("edit-a", "edit", { path = "lua/a.lua" }, { is_error = false, summary = "replaced 2 lines" }))
+	state:tool_event(finish("write-b", "write", { path = "lua/b.lua" }, { is_error = false, summary = "wrote 20 lines" }))
+	state:tool_event(finish("build", "run", { command = "make check" }, { is_error = false, summary = "exit 0" }))
+	state:assistant_complete("done", { elapsed = 12, tokens = 20000, cache_percent = 50 })
+	assert_eq(state.completion_summary, "✓ 2 files · checks passed · 12s · 20k tokens · 50% cached")
+end)
+
+test("later mutation invalidates an earlier verification harvest", function()
+	local state = tui.State.new({ clock = function() return 100 end })
+	state:submit("verify then change")
+	state:tool_event(finish("test", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
+	assert_eq(state.verification_label, "tests passed")
+	state:tool_event(finish("edit", "edit", { path = "lua/a.lua" }, { is_error = false, summary = "replaced 2 lines" }))
+	assert_eq(state.verification_label, nil)
+	assert_eq(state.proof, 0)
+	state:assistant_complete("done", { elapsed = 8, tokens = 10000 })
+	assert_eq(state.completion_summary, "✓ 1 file · 8s · 10k tokens")
+end)
+
+test("empty-dock Tab focuses recent files and typing dismisses the lens", function()
+	local now = 20
+	local state = tui.State.new({ clock = function() return now end })
+	state:tool_event(finish("read-a", "read", { path = "lua/a.lua" }, { is_error = false, summary = "12 lines" }))
+	now = 22
+	state:tool_event(finish("edit-b", "edit", { path = "lua/b.lua" }, { is_error = false, summary = "replaced 3 lines" }))
+	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
+	local input = tui.Input.new(app.editor)
+	app:_handle_action(input:feed("\t", false))
+	assert_eq(app.focus_path, "lua/b.lua")
+	app:render(0.1)
+	assert_contains(app.renderer.previous:plain_line(8), "focus 1/2 · edit · b.lua · changed")
+	app:_handle_action(input:feed("\t", false))
+	assert_eq(app.focus_path, "lua/a.lua")
+	app:_handle_action(input:feed("\t", false))
+	assert_eq(app.focus_path, nil)
+	input:feed("x", false)
+	app.focus_path = "lua/b.lua"
+	app:render(0.1)
+	assert_eq(app.focus_path, nil)
+end)
+
+test("plan membrane shows compact completed current and pending spores", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(start("plan", "update_plan", { plan = {
+		{ step = "Inspect the organism", status = "completed" },
+		{ step = "Grow working memory", status = "in_progress" },
+		{ step = "Verify the experience", status = "pending" },
+	} }))
+	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
+	app:render(0.1)
+	local divider = app.renderer.previous:plain_line(1)
+	assert_contains(divider, "●")
+	assert_contains(divider, "◉")
+	assert_contains(divider, "○")
+	assert_contains(divider, "Grow working memory")
+end)
+
 test("parallel tool fragments occupy lanes and move with the current", function()
 	local backend = fake_backend({ width = 120, height = 32 })
 	local state = tui.State.new({ clock = function() return 10 end })
