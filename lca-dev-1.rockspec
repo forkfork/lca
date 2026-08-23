@@ -50,6 +50,7 @@ build = {
 		["agent.session"] = "lua/agent/session.lua",
 		["agent.system_prompt"] = "lua/agent/system_prompt.lua",
 		["agent.tui"] = "lua/agent/tui.lua",
+		["agent.tui_effects"] = "lua/agent/tui_effects.lua",
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",
 		["agent.tool_registry"] = "lua/agent/tool_registry.lua",
 		["agent.turn_state"] = "lua/agent/turn_state.lua",

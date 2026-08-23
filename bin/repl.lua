@@ -19,7 +19,7 @@ local options = {
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--tui] [--tui-effect filament|contours|drift] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
+  lua bin/repl.lua [--tui] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
 ]])
 	os.exit(2)
 end

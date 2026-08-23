@@ -54,7 +54,8 @@ lca run "add the feature" --model gpt-5.6-sol
 lca repl
 lca --tui
 lca repl --tui
-lca --tui --tui-effect filament
+lca --tui --tui-effect mycelium
+lca --tui --tui-effect auto
 ```
 
 `--tui` enables an opt-in compact living-current strip: four animated activity
@@ -67,13 +68,22 @@ and change them. Current plan-task names drift through more slowly, while
 commands and verification remain compact signals in the same current. The TUI
 requires a POSIX terminal and the sibling `lcatui` Lua rock.
 
-The animation engine has three interchangeable treatments: `drift` (the
-default sparse particle current), `filament` (a coherent spring-like current),
-and `contours` (edge arcs and vortices). Choose one at launch with
+The animation engine has six interchangeable treatments: `drift` (the default
+sparse particle current), `mycelium` (branching tool roots and travelling
+signals), `cytoplasm` (merging membranes around concurrent work), `ink`
+(flowing capillary ribbons), `filament` (a coherent spring-like current), and
+`contours` (edge arcs and vortices). Choose one at launch with
 `--tui-effect NAME`, set `LCA_TUI_EFFECT`, or switch live with `/effect NAME`.
 Entering `/effect` by itself shows the current choice. Files, tasks, tool
 identity, and failure/success state are preserved when the visual treatment is
 changed.
+
+`/effect next` moves through the curated order. `/effect auto` enables rotation
+at safe user-turn boundaries; it never changes treatment merely because a
+frame elapsed, while a tool batch is running, or during an unresolved failure.
+`/effect manual` disables rotation. `--tui-effect auto` starts with `drift` and
+uses the same turn-boundary rotation. Treatments dissolve into one another
+without resetting the semantic actors or their state.
 
 While the model is composing hidden tool protocol, the TUI reports that work
 separately from execution—for example, `model drafting edit · src/main.js ·
@@ -121,8 +131,8 @@ calls. Use `--xml-tools` to compare or temporarily fall back; `--native-tools`
 can opt another Codex model into the same adapter.
 
 Useful REPL commands: `/help`, `/status`, `/model`, `/reasoning`, `/clear`,
-`/exit`. In TUI mode, `/effect` and `/effect NAME` inspect or change the
-animation treatment.
+`/exit`. In TUI mode, `/effect`, `/effect NAME`, `/effect next`, and
+`/effect auto` inspect, change, or safely cycle the animation treatment.
 
 Codex/OpenAI uses the Responses WebSocket transport by default, with HTTPS/SSE
 fallback on transport failure. To force the old HTTPS/SSE path:

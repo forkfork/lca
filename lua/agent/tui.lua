@@ -5,6 +5,7 @@ local core = require("agent.core")
 local jobs = require("agent.jobs")
 local protocol = require("agent.tool_protocol")
 local session_module = require("agent.session")
+local tui_effects = require("agent.tui_effects")
 local socket = require("socket")
 local uv = require("luv")
 local lcatui = require("lcatui")
@@ -15,8 +16,7 @@ local FRAME_SECONDS = 1 / 25
 local FRAME_MILLISECONDS = 40
 local FILE_COLUMNS_PER_SECOND = 21.6
 local TASK_COLUMNS_PER_SECOND = 14
-local EFFECTS = { filament = true, contours = true, drift = true }
-local EFFECT_NAMES = { "filament", "contours", "drift" }
+local EFFECT_NAMES = tui_effects.names()
 
 local function clamp(value, low, high)
 	return math.max(low, math.min(high, value))
@@ -1092,8 +1092,10 @@ function App.new(opts)
 	opts = opts or {}
 	local owns_backend = opts.backend == nil
 	local backend = opts.backend or lcatui.backends.posix.new()
-	local effect = opts.effect or "drift"
-	if not EFFECTS[effect] then
+	local requested_effect = opts.effect or "drift"
+	local effect_auto = requested_effect == "auto"
+	local effect = effect_auto and "drift" or requested_effect
+	if not tui_effects.known(effect) then
 		error("unknown TUI effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")")
 	end
 	return setmetatable({
@@ -1108,6 +1110,10 @@ function App.new(opts)
 		input = nil,
 		flow = nil,
 		effect = effect,
+		effect_auto = effect_auto,
+		effect_auto_turns = 0,
+		effect_transition_from = nil,
+		effect_transition_age = 0,
 		flow_width = nil,
 		flow_height = nil,
 		flow_time = 0,
@@ -1159,7 +1165,8 @@ end
 
 function App:_flow_for(width, rows)
 	if not self.flow or self.flow_width ~= width or self.flow_height ~= rows then
-		self.flow = lcatui.Current.new(width, rows, { seed = 19, mode = self.effect })
+		local mode = tui_effects.native(self.effect) and self.effect or "drift"
+		self.flow = lcatui.Current.new(width, rows, { seed = 19, mode = mode })
 		self.flow_width, self.flow_height = width, rows
 		self.flow_time = self.flow_time or 0
 	end
@@ -1167,17 +1174,40 @@ function App:_flow_for(width, rows)
 end
 
 function App:set_effect(effect)
-	if not EFFECTS[effect] then
+	if not tui_effects.known(effect) then
 		return nil, "unknown effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")"
 	end
+	if effect == self.effect then return true end
+	self.effect_transition_from = self.effect
+	self.effect_transition_age = 0
 	self.effect = effect
-	if self.flow and self.flow.set_mode then
+	if self.flow and self.flow.set_mode and tui_effects.native(effect) then
 		local ok, err = self.flow:set_mode(effect)
 		if not ok then return nil, err end
-	else
-		self.flow = nil
 	end
 	self.state:notice("animation · " .. effect)
+	return true
+end
+
+function App:next_effect()
+	local current = 1
+	for index, name in ipairs(EFFECT_NAMES) do if name == self.effect then current = index; break end end
+	return self:set_effect(EFFECT_NAMES[current % #EFFECT_NAMES + 1])
+end
+
+function App:set_effect_auto(enabled)
+	self.effect_auto = enabled ~= false
+	self.effect_auto_turns = 0
+	self.state:notice("animation auto · " .. (self.effect_auto and "on" or "off") .. " · " .. self.effect)
+	return true
+end
+
+function App:auto_advance_effect()
+	if not self.effect_auto then return false end
+	if #self.state:active_tools() > 0 or self.state.failure or next(self.state.recoveries) ~= nil then return false end
+	self.effect_auto_turns = self.effect_auto_turns + 1
+	if self.effect_auto_turns == 1 then return false end
+	self:next_effect()
 	return true
 end
 
@@ -1266,7 +1296,7 @@ function App:render(frame_dt)
 	if failed then
 		vortices[#vortices + 1] = { id = "failure", x = width * 0.5, y = world_rows * 0.5, radius = 15, strength = 1.7, direction = -1, failed = true }
 	end
-	flow:step(visual_dt, {
+	local scene = {
 		activity = active and (user_typing and 0.3 or 0.88) or listening and (0.19 + listening_breath * 0.08) or 0.18,
 		active = active,
 		listening = listening,
@@ -1276,7 +1306,8 @@ function App:render(frame_dt)
 		center_x = width * 0.5,
 		center_y = listening and world_rows * 0.64 or world_rows * 0.5,
 		vortices = vortices,
-	})
+	}
+	flow:step(visual_dt, scene)
 
 	local target_palette = listening and { r = 55, g = 151, b = 157 }
 		or self.state.proof > 0 and { r = 62, g = 205, b = 153 }
@@ -1295,16 +1326,32 @@ function App:render(frame_dt)
 	local screen = lcatui.Buffer.new(width, height)
 	local buffer = buffer_view(screen, flow_top - 1, world_rows)
 	buffer:fill(1, 1, world_rows, width, " ", field_style)
-	flow:render(buffer, {
-		active = active,
-		listening = listening,
-		failed = failed,
-		proof = self.state.proof,
-		core_x = width * 0.5,
-		core_y = world_rows * 0.47,
-		threshold = 0.13,
-		style = field_style,
-	})
+	scene.core_x = width * 0.5
+	scene.core_y = world_rows * 0.47
+	scene.threshold = 0.13
+	scene.style = field_style
+	local effect_context = {
+		flow = flow, scene = scene, time = self.flow_time,
+	}
+	if self.effect_transition_from then
+		self.effect_transition_age = self.effect_transition_age + visual_dt
+		local progress = clamp(self.effect_transition_age / 0.72, 0, 1)
+		local previous = lcatui.Buffer.new(width, world_rows)
+		local current = lcatui.Buffer.new(width, world_rows)
+		tui_effects.render(self.effect_transition_from, previous, effect_context)
+		tui_effects.render(self.effect, current, effect_context)
+		for row = 1, world_rows do
+			for col = 1, width do
+				-- Stable ordered dissolve: cells change once instead of flickering.
+				local threshold = ((col * 3 + row * 5) % 13) / 12
+				local cell = progress >= threshold and current.rows[row][col] or previous.rows[row][col]
+				buffer:set(row, col, cell.char, cell.style)
+			end
+		end
+		if progress >= 1 then self.effect_transition_from = nil end
+	else
+		tui_effects.render(self.effect, buffer, effect_context)
+	end
 
 	for _, handoff in ipairs(live_handoffs) do
 		local source_display = stream_display(handoff.source)
@@ -1612,10 +1659,15 @@ function tui.run(options)
 				app:drive_frame()
 				local requested_effect = line:match("^/effect%s+([%w_-]+)%s*$")
 				if line:match("^/effect%s*$") then
-					app.state:notice("animation · " .. app.effect .. " · choose " .. table.concat(EFFECT_NAMES, ", "))
+					local auto = app.effect_auto and " · auto" or " · manual"
+					app.state:notice("animation · " .. app.effect .. auto .. " · choose " .. table.concat(EFFECT_NAMES, ", "))
 					goto continue
 				elseif line:match("^/effect[%s]") then
-					local changed, effect_err = app:set_effect(requested_effect)
+					local changed, effect_err
+					if requested_effect == "next" then changed, effect_err = app:next_effect()
+					elseif requested_effect == "auto" then changed = app:set_effect_auto(true)
+					elseif requested_effect == "manual" or requested_effect == "off" then changed = app:set_effect_auto(false)
+					else changed, effect_err = app:set_effect(requested_effect) end
 					if not changed then app.state:notice(effect_err, "error") end
 					goto continue
 				end
@@ -1627,6 +1679,7 @@ function tui.run(options)
 				session:add_user(line)
 			end
 			if line ~= "" or session.messages[#session.messages] then
+				app:auto_advance_effect()
 				app.state:submit(line ~= "" and line or "command request")
 				app.busy, app.cancel_requested = true, false
 				-- Acknowledge Enter before provider setup or network waiting can block.

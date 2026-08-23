@@ -95,8 +95,8 @@ end
 local function usage()
 	io.stderr:write([[
 Usage:
-  lca [--tui] [--tui-effect filament|contours|drift] [repl options]
-  lca repl [--tui] [--tui-effect filament|contours|drift] [repl options]
+  lca [--tui] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [repl options]
+  lca repl [--tui] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [repl options]
   lca run <prompt> [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools]
   lca login <openai|bedrock|deepseek> [login options]
   lca auth <login|refresh> [auth options]
