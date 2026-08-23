@@ -88,6 +88,10 @@ file changes are followed by verification, small pulses travel from those file
 objects into the verification tool. The completed time/token summary first
 crystallizes from scattered characters, then remains readable until the next
 request.
+The bar also conducts busy batches: the highest-value event in each lane keeps
+its readable label while older activity falls back to faint trail particles.
+Reads skim, searches scatter, edits and writes pull toward assembly, builds
+pulse, and plan steps behave like waypoints.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

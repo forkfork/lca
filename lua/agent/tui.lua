@@ -164,6 +164,7 @@ function State:_stream(text, kind, tool, duration, meta)
 		task = meta.task == true,
 		verb = meta.verb,
 		task_status = meta.status,
+		personality = meta.personality,
 		turn = self.turn_sequence,
 	}
 	self.streams[#self.streams + 1] = stream
@@ -172,6 +173,15 @@ function State:_stream(text, kind, tool, duration, meta)
 end
 
 local FILE_TOOLS = { read = true, edit = true, write = true }
+
+local function tool_personality(name)
+	if name == "read" then return "skim" end
+	if name == "edit" or name == "write" then return "inward" end
+	if name == "grep" or name == "find" or name == "ls" then return "scatter" end
+	if name == "run" or name == "shell" then return "pulse" end
+	if name == "update_plan" then return "waypoint" end
+	return "drift"
+end
 
 local function focused_plan_step(plan)
 	if type(plan) ~= "table" then return nil end
@@ -208,18 +218,18 @@ function State:_finish_streams(tool, event)
 	local filename = result_filename(name, args, result)
 	if filename ~= "" then
 		local kind = failed and "file_error" or (name == "edit" or name == "write") and "file_changed" or "file_read"
-		self:_stream(filename, kind, tool, 5.2, { file = true, verb = name })
+		self:_stream(filename, kind, tool, 5.2, { file = true, verb = name, personality = tool_personality(name) })
 	elseif name == "update_plan" and not failed then
 		local item = focused_plan_step(result.plan or args.plan)
 		if item then
-			self:_stream(item.step, "task", tool, 6.2, { task = true, status = item.status })
+			self:_stream(item.step, "task", tool, 6.2, { task = true, status = item.status, personality = "waypoint" })
 		end
 	elseif name == "run" or name == "shell" then
 		local marker = failed and "× " or "◆ "
-		self:_stream(marker .. compact_args(name, args) .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 4.8)
+		self:_stream(marker .. compact_args(name, args) .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 4.8, { personality = "pulse" })
 	else
 		local marker = failed and "× " or "◆ "
-		self:_stream(marker .. name .. (path ~= "" and (" · " .. path) or "") .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 3.8)
+		self:_stream(marker .. name .. (path ~= "" and (" · " .. path) or "") .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 3.8, { personality = tool_personality(name) })
 	end
 end
 
@@ -251,7 +261,7 @@ function State:submit(text)
 	self.handoffs = {}
 	self.mode = "waiting"
 	self.model_phase = "model waiting"
-	self:_stream("› " .. self.prompt, "request", nil, 2.6)
+	self:_stream("› " .. self.prompt, "request", nil, 2.6, { personality = "ripple" })
 end
 
 function State:model_waiting(label)
@@ -312,11 +322,11 @@ function State:tool_event(event)
 		local event_args = event.args or {}
 		local plan_item = event.name == "update_plan" and focused_plan_step(event_args.plan)
 		if plan_item then
-			self:_stream(plan_item.step, "task_active", tool, nil, { task = true, status = plan_item.status })
+			self:_stream(plan_item.step, "task_active", tool, nil, { task = true, status = plan_item.status, personality = "waypoint" })
 		elseif FILE_TOOLS[event.name] and event_args.path then
-			self:_stream(basename(event_args.path), "file_active", tool, nil, { file = true, verb = event.name })
+			self:_stream(basename(event_args.path), "file_active", tool, nil, { file = true, verb = event.name, personality = tool_personality(event.name) })
 		else
-			self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool)
+			self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool, nil, { personality = tool_personality(event.name) })
 		end
 		if event.name == "run" or event.name == "shell" then
 			local linked = 0
@@ -729,7 +739,15 @@ local function stream_display(stream)
 			or stream.task_status == "in_progress" and "◉" or "○"
 		return marker .. " " .. stream.text
 	end
-	if not stream.file then return stream.text end
+	if not stream.file then
+		if stream.personality == "pulse" and not stream.text:match("^[◆◇×]") then
+			local marker = math.floor(stream.age * 5) % 2 == 0 and "◆" or "◇"
+			return marker .. " " .. stream.text
+		elseif stream.personality == "scatter" then
+			return "⌁ " .. stream.text
+		end
+		return stream.text
+	end
 	local frame = FILE_MORPHS[(math.floor(stream.age * 8 + stream.id) % #FILE_MORPHS) + 1]
 	local marker = stream.kind == "file_error" and "×"
 		or stream.kind == "file_changed" and "◆"
@@ -745,7 +763,18 @@ local function stream_position(stream, width, display)
 	local span = math.max(1, width - text_width - 2)
 	local progress
 	local travel_direction = 1
-	if stream.file or stream.task or not stream.duration then
+	if stream.personality == "inward" then
+		local edge = stream.direction < 0 and 1 or 0
+		progress = 0.5 + (edge - 0.5) * math.exp(-stream.age * 0.72)
+		travel_direction = edge == 0 and 1 or -1
+	elseif stream.personality == "scatter" then
+		local reach = clamp(stream.age / 2.1, 0, 1)
+		progress = 0.5 + stream.direction * 0.46 * reach
+		travel_direction = stream.direction
+	elseif stream.personality == "pulse" then
+		progress = 0.5 + math.sin(stream.age * 5.2 + stream.id) * math.min(0.09, 7 / span)
+		travel_direction = math.cos(stream.age * 5.2 + stream.id) >= 0 and 1 or -1
+	elseif stream.file or stream.task or not stream.duration then
 		local cycles = stream.file and (stream.age * FILE_COLUMNS_PER_SECOND / span)
 			or stream.task and (stream.age * TASK_COLUMNS_PER_SECOND / span)
 			or (stream.age / 7)
@@ -755,11 +784,62 @@ local function stream_position(stream, width, display)
 	elseif stream.duration then
 		progress = clamp(stream.age / math.max(0.1, stream.duration), 0, 1)
 	end
-	if stream.direction < 0 then
+	if stream.direction < 0 and stream.personality ~= "inward" and stream.personality ~= "scatter" and stream.personality ~= "pulse" then
 		progress = 1 - progress
 		travel_direction = -travel_direction
 	end
 	return 2 + math.floor(span * progress), travel_direction
+end
+
+local function stream_row(stream, world_rows)
+	local lane = clamp(stream.lane or 1, 1, world_rows)
+	if stream.personality == "scatter" then
+		return clamp(lane + math.floor(math.sin(stream.age * 3.2 + stream.id) * 1.5), 1, world_rows)
+	elseif stream.personality == "inward" then
+		local centre = (world_rows + 1) / 2
+		local pull = 1 - math.exp(-stream.age * 0.72)
+		return clamp(math.floor(lane + (centre - lane) * pull + 0.5), 1, world_rows)
+	elseif stream.personality == "pulse" then
+		return clamp(math.floor((world_rows + 1) / 2 + math.sin(stream.age * 5.2) * 0.7 + 0.5), 1, world_rows)
+	end
+	return lane
+end
+
+local function stream_priority(stream)
+	local priority = (stream.kind == "error" or stream.kind == "file_error") and 120
+		or (stream.kind == "active" or stream.kind == "file_active" or stream.kind == "task_active") and 105
+		or stream.kind == "success" and 100
+		or stream.kind == "file_changed" and 90
+		or stream.kind == "request" and (stream.age < 1.2 and 88 or 35)
+		or stream.kind == "task" and 75
+		or stream.kind == "file_read" and 65
+		or 50
+	return priority - stream.age * 0.8 + stream.id * 0.001
+end
+
+local function conduct_streams(streams, world_rows)
+	local ordered = {}
+	for _, stream in ipairs(streams) do ordered[#ordered + 1] = stream end
+	table.sort(ordered, function(a, b) return stream_priority(a) > stream_priority(b) end)
+	local foreground, selected, occupied, rows = {}, {}, {}, {}
+	for _, stream in ipairs(ordered) do
+		local preferred = stream_row(stream, world_rows)
+		local assigned
+		for distance = 0, world_rows - 1 do
+			for _, candidate in ipairs({ preferred - distance, preferred + distance }) do
+				if candidate >= 1 and candidate <= world_rows and not occupied[candidate] then
+					assigned = candidate
+					break
+				end
+			end
+			if assigned then break end
+		end
+		if assigned and #foreground < world_rows then
+			foreground[#foreground + 1], selected[stream] = stream, true
+			occupied[assigned], rows[stream] = true, assigned
+		end
+	end
+	return foreground, selected, ordered, rows
 end
 
 local App = {}
@@ -806,6 +886,7 @@ function App.new(opts)
 		submitted = {},
 		busy = false,
 		fatal_error = nil,
+		foreground_streams = {},
 	}, App)
 end
 
@@ -879,6 +960,8 @@ function App:render(frame_dt)
 		if handoff.age <= handoff.duration then live_handoffs[#live_handoffs + 1] = handoff end
 	end
 	self.state.handoffs = live_handoffs
+	local foreground_streams, foreground_set, ordered_streams, foreground_rows = conduct_streams(live_streams, world_rows)
+	self.foreground_streams = foreground_streams
 	local listening = self.state.mode == "listening"
 	local listening_breath = listening and (0.5 + 0.5 * math.sin(self.flow_time * 1.7)) or 0
 	local failed = self.state.disturbance > 0
@@ -898,6 +981,7 @@ function App:render(frame_dt)
 		for index = #live_streams, 1, -1 do
 			if live_streams[index].tool == tool then
 				x = stream_position(live_streams[index], width)
+				row = foreground_rows[live_streams[index]] or stream_row(live_streams[index], world_rows)
 				break
 			end
 		end
@@ -955,7 +1039,7 @@ function App:render(frame_dt)
 	for _, handoff in ipairs(live_handoffs) do
 		local source_display = stream_display(handoff.source)
 		local source_x = stream_position(handoff.source, width, source_display)
-		local source_y = clamp(handoff.source.lane or 1, 1, world_rows)
+		local source_y = foreground_rows[handoff.source] or stream_row(handoff.source, world_rows)
 		local target_x, target_y = tool_position(handoff.target.id, width, 1, world_rows)
 		target_y = clamp(handoff.target.lane or target_y, 1, world_rows)
 		for mark = 1, 4 do
@@ -971,8 +1055,19 @@ function App:render(frame_dt)
 		buffer:set(pulse_y, pulse_x, "◆", rgb(104, 218, 207, { "bold" }))
 	end
 
-	for _, stream in ipairs(live_streams) do
-		local row = clamp(stream.lane or 1, 1, world_rows)
+	local background_drawn = 0
+	for _, stream in ipairs(ordered_streams) do
+		if not foreground_set[stream] and background_drawn < 10 then
+			local display = stream_display(stream)
+			local x = stream_position(stream, width, display)
+			local row = stream_row(stream, world_rows)
+			buffer:set(row, x, ({ "⠁", "⠂", "⠄", "·" })[stream.id % 4 + 1], rgb(57, 92, 106, { "dim" }))
+			background_drawn = background_drawn + 1
+		end
+	end
+
+	for _, stream in ipairs(foreground_streams) do
+		local row = foreground_rows[stream] or stream_row(stream, world_rows)
 		local display = stream_display(stream)
 		local x, travel_direction = stream_position(stream, width, display)
 		local stream_style = (stream.kind == "error" or stream.kind == "file_error") and rgb(241, 79, 115, { "bold" })

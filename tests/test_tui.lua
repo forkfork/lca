@@ -268,15 +268,15 @@ test("parallel tool fragments occupy lanes and move with the current", function(
 	state:tool_event(start("tool-b", "run", { command = "make test" }))
 	local app = tui.App.new({ backend = backend, state = state })
 	app:render(0.1)
-	local first_a = app.renderer.previous:plain_line(1)
-	local first_b = app.renderer.previous:plain_line(2)
-	assert_contains(first_a, "grep · /on_tool/ lua")
-	assert_contains(first_b, "run · make test")
+	local first = {}
+	for row = 1, 6 do first[#first + 1] = app.renderer.previous:plain_line(row) end
+	local first_frame = table.concat(first, "\n")
+	assert_contains(first_frame, "grep · /on_tool/ lua")
+	assert_contains(first_frame, "run · make test")
 	app:render(1.0)
-	local second_a = app.renderer.previous:plain_line(1)
-	local second_b = app.renderer.previous:plain_line(2)
-	if first_a == second_a then error("grep fragment did not flow") end
-	if first_b == second_b then error("run fragment did not flow") end
+	local second = {}
+	for row = 1, 6 do second[#second + 1] = app.renderer.previous:plain_line(row) end
+	if first_frame == table.concat(second, "\n") then error("tool personalities did not move") end
 end)
 
 test("animation effects switch without replacing semantic state", function()
@@ -367,20 +367,79 @@ test("drift eases through model tool failure and verification states", function(
 	if app.flow.morph.failure <= 0 then error("failure disturbance vanished instead of easing out") end
 end)
 
-test("filename objects morph and bounce instead of wrapping", function()
+test("edit filenames are pulled from the edge toward assembly", function()
 	local backend = fake_backend({ width = 120, height = 32 })
 	local state = tui.State.new({ clock = function() return 10 end })
 	state:tool_event(start("file-a", "edit", { path = "lua/agent/tui.lua" }))
 	local app = tui.App.new({ backend = backend, state = state })
 	local positions = {}
-	for _, dt in ipairs({ 0.1, 1.0, 7.0 }) do
+	for _, dt in ipairs({ 0.1, 0.8, 1.6 }) do
 		app:render(dt)
-		local line = app.renderer.previous:plain_line(1)
-		assert_contains(line, "tui.lua")
-		positions[#positions + 1] = assert(line:find("tui.lua", 1, true))
+		local found
+		for row = 1, 6 do
+			local line = app.renderer.previous:plain_line(row)
+			found = found or line:find("tui.lua", 1, true)
+		end
+		positions[#positions + 1] = assert(found, "missing edit filename")
 	end
-	if positions[2] <= positions[1] then error("filename did not travel outward") end
-	if positions[3] >= positions[2] then error("filename wrapped instead of bouncing back") end
+	local centre = 60
+	if math.abs(positions[2] - centre) >= math.abs(positions[1] - centre) then error("edit filename was not pulled inward") end
+	if math.abs(positions[3] - centre) >= math.abs(positions[2] - centre) then error("edit filename did not continue settling") end
+end)
+
+test("visual conductor preserves focal streams and reduces older labels to trails", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:submit("inspect and change several files")
+	for index = 1, 10 do
+		state:tool_event(finish("read-" .. index, "read", { path = "src/file" .. index .. ".lua" }, {
+			is_error = false, summary = "20 lines",
+		}))
+	end
+	state:tool_event(start("edit-focus", "edit", { path = "src/focus.lua" }))
+	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
+	app:render(0.1)
+	if #app.foreground_streams > 6 then error("conductor exceeded the six-row foreground budget") end
+	local focused = false
+	for _, stream in ipairs(app.foreground_streams) do
+		if stream.text == "focus.lua" and stream.kind == "file_active" then focused = true end
+	end
+	assert_eq(focused, true)
+	if #state.streams <= #app.foreground_streams then error("older activity was not demoted to trails") end
+end)
+
+test("visual conductor keeps six concurrent tools ahead of the request trail", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:submit("run a busy batch")
+	for index, spec in ipairs({
+		{ "read", { path = "README.md" } },
+		{ "grep", { pattern = "render", path = "lua" } },
+		{ "find", { path = "." } },
+		{ "edit", { path = "lua/agent/tui.lua" } },
+		{ "write", { path = "notes.txt" } },
+		{ "run", { command = "make test" } },
+	}) do
+		state:tool_event(start("tool-" .. index, spec[1], spec[2]))
+	end
+	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
+	app:render(0.1)
+	assert_eq(#app.foreground_streams, 6)
+	for _, stream in ipairs(app.foreground_streams) do
+		if not stream.tool or stream.tool.status ~= "active" then error("non-tool displaced concurrent active work") end
+	end
+end)
+
+test("tool streams receive distinct motion personalities", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(start("read", "read", { path = "README.md" }))
+	state:tool_event(start("edit", "edit", { path = "lua/agent/tui.lua" }))
+	state:tool_event(start("search", "grep", { pattern = "render", path = "lua" }))
+	state:tool_event(start("build", "run", { command = "make test" }))
+	local personalities = {}
+	for _, stream in ipairs(state.streams) do personalities[stream.tool.name] = stream.personality end
+	assert_eq(personalities.read, "skim")
+	assert_eq(personalities.edit, "inward")
+	assert_eq(personalities.grep, "scatter")
+	assert_eq(personalities.run, "pulse")
 end)
 
 test("terminal lifecycle restores after injected failure", function()
