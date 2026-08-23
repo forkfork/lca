@@ -98,7 +98,9 @@ Reads skim, searches scatter, edits and writes pull toward assembly, builds
 pulse, and plan steps behave like waypoints.
 The upper boundary is also a quiet semantic membrane. During work it carries
 one current plan task or recovery state, then becomes an unlabelled line while
-listening. Failed file mutations leave a red knot with a compact real reason;
+listening. Generic phases such as `model waiting` remain in the current rather
+than being duplicated in the boundary. Failed file mutations leave a red knot
+with a compact real reason;
 actual read and retry events move it through refresh and retry states, and only
 a successful mutation dissolves it into mint. An unresolved file failure never
 receives the successful-completion spark.

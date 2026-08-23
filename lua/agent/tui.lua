@@ -287,7 +287,6 @@ function State:divider_status(now)
 	if self.mode ~= "listening" and self.mode ~= "complete" and self.mode ~= "cancelled" then
 		local item = focused_plan_step(self.plan)
 		if item then return "◉ " .. compact_text(item.step, 64), "task" end
-		return compact_text(self.model_phase, 64), "active"
 	end
 	return nil, "quiet"
 end

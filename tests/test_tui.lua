@@ -333,6 +333,12 @@ test("living divider carries the current plan task and rests silently", function
 		error("quiet divider repeated dock status")
 	end
 	state:submit("improve the interaction")
+	app:render(0.1)
+	local waiting_divider = app.renderer.previous:plain_line(1)
+	if waiting_divider:find("model waiting", 1, true) then
+		error("divider duplicated the generic phase shown in the current")
+	end
+	assert_contains(app.renderer.previous:plain_line(3), "model waiting")
 	state:tool_event(start("plan", "update_plan", { plan = {
 		{ step = "Trace the recovery path", status = "completed" },
 		{ step = "Make failures heal visibly", status = "in_progress" },
