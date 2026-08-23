@@ -96,6 +96,12 @@ The bar also conducts busy batches: the highest-value event in each lane keeps
 its readable label while older activity falls back to faint trail particles.
 Reads skim, searches scatter, edits and writes pull toward assembly, builds
 pulse, and plan steps behave like waypoints.
+The upper boundary is also a quiet semantic membrane. During work it carries
+one current plan task or recovery state, then becomes an unlabelled line while
+listening. Failed file mutations leave a red knot with a compact real reason;
+actual read and retry events move it through refresh and retry states, and only
+a successful mutation dissolves it into mint. An unresolved file failure never
+receives the successful-completion spark.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

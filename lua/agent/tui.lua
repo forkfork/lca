@@ -151,6 +151,8 @@ function State.new(opts)
 		stream_sequence = 0,
 		handoffs = {},
 		handoff_sequence = 0,
+		recoveries = {},
+		resolved_recovery = nil,
 		turn_sequence = 0,
 		failure = nil,
 		verification = nil,
@@ -182,14 +184,23 @@ function State:_stream(text, kind, tool, duration, meta)
 		verb = meta.verb,
 		task_status = meta.status,
 		personality = meta.personality,
+		recovery_path = meta.recovery_path,
+		recovery_phase = meta.recovery_phase,
 		turn = self.turn_sequence,
 	}
 	self.streams[#self.streams + 1] = stream
-	while #self.streams > 24 do table.remove(self.streams, 1) end
+	while #self.streams > 24 do
+		local remove_at = 1
+		for index, candidate in ipairs(self.streams) do
+			if not (candidate.kind == "file_error" and candidate.recovery_path) then remove_at = index; break end
+		end
+		table.remove(self.streams, remove_at)
+	end
 	return stream
 end
 
 local FILE_TOOLS = { read = true, edit = true, write = true }
+local FILE_MUTATION_TOOLS = { edit = true, write = true }
 
 local function tool_personality(name)
 	if name == "read" then return "skim" end
@@ -225,6 +236,62 @@ local function result_filename(name, args, result)
 	return ""
 end
 
+local function recovery_reason(result)
+	local summary = tostring(result.summary or "")
+	local detail = tostring(result.content or "")
+	local combined = (summary .. " " .. detail):lower()
+	if combined:find("stale tag", 1, true) or combined:find("tag mismatch", 1, true) then return "target changed" end
+	if combined:find("syntax", 1, true) then return "syntax rejected" end
+	if combined:find("permission denied", 1, true) then return "permission denied" end
+	if combined:find("not found", 1, true) or combined:find("no such file", 1, true) then return "file missing" end
+	return compact_text(summary ~= "" and summary or detail ~= "" and detail or "operation failed", 30)
+end
+
+local function recovery_key(args)
+	local path = args and args.path
+	return path and tostring(path) ~= "" and tostring(path) or nil
+end
+
+local function recovery_attempt_matches(recovery, name, args)
+	if not recovery or not FILE_MUTATION_TOOLS[name] then return false end
+	if recovery.verb == "write" or name == "write" then return true end
+	local old_start, old_finish = tonumber(recovery.start_line), tonumber(recovery.end_line)
+	local new_start = tonumber(args and args.start_line)
+	local new_finish = tonumber(args and (args.end_line or args.start_line))
+	if old_start and new_start then
+		old_finish, new_finish = old_finish or old_start, new_finish or new_start
+		return new_start <= old_finish + 8 and new_finish >= old_start - 8
+	end
+	return recovery.phase == "refreshed"
+end
+
+function State:_set_recovery_phase(recovery, phase)
+	recovery.phase = phase
+	recovery.updated_at = self.clock()
+end
+
+function State:divider_status(now)
+	local latest
+	for _, recovery in pairs(self.recoveries) do
+		if not latest or (recovery.updated_at or 0) > (latest.updated_at or 0) then latest = recovery end
+	end
+	if latest then
+		if latest.phase == "refreshing" then return "↻ " .. latest.filename .. " · refreshing source", "recovery" end
+		if latest.phase == "refreshed" then return "↻ " .. latest.filename .. " · source refreshed", "recovery" end
+		if latest.phase == "retrying" then return "✦ " .. latest.filename .. " · retrying " .. (latest.action or "edit"), "retry" end
+		return "× " .. latest.filename .. " · " .. latest.reason, "failure"
+	end
+	if self.resolved_recovery and (tonumber(now) or 0) <= self.resolved_recovery.expires_at then
+		return "◆ " .. self.resolved_recovery.filename .. " · recovered", "resolved"
+	end
+	if self.mode ~= "listening" and self.mode ~= "complete" and self.mode ~= "cancelled" then
+		local item = focused_plan_step(self.plan)
+		if item then return "◉ " .. compact_text(item.step, 64), "task" end
+		return compact_text(self.model_phase, 64), "active"
+	end
+	return nil, "quiet"
+end
+
 function State:_finish_streams(tool, event)
 	for _, stream in ipairs(self.streams) do
 		if stream.tool == tool and not stream.duration then stream.duration = stream.age + 0.35 end
@@ -234,8 +301,46 @@ function State:_finish_streams(tool, event)
 	local failed = result.is_error == true
 	local filename = result_filename(name, args, result)
 	if filename ~= "" then
-		local kind = failed and "file_error" or (name == "edit" or name == "write") and "file_changed" or "file_read"
-		self:_stream(filename, kind, tool, 5.2, { file = true, verb = name, personality = tool_personality(name) })
+		local key = recovery_key(args)
+		local recovery = key and self.recoveries[key]
+		if failed and FILE_MUTATION_TOOLS[name] then
+			if recovery and recovery.stream then recovery.stream.duration = recovery.stream.age + 0.5 end
+			local reason = recovery_reason(result)
+			local stream = self:_stream(filename .. " · " .. reason, "file_error", tool, nil, {
+				file = true, verb = name, personality = "inward", recovery_path = key, recovery_phase = "failed",
+			})
+			if key then
+				recovery = {
+					path = key, filename = filename, reason = reason, phase = "failed", stream = stream, verb = name,
+					start_line = args.start_line, end_line = args.end_line,
+				}
+				self.recoveries[key] = recovery
+				self:_set_recovery_phase(recovery, "failed")
+			end
+		elseif failed then
+			self:_stream(filename .. " · " .. recovery_reason(result), "file_error", tool, 5.2, {
+				file = true, verb = name, personality = tool_personality(name),
+			})
+		elseif recovery and name == "read" then
+			self:_set_recovery_phase(recovery, "refreshed")
+			self:_stream(filename .. " · source refreshed", "file_refresh", tool, 3.2, {
+				file = true, verb = name, personality = "skim", recovery_path = key, recovery_phase = "refreshed",
+			})
+		elseif recovery and FILE_MUTATION_TOOLS[name]
+			and (tool.recovery_attempt or recovery_attempt_matches(recovery, name, args)) then
+			if recovery.stream then
+				recovery.stream.text = filename .. " · updated"
+				recovery.stream.kind = "file_resolving"
+				recovery.stream.recovery_phase = "resolved"
+				recovery.stream.resolution_age = recovery.stream.age
+				recovery.stream.duration = recovery.stream.age + 2.2
+			end
+			self.resolved_recovery = { filename = filename, expires_at = self.clock() + 2.2 }
+			self.recoveries[key] = nil
+		else
+			local kind = (name == "edit" or name == "write") and "file_changed" or "file_read"
+			self:_stream(filename, kind, tool, 5.2, { file = true, verb = name, personality = tool_personality(name) })
+		end
 	elseif name == "update_plan" and not failed then
 		local item = focused_plan_step(result.plan or args.plan)
 		if item then
@@ -276,6 +381,14 @@ function State:submit(text)
 	self.turn_started_at = self.clock()
 	self.completion_summary = nil
 	self.handoffs = {}
+	for _, recovery in pairs(self.recoveries) do
+		if recovery.stream then
+			if not recovery.stream.duration then recovery.stream.duration = recovery.stream.age + 0.5 end
+			recovery.stream.recovery_path = nil
+		end
+	end
+	self.recoveries = {}
+	self.resolved_recovery = nil
 	self.mode = "waiting"
 	self.model_phase = "model waiting"
 	self:_stream("› " .. self.prompt, "request", nil, 2.6, { personality = "ripple" })
@@ -337,9 +450,24 @@ function State:tool_event(event)
 		self.tool_queues[key] = self.tool_queues[key] or {}
 		self.tool_queues[key][#self.tool_queues[key] + 1] = tool
 		local event_args = event.args or {}
+		local key = recovery_key(event_args)
+		local recovery = key and self.recoveries[key]
 		local plan_item = event.name == "update_plan" and focused_plan_step(event_args.plan)
 		if plan_item then
+			self.plan = event_args.plan
 			self:_stream(plan_item.step, "task_active", tool, nil, { task = true, status = plan_item.status, personality = "waypoint" })
+		elseif recovery and event.name == "read" then
+			self:_set_recovery_phase(recovery, "refreshing")
+			self:_stream(basename(event_args.path) .. " · refreshing source", "file_refresh", tool, nil, {
+				file = true, verb = event.name, personality = "skim", recovery_path = key, recovery_phase = "refreshing",
+			})
+		elseif recovery and recovery_attempt_matches(recovery, event.name, event_args) then
+			tool.recovery_attempt = true
+			recovery.action = event.name
+			self:_set_recovery_phase(recovery, "retrying")
+			self:_stream(basename(event_args.path) .. " · retrying " .. event.name, "file_retry", tool, nil, {
+				file = true, verb = event.name, personality = "inward", recovery_path = key, recovery_phase = "retrying",
+			})
 		elseif FILE_TOOLS[event.name] and event_args.path then
 			self:_stream(basename(event_args.path), "file_active", tool, nil, { file = true, verb = event.name, personality = tool_personality(event.name) })
 		else
@@ -433,7 +561,7 @@ function State:assistant_complete(text, metrics)
 	metrics = metrics or {}
 	local started_at = tonumber(metrics.started_at) or self.turn_started_at
 	local elapsed = tonumber(metrics.elapsed) or (started_at and self.assistant_completed_at - started_at)
-	if elapsed and metrics.tokens then
+	if elapsed and metrics.tokens and next(self.recoveries) == nil then
 		self.completion_summary = "✓ " .. format_duration(elapsed) .. " · " .. format_tokens(metrics.tokens)
 	end
 	self.mode = "complete"
@@ -771,6 +899,28 @@ local function completion_pop(buffer, row, text, age)
 	return true
 end
 
+local function living_divider(buffer, row, width, label, kind, time)
+	local quiet = rgb(40, 65, 70, { "dim" })
+	buffer:write(row, 1, string.rep("─", width), quiet, width)
+	if not label or label == "" then return end
+	local styles = {
+		failure = rgb(222, 72, 105, { "bold" }),
+		recovery = rgb(79, 188, 194, { "bold" }),
+		retry = rgb(190, 142, 231, { "bold" }),
+		resolved = rgb(91, 224, 169, { "bold" }),
+		task = rgb(194, 158, 224),
+		active = rgb(105, 180, 184),
+	}
+	local text = " " .. lcatui.width.truncate(label, math.max(12, width - 16)) .. " "
+	local text_width = lcatui.width.string(text)
+	local start = math.max(2, math.floor((width - text_width) / 2) + 1)
+	buffer:write(row, start, text, styles[kind] or styles.active, text_width)
+	local span = math.max(1, start - 3)
+	local pulse = 1 + (math.floor((tonumber(time) or 0) * 9) % span)
+	buffer:set(row, pulse, "━", styles[kind] or styles.active)
+	buffer:set(row, width - pulse + 1, "━", styles[kind] or styles.active)
+end
+
 local FILE_MORPHS = {
 	{ "‹", "›" }, { "{", "}" }, { "⟨", "⟩" }, { "[", "]" },
 }
@@ -795,6 +945,10 @@ local function stream_display(stream)
 	end
 	local frame = FILE_MORPHS[(math.floor(stream.age * 8 + stream.id) % #FILE_MORPHS) + 1]
 	local marker = stream.kind == "file_error" and "×"
+		or stream.kind == "file_refresh" and "↻"
+		or stream.kind == "file_retry" and "✦"
+		or stream.kind == "file_resolving" and ((stream.age - (stream.resolution_age or stream.age)) < 0.45 and "×"
+			or (stream.age - (stream.resolution_age or stream.age)) < 0.9 and "◇" or "◆")
 		or stream.kind == "file_changed" and "◆"
 		or stream.kind == "file_read" and "◇"
 		or stream.verb == "edit" and "✦"
@@ -852,6 +1006,9 @@ end
 
 local function stream_priority(stream)
 	local priority = (stream.kind == "error" or stream.kind == "file_error") and 120
+		or stream.kind == "file_retry" and 118
+		or stream.kind == "file_refresh" and 116
+		or stream.kind == "file_resolving" and 114
 		or (stream.kind == "active" or stream.kind == "file_active" or stream.kind == "task_active") and 105
 		or stream.kind == "success" and 100
 		or stream.kind == "file_changed" and 90
@@ -1118,7 +1275,15 @@ function App:render(frame_dt)
 		local row = foreground_rows[stream] or stream_row(stream, world_rows)
 		local display = stream_display(stream)
 		local x, travel_direction = stream_position(stream, width, display)
-		local stream_style = (stream.kind == "error" or stream.kind == "file_error") and rgb(241, 79, 115, { "bold" })
+		local resolution = stream.kind == "file_resolving"
+			and clamp((stream.age - (stream.resolution_age or stream.age)) / 0.9, 0, 1) or nil
+		local stream_style = resolution and rgb(
+			math.floor(241 + (91 - 241) * resolution),
+			math.floor(79 + (224 - 79) * resolution),
+			math.floor(115 + (169 - 115) * resolution), { "bold" })
+			or (stream.kind == "error" or stream.kind == "file_error") and rgb(241, 79, 115, { "bold" })
+			or stream.kind == "file_retry" and rgb(190, 142, 231, { "bold" })
+			or stream.kind == "file_refresh" and rgb(79, 188, 194, { "bold" })
 			or (stream.kind == "success" or stream.kind == "file_changed") and rgb(91, 224, 169, { "bold" })
 			or stream.kind == "task_active" and rgb(192, 154, 232, { "bold" })
 			or stream.kind == "task" and rgb(165, 137, 202)
@@ -1127,7 +1292,10 @@ function App:render(frame_dt)
 			or stream.kind == "request" and rgb(218, 158, 93, { "bold" })
 			or rgb(132, 177, 181)
 		if stream.file then
-			local wake_style = stream.kind == "file_error" and rgb(176, 61, 91, { "dim" })
+			local wake_style = resolution and rgb(57, 151, 117, { "dim" })
+				or stream.kind == "file_error" and rgb(176, 61, 91, { "dim" })
+				or stream.kind == "file_retry" and rgb(125, 86, 157, { "dim" })
+				or stream.kind == "file_refresh" and rgb(54, 126, 137, { "dim" })
 				or stream.kind == "file_changed" and rgb(57, 151, 117, { "dim" })
 				or rgb(54, 126, 137, { "dim" })
 			for wake = 1, 4 do
@@ -1163,7 +1331,8 @@ function App:render(frame_dt)
 		self.celebration_active = false
 	end
 
-	screen:write(top_divider_row, 1, string.rep("─", width), rgb(40, 65, 70, { "dim" }), width)
+	local divider_label, divider_kind = self.state:divider_status(state_now)
+	living_divider(screen, top_divider_row, width, divider_label, divider_kind, self.flow_time)
 	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
 	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
 	screen:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)

@@ -257,6 +257,107 @@ test("failed turns do not trigger the completion pop", function()
 	assert_contains(app.renderer.previous:plain_line(3), "build failed")
 end)
 
+test("stale file edits become a real recovery story", function()
+	local now = 30
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("add archive support")
+	local stale_args = { path = "src/main.js", start_line = 103, end_line = 109 }
+	state:tool_event(start("edit-stale", "edit", stale_args))
+	state:tool_event(finish("edit-stale", "edit", stale_args, {
+		is_error = true,
+		summary = "stale tag",
+		content = "start_tag mismatch at line 103 — re-read the file",
+	}))
+	local recovery = state.recoveries["src/main.js"]
+	assert_eq(recovery.phase, "failed")
+	assert_eq(recovery.reason, "target changed")
+	assert_eq(recovery.stream.duration, nil)
+	assert_contains(recovery.stream.text, "main.js · target changed")
+	state:tool_event(start("other-edit", "edit", { path = "src/main.js", start_line = 17, end_line = 20 }))
+	state:tool_event(finish("other-edit", "edit", { path = "src/main.js", start_line = 17, end_line = 20 }, {
+		is_error = false, summary = "replaced 4 lines",
+	}))
+	assert_eq(state.recoveries["src/main.js"], recovery)
+	assert_eq(recovery.phase, "failed")
+
+	-- Successful reads do not require a manufactured start event; their real
+	-- result is enough to advance the recovery narrative.
+	state:tool_event(finish("read-fresh", "read", { path = "src/main.js" }, {
+		is_error = false, summary = "220 lines",
+	}))
+	assert_eq(recovery.phase, "refreshed")
+	assert_eq(state.streams[#state.streams].kind, "file_refresh")
+	assert_contains(state.streams[#state.streams].text, "source refreshed")
+
+	local retry_args = { path = "src/main.js", start_line = 105, end_line = 111 }
+	state:tool_event(start("edit-retry", "edit", retry_args))
+	assert_eq(recovery.phase, "retrying")
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(0.1)
+	assert_contains(app.renderer.previous:plain_line(1), "retrying edit")
+
+	state:tool_event(finish("edit-retry", "edit", retry_args, {
+		is_error = false, summary = "replaced 7 lines",
+	}))
+	assert_eq(state.recoveries["src/main.js"], nil)
+	assert_eq(recovery.stream.kind, "file_resolving")
+	assert_contains(recovery.stream.text, "main.js · updated")
+	app:render(0.2)
+	assert_contains(app.renderer.previous:plain_line(1), "main.js · recovered")
+
+	now = now + 3
+	state:listen()
+	app:render(0.2)
+	local quiet_divider = app.renderer.previous:plain_line(1)
+	if quiet_divider:find("main.js", 1, true) then error("resolved recovery lingered in the quiet divider") end
+end)
+
+test("read failures stay transient rather than opening mutation recovery", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(finish("missing-read", "read", { path = "optional.md" }, {
+		is_error = true, summary = "not found", content = "No such file",
+	}))
+	assert_eq(next(state.recoveries), nil)
+	local stream = state.streams[#state.streams]
+	assert_eq(stream.kind, "file_error")
+	assert_eq(stream.duration, 5.2)
+	assert_contains(stream.text, "optional.md · file missing")
+end)
+
+test("living divider carries the current plan task and rests silently", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(0.1)
+	local quiet = app.renderer.previous:plain_line(1)
+	if quiet:find("waiting", 1, true) or quiet:find("listening", 1, true) then
+		error("quiet divider repeated dock status")
+	end
+	state:submit("improve the interaction")
+	state:tool_event(start("plan", "update_plan", { plan = {
+		{ step = "Trace the recovery path", status = "completed" },
+		{ step = "Make failures heal visibly", status = "in_progress" },
+	} }))
+	app:render(0.1)
+	assert_contains(app.renderer.previous:plain_line(1), "Make failures heal visibly")
+end)
+
+test("unresolved file failures cannot trigger a success celebration", function()
+	local now = 10
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("change the file")
+	state:tool_event(start("bad-edit", "edit", { path = "src/main.js" }))
+	state:tool_event(finish("bad-edit", "edit", { path = "src/main.js" }, {
+		is_error = true, summary = "stale tag", content = "re-read the file",
+	}))
+	now = 20
+	state:assistant_complete("I could not apply that edit.", { tokens = 4096 })
+	assert_eq(state.completion_summary, nil)
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(1.0)
+	assert_eq(app.celebration_active, false)
+	assert_contains(app.renderer.previous:plain_line(1), "main.js · target changed")
+end)
+
 test("submitted request ripples through the current", function()
 	local state = tui.State.new({ clock = function() return 10 end })
 	state:submit("explain the renderer timing")
