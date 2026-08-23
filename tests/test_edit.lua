@@ -133,6 +133,128 @@ run_test("allows edits that preserve pre-existing syntax error", function()
 	end
 end)
 
+run_test("multi-edit applies non-overlapping hunks atomically", function()
+	local target = tmp_dir .. "/multi.lua"
+	write_file(target, "local first = 1\nlocal middle = 2\nlocal last = 3\nreturn first + middle + last\n")
+	local file = assert(io.open(target, "r"))
+	local original = file:read("*a")
+	file:close()
+	local lines = read_tool.split_lines(original)
+	local result = edit_tool.execute({
+		path = target,
+		edits = {
+			{ start_line = 1, start_tag = read_tool.line_tag(1, lines[1]), end_line = 1, end_tag = read_tool.line_tag(1, lines[1]), content = "local first = 10" },
+			{ start_line = 3, start_tag = read_tool.line_tag(3, lines[3]), end_line = 3, end_tag = read_tool.line_tag(3, lines[3]), content = "local last = 30" },
+		},
+	}, { cwd = tmp_dir })
+	if result.is_error then error(result.content) end
+	assert_contains(result.summary, "2 hunks")
+	local updated = assert(io.open(target, "r")):read("*a")
+	assert_contains(updated, "local first = 10")
+	assert_contains(updated, "local middle = 2")
+	assert_contains(updated, "local last = 30")
+end)
+
+run_test("multi-edit rolls back every hunk when one tag is stale", function()
+	local target = tmp_dir .. "/multi-stale.lua"
+	local original = "local first = 1\nlocal last = 2\nreturn first + last\n"
+	write_file(target, original)
+	local lines = read_tool.split_lines(original)
+	local result = edit_tool.execute({
+		path = target,
+		edits = {
+			{ start_line = 1, start_tag = read_tool.line_tag(1, lines[1]), end_line = 1, end_tag = read_tool.line_tag(1, lines[1]), content = "local first = 10" },
+			{ start_line = 2, start_tag = "BAD!", end_line = 2, end_tag = read_tool.line_tag(2, lines[2]), content = "local last = 20" },
+		},
+	}, { cwd = tmp_dir })
+	if not result.is_error then error("stale multi-edit should fail") end
+	assert_contains(result.content, "hunk #2")
+	assert_contains(result.content, "no edits were applied")
+	local file = assert(io.open(target, "r"))
+	local actual = file:read("*a")
+	file:close()
+	if actual ~= original then error("stale multi-edit partially modified the file") end
+end)
+
+run_test("multi-edit rejects overlaps without writing", function()
+	local target = tmp_dir .. "/multi-overlap.lua"
+	local original = "local a = 1\nlocal b = 2\nreturn a + b\n"
+	write_file(target, original)
+	local lines = read_tool.split_lines(original)
+	local result = edit_tool.execute({
+		path = target,
+		edits = {
+			{ start_line = 1, start_tag = read_tool.line_tag(1, lines[1]), end_line = 2, end_tag = read_tool.line_tag(2, lines[2]), content = "local a, b = 1, 2" },
+			{ start_line = 2, start_tag = read_tool.line_tag(2, lines[2]), end_line = 2, end_tag = read_tool.line_tag(2, lines[2]), content = "local b = 20" },
+		},
+	}, { cwd = tmp_dir })
+	if not result.is_error then error("overlapping multi-edit should fail") end
+	if result.summary ~= "overlapping hunks" then error(result.summary) end
+	local file = assert(io.open(target, "r"))
+	local actual = file:read("*a")
+	file:close()
+	if actual ~= original then error("overlapping multi-edit modified the file") end
+end)
+
+run_test("multi-edit syntax failure leaves the original file intact", function()
+	local target = tmp_dir .. "/multi-syntax.lua"
+	local original = "local first = 1\nlocal last = 2\nreturn first + last\n"
+	write_file(target, original)
+	local lines = read_tool.split_lines(original)
+	local result = edit_tool.execute({
+		path = target,
+		edits = {
+			{ start_line = 1, start_tag = read_tool.line_tag(1, lines[1]), end_line = 1, end_tag = read_tool.line_tag(1, lines[1]), content = "local first =" },
+			{ start_line = 2, start_tag = read_tool.line_tag(2, lines[2]), end_line = 2, end_tag = read_tool.line_tag(2, lines[2]), content = "local last = 20" },
+		},
+	}, { cwd = tmp_dir })
+	if not result.is_error then error("invalid multi-edit should fail") end
+	if result.summary ~= "syntax error — not written" then error(result.summary) end
+	local file = assert(io.open(target, "r"))
+	local actual = file:read("*a")
+	file:close()
+	if actual ~= original then error("invalid multi-edit modified the file") end
+end)
+
+run_test("tagged edit safely relocates an unchanged range after line insertion", function()
+	local target = tmp_dir .. "/relocated.lua"
+	local before = "local first = 1\nlocal middle = 2\nlocal target = 3\nreturn first + middle + target\n"
+	local original_lines = read_tool.split_lines(before)
+	write_file(target, "local inserted = 0\n" .. before)
+	local result = edit_tool.execute({
+		path = target,
+		start_line = 3,
+		start_tag = read_tool.line_tag(3, original_lines[3]),
+		end_line = 3,
+		end_tag = read_tool.line_tag(3, original_lines[3]),
+		_raw_content = "local target = 30",
+	}, { cwd = tmp_dir })
+	if result.is_error then error(result.content) end
+	assert_contains(result.summary, "relocated +1")
+	local file = assert(io.open(target, "r"))
+	local actual = file:read("*a")
+	file:close()
+	assert_contains(actual, "local inserted = 0")
+	assert_contains(actual, "local target = 30")
+end)
+
+run_test("tagged edit rejects ambiguous relocation candidates", function()
+	local target = tmp_dir .. "/ambiguous-relocation.txt"
+	local original = "header\nrepeat me\ntail\n"
+	local original_lines = read_tool.split_lines(original)
+	write_file(target, "inserted\nheader\nrepeat me\nrepeat me\ntail\n")
+	local result = edit_tool.execute({
+		path = target,
+		start_line = 2,
+		start_tag = read_tool.line_tag(2, original_lines[2]),
+		end_line = 2,
+		end_tag = read_tool.line_tag(2, original_lines[2]),
+		_raw_content = "changed",
+	}, { cwd = tmp_dir })
+	if not result.is_error then error("ambiguous relocated edit should fail") end
+	if result.summary ~= "stale tag" then error(result.summary) end
+end)
+
 os.execute("rm -rf " .. shell.quote(tmp_dir))
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")

@@ -76,7 +76,7 @@ events = trajectory.get("events", [])
 completed = [(index, event) for index, event in enumerate(events) if event.get("result")]
 successful_mutations = [
     (index, event) for index, event in completed
-    if event.get("name") in ("edit", "write", "file_change", "mutation")
+    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 first_mutation = successful_mutations[0][0] if successful_mutations else None

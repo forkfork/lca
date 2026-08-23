@@ -207,12 +207,12 @@ function State:_stream(text, kind, tool, duration, meta)
 	return stream
 end
 
-local FILE_TOOLS = { read = true, edit = true, write = true }
-local FILE_MUTATION_TOOLS = { edit = true, write = true }
+local FILE_TOOLS = { read = true, edit = true, multi_edit = true, write = true }
+local FILE_MUTATION_TOOLS = { edit = true, multi_edit = true, write = true }
 
 local function tool_personality(name)
 	if name == "read" then return "skim" end
-	if name == "edit" or name == "write" then return "inward" end
+	if FILE_MUTATION_TOOLS[name] then return "inward" end
 	if name == "grep" or name == "find" or name == "ls" then return "scatter" end
 	if name == "run" or name == "shell" then return "pulse" end
 	if name == "update_plan" then return "waypoint" end
@@ -403,7 +403,7 @@ function State:_finish_streams(tool, event)
 			self.resolved_recovery = { filename = filename, expires_at = self.clock() + 2.2 }
 			self.recoveries[key] = nil
 		else
-			local kind = (name == "edit" or name == "write") and "file_changed" or "file_read"
+			local kind = FILE_MUTATION_TOOLS[name] and "file_changed" or "file_read"
 			self:_stream(filename, kind, tool, 5.2, { file = true, verb = name, personality = tool_personality(name) })
 		end
 	elseif name == "update_plan" and not failed then
@@ -896,7 +896,7 @@ function StreamFilter:_activity()
 	local name = self.hidden_name or "tool call"
 	local target = self.hidden_preview:match('"path"%s*:%s*"([^"\\]+)"')
 		or self.hidden_preview:match('"command"%s*:%s*"([^"\\]+)"')
-	local action = (name == "edit" or name == "write") and ("drafting " .. name) or ("preparing " .. name)
+	local action = FILE_MUTATION_TOOLS[name] and ("drafting " .. name) or ("preparing " .. name)
 	if target and target ~= "" then action = action .. " · " .. compact_text(target, 38) end
 	return {
 		kind = "tool", name = name, target = target, bytes = self.hidden_bytes,

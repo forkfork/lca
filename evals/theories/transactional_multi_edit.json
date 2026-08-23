@@ -1,0 +1,51 @@
+{
+  "id": "transactional_multi_edit",
+  "title": "Transactional multi-hunk tagged edits",
+  "hypothesis": "Giving Sol one atomic tool for multiple non-overlapping tagged replacements in a single file reduces emitted mutation calls, stream-cap pressure, and model latency on multi-location changes while preserving tagged stale-read rejection, syntax safety, focused diffs, and verification behavior.",
+  "falsified_if": "The treatment loses any deterministic pass, increases failed or stale mutations, permits an overlapping or partially applied edit, causes a whole-file write regression, omits post-edit verification, or fails to reduce mutation calls or latency on the realistic multi-file task without materially worsening the other.",
+  "source_ids": [
+    "pi-edit",
+    "codex-patch",
+    "openai-responses-function-calling-2026-08-22"
+  ],
+  "control_variant": "tagged_single_range",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "existing_codebase_edit",
+    "repeated_text_edit",
+    "stale_edit_recovery",
+    "multi_location_edit",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "tagged_single_range",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "multi_edit_enabled": false
+    },
+    {
+      "id": "tagged_transactional_multi",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "multi_edit_enabled": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "all public and hidden behavior gates pass",
+    "scope and required-file gates pass with no existing-file whole writes",
+    "zero increase in failed or stale mutations",
+    "every mutating scenario retains successful verification"
+  ],
+  "efficiency_outcomes": [
+    "mutation, edit, and multi-edit calls",
+    "model calls and elapsed milliseconds",
+    "stream-cap events and maximum raw tool calls",
+    "provider response bytes and prompt/output tokens"
+  ],
+  "decision_rule": "Adopt the transactional tool only if every treatment run passes all hard gates with no existing-file whole writes and no increase in failed mutations. On multifile_order_cancellation it must reduce mean mutation calls or elapsed time without worsening the other by more than ten percent. Repeated-text and stale-recovery controls must preserve focused scope, concurrent annotations, stale-read recovery, and verification; otherwise keep the single-range interface as the default."
+}

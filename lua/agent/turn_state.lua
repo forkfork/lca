@@ -21,6 +21,7 @@ local TOOL_FRAME = {
 	grep = "inspect",
 	read = "inspect",
 	edit = "changes",
+	multi_edit = "changes",
 	write = "changes",
 	run = "verify",
 	shell = "verify",
@@ -200,7 +201,7 @@ end
 local function event_detail(event)
 	local args = event.args or {}
 	local result = event.result or {}
-	if event.name == "write" or event.name == "edit" then
+	if event.name == "write" or event.name == "edit" or event.name == "multi_edit" then
 		return args.path and basename(args.path) or event.name
 	elseif event.name == "read" then
 		return args.path and basename(args.path) or "read"
@@ -511,7 +512,7 @@ function turn_state:tool_event(event)
 		return node
 	end
 	node.meta.statuses[#node.meta.statuses + 1] = status
-	if (event.name == "write" or event.name == "edit") and event.phase ~= "start" and not (event.result and event.result.is_error) then
+	if (event.name == "write" or event.name == "edit" or event.name == "multi_edit") and event.phase ~= "start" and not (event.result and event.result.is_error) then
 		node.meta.files = node.meta.files or {}
 		if event.args and event.args.path then
 			node.meta.files[#node.meta.files + 1] = event.args.path

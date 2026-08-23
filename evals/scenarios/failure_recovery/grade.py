@@ -66,7 +66,7 @@ successful_runs_after = [
 ]
 recovery_mutations = [
     event for index, event in completed
-    if failure_index is not None and index > failure_index and event.get("name") in ("edit", "write", "file_change", "mutation")
+    if failure_index is not None and index > failure_index and event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 

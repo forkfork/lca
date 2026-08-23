@@ -47,7 +47,7 @@ green_after = [
 ]
 mutations = [
     event for _, event in events
-    if event.get("name") in ("edit", "write", "file_change", "mutation")
+    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 final = trajectory.get("final", "").lower()

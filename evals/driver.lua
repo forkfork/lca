@@ -1,7 +1,7 @@
 #!/usr/bin/env lua
 
 local function usage()
-	io.stderr:write("usage: lua evals/driver.lua --root DIR --prompt-file FILE --credentials FILE --output FILE --transcript FILE [--model MODEL] [--reasoning EFFORT] [--native-tool-calling true|false] [--system-prompt-profile current|lean|minimal] [--system-prompt-append-file FILE] [--edit-tool-profile tagged|exact] [--stream-tool-call-cap N] [--stream-duplicate-call-cap N] [--read-only-batch-cap N] [--seed-context-file FILE] [--intra-turn-compaction true|false] [--context-compaction-threshold N] [--context-hard-limit N] [--compaction-keep-recent-tokens N] [--context-pressure-after-first-tool N] [--recovery-mutation-file FILE]\n")
+	io.stderr:write("usage: lua evals/driver.lua --root DIR --prompt-file FILE --credentials FILE --output FILE --transcript FILE [--model MODEL] [--reasoning EFFORT] [--native-tool-calling true|false] [--multi-edit-enabled true|false] [--system-prompt-profile current|lean|minimal] [--system-prompt-append-file FILE] [--edit-tool-profile tagged|exact] [--stream-tool-call-cap N] [--stream-duplicate-call-cap N] [--read-only-batch-cap N] [--seed-context-file FILE] [--intra-turn-compaction true|false] [--context-compaction-threshold N] [--context-hard-limit N] [--compaction-keep-recent-tokens N] [--context-pressure-after-first-tool N] [--recovery-mutation-file FILE]\n")
 	os.exit(2)
 end
 
@@ -26,6 +26,7 @@ require("luarocks.loader")
 local json = require("agent.util.json")
 local cjson = require("cjson")
 local core = require("agent.core")
+local registry = require("agent.tool_registry")
 local session_module = require("agent.session")
 local path_util = require("agent.util.path")
 local uv = require("luv")
@@ -76,6 +77,11 @@ local function optional_bool(value)
 	if value == "true" or value == "1" then return true end
 	if value == "false" or value == "0" then return false end
 	error("expected true or false, got: " .. tostring(value))
+end
+
+local multi_edit_option = optional_bool(options["multi-edit-enabled"])
+if multi_edit_option ~= nil then
+	registry.set_multi_edit_enabled(multi_edit_option)
 end
 
 local session = session_module.create({
@@ -296,7 +302,7 @@ local function eval_on_tool(event)
 	end
 	if not event.result or event.result.is_error then return end
 	if recovery_mutation and not recovery_mutation.applied
-		and (event.name == "edit" or event.name == "write") then
+		and (event.name == "edit" or event.name == "multi_edit" or event.name == "write") then
 		local event_path = event.args and event.args.path
 		local target = path_util.resolve(recovery_mutation.path, session.cwd)
 		if event_path and path_util.resolve(event_path, session.cwd) == target then
@@ -361,6 +367,7 @@ write_file(options.output, json.encode({
 	reasoning_effort = session.reasoning_effort,
 	system_prompt_profile = prompt_profile,
 	edit_tool_profile = edit_tool_profile,
+	multi_edit_enabled = registry.multi_edit_enabled(),
 	stale_mutation_applied = stale_mutation and stale_mutation.applied or false,
 	system_prompt_chars = #(session.system_prompt or ""),
 	stream_tool_call_cap = session.stream_tool_call_cap,

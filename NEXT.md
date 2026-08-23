@@ -54,6 +54,12 @@ operations, while LCA exposes each provider round and native tool call.
 - The prompt version is 15, so older saved sessions rebuild the frozen prompt once.
 - Web search support and Codex OAuth-backed search were implemented earlier; they are
   not the current optimization focus.
+- Tagged edits now recover safely from pure line drift caused by an earlier insertion
+  or deletion: both unchanged endpoint tags must relocate uniquely by the same bounded
+  offset. Changed or ambiguous content still fails stale.
+- A transactional `multi_edit` implementation and eval intervention exist, but its
+  schema is disabled in production by default because the broad adoption threshold
+  was not met.
 
 ## Strongest recent evidence
 
@@ -137,13 +143,12 @@ from application defects. Keep these as regression controls for future loop chan
 
 ## Recommended next work
 
-### 1. Multi-hunk edit interface (highest-value next experiment)
+### 1. Conditional multi-hunk tool promotion
 
-Test whether one tagged edit call can safely carry several non-overlapping
-replacements, including multiple hunks in one file. LCA already executes independent
-same-file edit calls safely as a group, but each remains a separate model-emitted
-tool action. A compact multi-hunk form may reduce calls and payload repetition while
-retaining stale-read rejection.
+The transactional interface itself is implemented and mechanically safe, but always
+advertising it did not meet the broad efficiency threshold. Test a promotion policy
+that exposes it only after inspection establishes multiple independent same-file
+replacements, without adding a model-only decision round.
 
 Use at least:
 
@@ -152,11 +157,10 @@ Use at least:
 - `stale_edit_recovery`
 - `multifile_order_cancellation`
 
-Hard gates: identical behavior and scope, zero increase in failed/stale mutations,
-no whole-file rewrite regression, and successful post-edit verification. Efficiency:
-model/tool calls, edit payload bytes, latency, prompt/output tokens. Do not replace the
-tagged mechanism with an unconstrained exact-text or whole-file writer merely to save
-one call.
+Keep the existing hard gates and use `multi_location_edit` as the positive
+discriminator. Preserve `existing_codebase_edit`, `repeated_text_edit`,
+`stale_edit_recovery`, and `multifile_order_cancellation` as controls. See
+`research/decisions/2026-08-23-transactional-multi-edit.md`.
 
 ### 2. Necessary-versus-redundant trajectory labels
 

@@ -741,7 +741,7 @@ function repl.run(options)
 				end
 
 				local function expects_large_tool_args(name)
-					return name == "edit" or name == "write" or name == "run" or name == "shell"
+					return name == "edit" or name == "multi_edit" or name == "write" or name == "run" or name == "shell"
 				end
 
 				unescape_json_fragment = function(value)

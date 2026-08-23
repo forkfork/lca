@@ -1156,7 +1156,7 @@ local function render_description(event)
 	elseif name == "grep" and args.pattern then
 		local target = args.path or "."
 		return verb .. " /" .. args.pattern .. "/ in " .. target
-	elseif name == "edit" and args.path then
+	elseif (name == "edit" or name == "multi_edit") and args.path then
 		local basename = args.path:match("([^/]+)$") or args.path
 		return verb .. " " .. basename
 	elseif name == "write" and args.path then
@@ -1227,7 +1227,7 @@ local function render_result_target(event)
 		return args.path
 	elseif event.name == "grep" then
 		return args.path or "."
-	elseif (event.name == "edit" or event.name == "write") and args.path then
+	elseif (event.name == "edit" or event.name == "multi_edit" or event.name == "write") and args.path then
 		return args.path:match("([^/]+)$") or args.path
 	elseif event.name == "job_start" then
 		return "background"
@@ -1627,7 +1627,7 @@ local function note_tool_batch_event(event)
 	tool_batch_started_at = tool_batch_started_at or now_seconds()
 	tool_count = tool_count + 1
 	table.insert(tool_names, event.name)
-	if not (event.result and event.result.is_error) and (event.name == "write" or event.name == "edit") and event.args and event.args.path then
+	if not (event.result and event.result.is_error) and (event.name == "write" or event.name == "edit" or event.name == "multi_edit") and event.args and event.args.path then
 		tool_saved_paths[#tool_saved_paths + 1] = tostring(event.args.path)
 	end
 	if tool_safety_state(event) then
@@ -1867,6 +1867,7 @@ local function live_ast_suppresses_tool_event(event)
 		or event.name == "find"
 		or event.name == "write"
 		or event.name == "edit"
+		or event.name == "multi_edit"
 		or event.name == "update_plan" then
 		return true
 	end

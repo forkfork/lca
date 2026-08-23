@@ -25,7 +25,10 @@ for name, values in expected.items():
     cwd=workspace, text=True, capture_output=True, timeout=30,
 )
 
-fixture_files = {p.relative_to(fixture).as_posix(): p.read_bytes() for p in fixture.rglob("*") if p.is_file()}
+fixture_files = {
+    p.relative_to(fixture).as_posix(): p.read_bytes() for p in fixture.rglob("*")
+    if p.is_file() and not {"__pycache__", ".pytest_cache"}.intersection(p.parts)
+}
 workspace_files = {
     p.relative_to(workspace).as_posix(): p.read_bytes() for p in workspace.rglob("*")
     if p.is_file() and not {"__pycache__", ".pytest_cache"}.intersection(p.parts)
@@ -39,8 +42,8 @@ after = workspace_files.get("pipelines/rules.py", b"").decode("utf-8", "replace"
 changed_lines = sum(line.startswith(("- ", "+ ")) for line in difflib.ndiff(before, after))
 events = trajectory.get("events", [])
 starts = [e for e in events if e.get("result")]
-mutations = [e for e in starts if e.get("name") in ("edit", "write", "file_change", "mutation")]
-failed = [e for e in events if e.get("name") in ("edit", "write") and e.get("result", {}).get("is_error")]
+mutations = [e for e in starts if e.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
+failed = [e for e in events if e.get("name") in ("edit", "multi_edit", "write") and e.get("result", {}).get("is_error")]
 existing_writes = [e for e in mutations if e.get("name") == "write" and e.get("args", {}).get("path") in fixture_files]
 verification = [
     e for e in starts if e.get("name") in ("run", "shell", "command_execution")
@@ -55,6 +58,7 @@ print(json.dumps({
     "evidence": {
         "changed_files": changed, "added_files": added, "changed_lines": changed_lines,
         "edit_calls": sum(e.get("name") == "edit" for e in mutations),
+        "multi_edit_calls": sum(e.get("name") == "multi_edit" for e in mutations),
         "write_calls": sum(e.get("name") == "write" for e in mutations),
         "mutation_calls": len(mutations),
         "failed_mutations": len(failed), "existing_file_writes_count": len(existing_writes),

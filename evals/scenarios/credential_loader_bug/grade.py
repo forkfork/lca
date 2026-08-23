@@ -49,7 +49,7 @@ failure_index = symptom_observations[0][0] if symptom_observations else None
 mutations_after = [
     event for index, event in events
     if failure_index is not None and index > failure_index
-    and event.get("name") in ("edit", "write", "file_change", "mutation")
+    and event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 green_diagnostics = [

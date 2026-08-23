@@ -17,6 +17,7 @@ local registry = {}
 
 local tools = {
 	edit = edit,
+	multi_edit = edit,
 	find = find_tool,
 	grep = grep,
 	job_output = job_output,
@@ -32,13 +33,23 @@ local tools = {
 }
 
 local mcp_tools = {}
+local multi_edit_enabled = false
+
+function registry.set_multi_edit_enabled(enabled)
+	multi_edit_enabled = enabled ~= false
+end
+
+function registry.multi_edit_enabled()
+	return multi_edit_enabled
+end
 
 function registry.get(name)
+	if name == "multi_edit" and not multi_edit_enabled then return nil end
 	return tools[name]
 end
 
 function registry.is_valid(name)
-	if tools[name] then return true end
+	if registry.get(name) then return true end
 	if name:sub(1, 5) == "mcp__" then
 		local rest = name:sub(6)
 		for _, t in ipairs(mcp_tools) do
@@ -53,6 +64,7 @@ end
 
 function registry.names()
 	local names = { "ls", "read", "find", "grep", "edit", "write", "run", "job_start", "job_status", "job_output", "job_stop", "job_wait", "update_plan" }
+	if multi_edit_enabled then table.insert(names, 6, "multi_edit") end
 	for _, t in ipairs(mcp_tools) do
 		names[#names + 1] = "mcp__" .. t._server .. "__" .. t.name
 	end
@@ -93,6 +105,14 @@ local native_tool_specs = {
 		path = { type = "string" }, start_line = { type = "integer", minimum = 1 }, start_tag = { type = "string" },
 		end_line = { type = "integer", minimum = 1 }, end_tag = { type = "string" }, content = { type = "string", description = "Literal replacement text; empty deletes the range." },
 	}, { "path", "start_line", "start_tag", "end_line", "end_tag", "content" }) },
+	multi_edit = { "Atomically replace multiple non-overlapping tagged ranges in one file. All tags are checked against one snapshot and no hunk is written if any hunk is stale, invalid, overlapping, or introduces a syntax error.", object_schema({
+		path = { type = "string" },
+		edits = { type = "array", minItems = 1, maxItems = 20, items = object_schema({
+			start_line = { type = "integer", minimum = 1 }, start_tag = { type = "string" },
+			end_line = { type = "integer", minimum = 1 }, end_tag = { type = "string" },
+			content = { type = "string", description = "Literal replacement text; empty deletes the range." },
+		}, { "start_line", "start_tag", "end_line", "end_tag", "content" }) },
+	}, { "path", "edits" }) },
 	write = { "Create or overwrite a file, creating parent directories when needed.", object_schema({
 		path = { type = "string" }, content = { type = "string", description = "Complete literal file content." },
 	}, { "path", "content" }) },
@@ -138,7 +158,7 @@ function registry.native_tools()
 end
 
 function registry.native_system_prompt()
-	return [[
+	local prompt = [[
 You have native tools for inspecting files, editing code, running commands, managing background jobs, and updating plans. Use them directly; never print or imitate tool-call markup.
 
 ## Working strategy
@@ -151,13 +171,17 @@ You have native tools for inspecting files, editing code, running commands, mana
 - For substantial work, maintain a short execution plan. Skip plans for trivial requests.
 - Minimize model round trips without guessing across dependencies. In each response, call every independent tool whose arguments are already known.
 - For a bounded change affecting a few existing files, skip update_plan unless the task genuinely has multiple independent workstreams.
-- After inspection, batch non-overlapping tagged edits whose replacements are all known.
+- After inspection, use multi_edit when two or more non-overlapping replacements in one file are already known; use edit for one replacement. Never use multi_edit for dependent or overlapping changes.
 - Once edits succeed, combine known focused checks into one run command using && when later checks do not need model judgment.
 - Do not split plan updates, edits, or redundant verification into separate model turns merely to narrate progress. Start a new tool round only when its arguments depend on results from the previous round.
 - Preserve existing project patterns and user changes. Avoid unrelated refactors and destructive git operations.
 - Never claim a file was read, changed, or tested unless the corresponding tool result established it.
 - If a tool fails, use its actual error to recover or explain the blocker.
 ]]
+	if not multi_edit_enabled then
+		prompt = prompt:gsub("%- After inspection, use multi_edit.-\n", "- After inspection, batch non-overlapping tagged edits whose replacements are all known.\n")
+	end
+	return prompt
 end
 
 function registry.mcp_prompt_section()
@@ -321,6 +345,14 @@ To delete lines, leave the content empty (nothing after the JSON line):
 ]]
 
 	local mcp_section = registry.mcp_prompt_section()
+	if multi_edit_enabled then
+		base = base .. [[
+
+## Atomic multi-edit
+- multi_edit: atomically replace multiple non-overlapping tagged ranges in one file. JSON args: path, edits. Each edits item contains start_line, start_tag, end_line, end_tag, and content. All content stays JSON-encoded; unlike edit/write, multi_edit has no raw-content body. Every tag is checked against one snapshot, overlaps reject the entire call, and no hunk is written unless all hunks pass.
+- Prefer multi_edit over several edit calls when two or more independent replacements in one file are already known. Use ordinary edit when there is only one replacement or when a later replacement depends on an earlier one.
+]]
+	end
 	if mcp_section ~= "" then
 		base = base .. mcp_section
 	end

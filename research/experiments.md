@@ -40,6 +40,25 @@ an experimental fallback and add CRLF, large-file, and multi-location cases befo
 claiming the interface question is settled generally. See
 `decisions/2026-08-22-edit-interface.md`.
 
+### Transactional multi-hunk follow-up
+
+Status: **tested; retain as an eval-selectable experiment, not a production-default
+tool schema**. A native `multi_edit` treatment atomically validates all tagged hunks
+against one snapshot, rejects overlaps, lints once, and writes once. The new
+`multi_location_edit` discriminator passed 3/3 in both cells and reduced mutations
+from 3.0 to 1.0, tools from 7.0 to 5.0, latency from 15.75s to 14.16s, prompt tokens
+from 37.9k to 32.4k, and mutation payload from 433 to 393 bytes.
+
+The broader five-run `multifile_order_cancellation` extension also passed 5/5 in
+both cells, but the treatment used the new tool inconsistently, increased mean
+mutations from 3.0 to 3.4, increased model calls from 8.0 to 8.8, and produced one
+avoidable line-shift stale-tag recovery. The existing-codebase negative control was
+also 18% slower. That fails the predeclared adoption threshold, so the registry keeps
+the schema disabled by default. The runtime does adopt a separate bounded tag
+relocation improvement: unchanged endpoint tags may move together by one unique
+offset after a prior insertion/deletion, while changed or ambiguous content remains
+stale. See `decisions/2026-08-23-transactional-multi-edit.md`.
+
 ## E2: Fresh goal rebase versus rolling compaction
 
 Run the same long task under four policies:

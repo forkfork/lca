@@ -102,11 +102,11 @@ for name in changed:
 action_events = [event for event in trajectory.get("events", []) if event.get("result")]
 mutation_starts = [
     event for event in action_events
-    if event.get("name") in ("edit", "write", "file_change", "mutation")
+    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
 ]
 failed_mutations = [
     event for event in trajectory.get("events", [])
-    if event.get("name") in ("edit", "write")
+    if event.get("name") in ("edit", "multi_edit", "write")
     and event.get("result", {}).get("is_error")
 ]
 existing_paths = set(fixture_files)
@@ -146,6 +146,7 @@ print(json.dumps({
         "added_files": added,
         "changed_lines": changed_lines,
         "edit_calls": sum(event.get("name") == "edit" for event in mutation_starts),
+        "multi_edit_calls": sum(event.get("name") == "multi_edit" for event in mutation_starts),
         "write_calls": sum(event.get("name") == "write" for event in mutation_starts),
         "mutation_calls": len(mutation_starts),
         "existing_file_writes": existing_file_writes,

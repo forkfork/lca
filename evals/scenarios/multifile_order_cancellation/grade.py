@@ -146,7 +146,7 @@ events = trajectory.get("events", [])
 completed = [(index, event) for index, event in enumerate(events) if event.get("result")]
 successful_mutations = [
     (index, event) for index, event in completed
-    if event.get("name") in ("edit", "write", "file_change", "mutation")
+    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 first_mutation = successful_mutations[0][0] if successful_mutations else None
@@ -204,6 +204,14 @@ print(json.dumps({
         "architecture_reads_before_edit": sorted(path for path in reads_before_edit if path),
         "relevant_source_reads_count": len(reads_before_edit),
         "mutation_calls": len(successful_mutations),
+        "edit_calls": sum(event.get("name") == "edit" for _, event in successful_mutations),
+        "multi_edit_calls": sum(event.get("name") == "multi_edit" for _, event in successful_mutations),
+        "write_calls": sum(event.get("name") == "write" for _, event in successful_mutations),
+        "failed_mutations": sum(
+            event.get("name") in ("edit", "multi_edit", "write")
+            and bool(event.get("result", {}).get("is_error"))
+            for event in events
+        ),
         "verification_runs": sum(
             event.get("name") in ("run", "shell", "command_execution")
             for _, event in completed

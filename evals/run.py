@@ -269,6 +269,12 @@ def transcript_metrics(path: Path) -> dict[str, int]:
 def trajectory_metrics(path: Path, transcript: Path | None = None, model: str | None = None) -> dict[str, int | float]:
     trajectory = json.loads(path.read_text())
     usage = trajectory.get("usage", [])
+    mutation_events = [
+        event for event in trajectory.get("events", [])
+        if isinstance(event, dict)
+        and event.get("result") is not None
+        and event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
+    ]
     metrics = {
         "tool_calls": int(trajectory.get("tool_calls", 0)),
         "llm_calls": int(trajectory.get("llm_calls", 0)),
@@ -277,6 +283,15 @@ def trajectory_metrics(path: Path, transcript: Path | None = None, model: str | 
         "output_tokens": sum(int(item.get("output_tokens", 0)) for item in usage if isinstance(item, dict)),
         "cached_tokens": sum(int(item.get("cached_tokens", 0)) for item in usage if isinstance(item, dict)),
         "cache_write_tokens": sum(int(item.get("cache_write_tokens", 0)) for item in usage if isinstance(item, dict)),
+        "mutation_payload_bytes": sum(
+            len(json.dumps(event.get("args", {}), separators=(",", ":"), ensure_ascii=False).encode())
+            for event in mutation_events
+        ),
+        "multi_edit_hunks": sum(
+            len(event.get("args", {}).get("edits", []))
+            for event in mutation_events
+            if event.get("name") == "multi_edit" and isinstance(event.get("args", {}).get("edits"), list)
+        ),
     }
     if transcript:
         metrics.update(transcript_metrics(transcript))
@@ -296,7 +311,7 @@ def grader_metrics(result: dict) -> dict[str, int]:
     evidence = result.get("evidence", {})
     metrics = {}
     for name in (
-        "changed_lines", "edit_calls", "write_calls", "failed_mutations",
+        "changed_lines", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
         "verification_runs", "existing_file_writes_count", "failed_verification_runs",
         "successful_verification_runs_after_failure", "recovery_mutations_after_failure",
         "relevant_source_reads_count",
@@ -412,6 +427,8 @@ def run_once(
         command.extend(["--system-prompt-append-file", str(append_path)])
     if engine == "lca" and "native_tool_calling" in variant:
         command.extend(["--native-tool-calling", str(variant["native_tool_calling"]).lower()])
+    if engine == "lca" and "multi_edit_enabled" in variant:
+        command.extend(["--multi-edit-enabled", str(variant["multi_edit_enabled"]).lower()])
     if engine == "lca" and "stream_tool_call_cap" in variant:
         command.extend(["--stream-tool-call-cap", str(variant["stream_tool_call_cap"])])
     if engine == "lca" and "edit_tool_profile" in variant:
@@ -512,6 +529,7 @@ def summarize(results: list[dict]) -> dict:
     })
     metric_names = (
         "tool_calls", "llm_calls", "elapsed_ms", "prompt_tokens", "output_tokens", "cached_tokens", "cache_write_tokens",
+        "mutation_payload_bytes", "multi_edit_hunks",
         "estimated_api_cost_usd",
         "provider_successful_calls", "provider_response_chars", "provider_response_bytes", "max_raw_tool_calls",
         "stream_tool_caps", "provider_stream_caps_surfaced", "duplicate_tool_calls_dropped", "core_batch_caps",
@@ -519,7 +537,7 @@ def summarize(results: list[dict]) -> dict:
         "dependency_prefixes", "partial_salvages", "post_tool_early_cutoffs", "usage_unavailable_calls",
         "stale_tag_failures", "exact_no_match_failures",
         "intra_turn_compactions", "context_hard_limit_stops",
-        "changed_lines", "edit_calls", "write_calls", "failed_mutations",
+        "changed_lines", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
         "verification_runs", "existing_file_writes_count", "failed_verification_runs",
         "successful_verification_runs_after_failure", "recovery_mutations_after_failure",
         "relevant_source_reads_count",
@@ -655,10 +673,11 @@ def main() -> int:
                 effect = {"pass_rate_delta": treatment["pass_rate"] - control["pass_rate"]}
                 for name in (
                     "score", "tool_calls", "llm_calls", "elapsed_ms", "prompt_tokens", "output_tokens", "cached_tokens", "cache_write_tokens",
+                    "mutation_payload_bytes", "multi_edit_hunks",
                     "estimated_api_cost_usd",
                     "provider_response_chars", "provider_response_bytes", "stream_tool_caps", "partial_salvages",
                     "stream_duplicate_caps", "provider_duplicate_caps_surfaced",
-                    "usage_unavailable_calls", "changed_lines", "edit_calls", "write_calls", "failed_mutations",
+                    "usage_unavailable_calls", "changed_lines", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
                     "verification_runs", "existing_file_writes_count", "failed_verification_runs",
                     "successful_verification_runs_after_failure", "recovery_mutations_after_failure",
                     "relevant_source_reads_count",

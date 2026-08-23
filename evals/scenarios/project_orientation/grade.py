@@ -27,7 +27,7 @@ reads = [
     if event.get("name") == "read" and not event["result"].get("is_error")
 ]
 commands = [event for event in events if event.get("name") in ("run", "shell", "command_execution")]
-mutations = [event for event in events if event.get("name") in ("edit", "write", "file_change", "mutation")]
+mutations = [event for event in events if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
 observed_output = "\n".join(result_text(event) for event in events)
 
 # Grade content made visible to the agent, independently of whether it used LCA read

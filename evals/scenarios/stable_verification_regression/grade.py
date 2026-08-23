@@ -61,7 +61,7 @@ failure_index = failures[0][0] if failures else None
 mutations_after = [
     (index, event) for index, event in events
     if failure_index is not None and index > failure_index
-    and event.get("name") in ("edit", "write", "file_change", "mutation")
+    and event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 mutation_index = mutations_after[0][0] if mutations_after else None

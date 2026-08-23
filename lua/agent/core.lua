@@ -62,6 +62,7 @@ local READ_ONLY_TOOLS = {
 
 local FILE_MUTATION_TOOLS = {
 	edit = true,
+	multi_edit = true,
 	write = true,
 }
 
@@ -286,7 +287,7 @@ local function recent_read_keys(session)
 		if message and message.tool_name then
 			local path = attr(message.text, "path")
 			local resolved = path and path_util.resolve(path, session.cwd or ".")
-			if resolved and (message.tool_name == "edit" or message.tool_name == "write") then
+			if resolved and FILE_MUTATION_TOOLS[message.tool_name] then
 				modified[resolved] = true
 			elseif resolved
 				and message.tool_name == "read"
@@ -786,7 +787,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				session:record_usage(response._usage, #session.messages)
 			end
 
-			local MUTATING_TOOLS = { edit = true, write = true, run = true }
+			local MUTATING_TOOLS = { edit = true, multi_edit = true, write = true, run = true }
 
 			local function batch_on_tool(event)
 				if event.phase == "start" then

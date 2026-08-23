@@ -1,0 +1,8 @@
+{
+  "id": "multi_location_edit",
+  "title": "Apply three distant independent changes in one existing module",
+  "prompt": "Implement the three focused runtime-policy changes described in README.md. Preserve all unrelated behavior and protected policy tables, make surgical edits rather than rewriting the file, run the documented tests, and do not modify README.md or tests.",
+  "timeout_seconds": 480,
+  "grader": "grade.py",
+  "judge": false
+}

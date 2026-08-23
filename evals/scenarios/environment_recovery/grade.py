@@ -77,7 +77,7 @@ failure_index = environment_failures[0][0] if environment_failures else None
 mutations_after_failure = [
     event for index, event in completed
     if failure_index is not None and index > failure_index
-    and event.get("name") in ("edit", "write", "file_change", "mutation")
+    and event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
     and not event["result"].get("is_error")
 ]
 successful_relevant_runs = [

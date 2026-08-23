@@ -14,6 +14,7 @@ local SHELL_TOOLS = {
 
 local FILE_MUTATION_TOOLS = {
 	edit = true,
+	multi_edit = true,
 	write = true,
 }
 
@@ -30,6 +31,7 @@ local JOB_CONTROL_TOOLS = {
 
 local START_EVENT_TOOLS = {
 	edit = true,
+	multi_edit = true,
 	find = true,
 	grep = true,
 	job_output = true,
@@ -562,7 +564,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 				results[group_item.index] = group_result
 				if group_result and not group_result.is_error then
 					any_success = true
-				elseif group_item.tc.name == "edit" or group_item.tc.name == "write" then
+				elseif FILE_MUTATION_TOOLS[group_item.tc.name] then
 					mutation_failed = true
 				end
 				if on_tool then
@@ -592,7 +594,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		if tc.name == "job_start" and result and not result.is_error then
 			pending_job_start = true
 		end
-		if (tc.name == "edit" or tc.name == "write") and result and result.is_error then
+		if FILE_MUTATION_TOOLS[tc.name] and result and result.is_error then
 			mutation_failed = true
 		end
 		if tc.name == "read" and result and not result.is_error and result.summary ~= "duplicate read" then

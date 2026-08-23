@@ -297,6 +297,27 @@ test("native prompt requests evidence-dense project orientation", function()
 	assert(not prompt:find("Rill", 1, true), "orientation guidance must not name the eval fixture")
 end)
 
+test("multi-edit can be hidden for controlled evals", function()
+	registry.set_multi_edit_enabled(true)
+	assert_eq(registry.is_valid("multi_edit"), true)
+	local found = false
+	for _, spec in ipairs(registry.native_tools()) do
+		if spec.name == "multi_edit" then found = true end
+	end
+	assert_eq(found, true, "native schema should advertise multi_edit")
+	assert(registry.native_system_prompt():find("use multi_edit", 1, true), "missing native multi-edit guidance")
+
+	registry.set_multi_edit_enabled(false)
+	assert_eq(registry.is_valid("multi_edit"), false)
+	found = false
+	for _, spec in ipairs(registry.native_tools()) do
+		if spec.name == "multi_edit" then found = true end
+	end
+	assert_eq(found, false, "control eval should hide multi_edit")
+	assert(not registry.native_system_prompt():find("use multi_edit", 1, true), "control prompt should hide multi-edit guidance")
+	registry.set_multi_edit_enabled(true)
+end)
+
 if failed > 0 then
 	error(tostring(failed) .. " test(s) failed")
 end

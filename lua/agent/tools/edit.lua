@@ -4,6 +4,8 @@ local lint = require("agent.lint")
 local read_tool = require("agent.tools.read")
 
 local edit = {}
+local MAX_MULTI_EDITS = 20
+local MAX_TAG_RELOCATION_LINES = 200
 
 local function count_occurrences(text, needle)
 	if needle == "" then
@@ -109,6 +111,84 @@ local function introduced_lint_error(target, original_content, candidate_content
 	return candidate_lint
 end
 
+local function replacement_lines(content)
+	local lines = {}
+	if content ~= "" then
+		for line in (content .. "\n"):gmatch("(.-)\n") do
+			lines[#lines + 1] = line
+		end
+		if #lines > 0 and lines[#lines] == "" and content:sub(-1) == "\n" then
+			table.remove(lines)
+		end
+	end
+	return lines
+end
+
+local function replace_line_range(lines, start_line, end_line, new_lines)
+	local result = {}
+	for i = 1, start_line - 1 do result[#result + 1] = lines[i] end
+	for _, line in ipairs(new_lines) do result[#result + 1] = line end
+	for i = end_line + 1, #lines do result[#result + 1] = lines[i] end
+	return result
+end
+
+local function tagged_range(args, lines, label)
+	local start_line = math.floor(tonumber(args.start_line) or 0)
+	local end_line = math.floor(tonumber(args.end_line) or start_line)
+	local prefix = label and (label .. ": ") or ""
+	if start_line < 1 or start_line > #lines then
+		return nil, prefix .. "start_line " .. start_line .. " out of range (file has " .. #lines .. " lines)", "out of range"
+	end
+	if end_line < start_line or end_line > #lines then
+		return nil, prefix .. "end_line " .. end_line .. " out of range (file has " .. #lines .. " lines)", "out of range"
+	end
+	if type(args.start_tag) ~= "string" or type(args.end_tag) ~= "string" then
+		return nil, prefix .. "start_tag and end_tag are required", "missing tags"
+	end
+	local actual_start = read_tool.line_tag(start_line, lines[start_line])
+	local actual_end = read_tool.line_tag(end_line, lines[end_line])
+	if args.start_tag == actual_start and args.end_tag == actual_end then
+		return { start_line = start_line, end_line = end_line }
+	end
+
+	-- A prior tagged edit may insert/delete lines above an otherwise unchanged
+	-- target. Relocate only when both endpoint contents uniquely reproduce their
+	-- original tags at the same bounded offset. Content changes and duplicate
+	-- candidate lines therefore remain stale instead of being guessed through.
+	local function relocated_candidates(original_line, expected_tag)
+		local candidates = {}
+		local first = math.max(1, original_line - MAX_TAG_RELOCATION_LINES)
+		local last = math.min(#lines, original_line + MAX_TAG_RELOCATION_LINES)
+		for current_line = first, last do
+			if read_tool.line_tag(original_line, lines[current_line]) == expected_tag then
+				candidates[#candidates + 1] = current_line
+			end
+		end
+		return candidates
+	end
+	local start_candidates = relocated_candidates(start_line, args.start_tag)
+	local end_candidates = relocated_candidates(end_line, args.end_tag)
+	if #start_candidates == 1 and #end_candidates == 1 then
+		local relocated_start = start_candidates[1]
+		local relocated_end = end_candidates[1]
+		local delta = relocated_start - start_line
+		if delta ~= 0 and relocated_end - end_line == delta and relocated_end >= relocated_start then
+			return {
+				start_line = relocated_start,
+				end_line = relocated_end,
+				relocated_by = delta,
+				requested_start_line = start_line,
+				requested_end_line = end_line,
+			}
+		end
+	end
+
+	if args.start_tag ~= actual_start then
+		return nil, prefix .. "start_tag mismatch at line " .. start_line .. ": expected " .. args.start_tag .. " but file has " .. actual_start .. " — re-read the file", "stale tag"
+	end
+	return nil, prefix .. "end_tag mismatch at line " .. end_line .. ": expected " .. args.end_tag .. " but file has " .. actual_end .. " — re-read the file", "stale tag"
+end
+
 -- Tag-based edit: replace lines identified by line number + tag
 local function execute_tagged(args, context)
 	local target = path.resolve(args.path, context.cwd)
@@ -119,64 +199,16 @@ local function execute_tagged(args, context)
 
 	local lines = read_tool.split_lines(content)
 
-	local start_line = math.floor(tonumber(args.start_line) or 0)
-	local end_line = math.floor(tonumber(args.end_line) or start_line)
-
-	if start_line < 1 or start_line > #lines then
-		return { is_error = true, content = "start_line " .. start_line .. " out of range (file has " .. #lines .. " lines)", summary = "out of range" }
+	local range, range_error, range_summary = tagged_range(args, lines)
+	if not range then
+		return { is_error = true, content = range_error, summary = range_summary }
 	end
-	if end_line < start_line or end_line > #lines then
-		return { is_error = true, content = "end_line " .. end_line .. " out of range (file has " .. #lines .. " lines)", summary = "out of range" }
-	end
-
-	-- Verify tags match (CAS check)
-	if args.start_tag then
-		local actual_tag = read_tool.line_tag(start_line, lines[start_line])
-		if args.start_tag ~= actual_tag then
-			return {
-				is_error = true,
-				content = "start_tag mismatch at line " .. start_line .. ": expected " .. args.start_tag .. " but file has " .. actual_tag .. " — re-read the file",
-				summary = "stale tag",
-			}
-		end
-	end
-	if args.end_tag then
-		local actual_tag = read_tool.line_tag(end_line, lines[end_line])
-		if args.end_tag ~= actual_tag then
-			return {
-				is_error = true,
-				content = "end_tag mismatch at line " .. end_line .. ": expected " .. args.end_tag .. " but file has " .. actual_tag .. " — re-read the file",
-				summary = "stale tag",
-			}
-		end
-	end
+	local start_line, end_line = range.start_line, range.end_line
 
 	-- Build new file content — prefer raw content (no JSON escaping needed)
 	local new_content = args._raw_content or args.content or ""
-	local before = {}
-	for i = 1, start_line - 1 do
-		before[#before + 1] = lines[i]
-	end
-	local after = {}
-	for i = end_line + 1, #lines do
-		after[#after + 1] = lines[i]
-	end
-
-	local new_lines = {}
-	if new_content ~= "" then
-		for line in (new_content .. "\n"):gmatch("(.-)\n") do
-			new_lines[#new_lines + 1] = line
-		end
-		-- Remove trailing empty line from split if content ended with \n
-		if #new_lines > 0 and new_lines[#new_lines] == "" and new_content:sub(-1) == "\n" then
-			table.remove(new_lines)
-		end
-	end
-
-	local result_lines = {}
-	for _, l in ipairs(before) do result_lines[#result_lines + 1] = l end
-	for _, l in ipairs(new_lines) do result_lines[#result_lines + 1] = l end
-	for _, l in ipairs(after) do result_lines[#result_lines + 1] = l end
+	local new_lines = replacement_lines(new_content)
+	local result_lines = replace_line_range(lines, start_line, end_line, new_lines)
 
 	local final = table.concat(result_lines, "\n")
 	-- Preserve trailing newline if original had one
@@ -202,11 +234,97 @@ local function execute_tagged(args, context)
 	local old_count = end_line - start_line + 1
 	local new_count = #new_lines
 	local result_msg = string.format("Edited %s: replaced lines %d-%d (%d lines) with %d lines", args.path, start_line, end_line, old_count, new_count)
+	local summary = "replaced " .. old_count .. " lines with " .. new_count .. " lines"
+	if range.relocated_by then
+		result_msg = result_msg .. string.format("; safely relocated requested range by %+d lines", range.relocated_by)
+		summary = summary .. string.format(", relocated %+d", range.relocated_by)
+	end
 
 	return {
 		is_error = false,
 		content = result_msg,
-		summary = "replaced " .. old_count .. " lines with " .. new_count .. " lines",
+		summary = summary,
+	}
+end
+
+local function execute_multi(args, context)
+	if type(args.edits) ~= "table" or #args.edits == 0 then
+		return { is_error = true, content = "edits must be a non-empty array", summary = "missing edits" }
+	end
+	if #args.edits > MAX_MULTI_EDITS then
+		return { is_error = true, content = "too many edits (max " .. MAX_MULTI_EDITS .. ")", summary = "too many edits" }
+	end
+
+	local target = path.resolve(args.path, context.cwd)
+	local ok, content = pcall(fs.read_file, target)
+	if not ok then
+		return { is_error = true, content = tostring(content), summary = "failed" }
+	end
+	local original_lines = read_tool.split_lines(content)
+	local hunks = {}
+	for index, hunk in ipairs(args.edits) do
+		if type(hunk) ~= "table" then
+			return { is_error = true, content = "hunk #" .. index .. " must be an object", summary = "invalid hunk" }
+		end
+		if type(hunk.content) ~= "string" then
+			return { is_error = true, content = "hunk #" .. index .. ": content is required", summary = "missing content" }
+		end
+		local range, range_error, range_summary = tagged_range(hunk, original_lines, "hunk #" .. index)
+		if not range then
+			return { is_error = true, content = range_error .. "; no edits were applied", summary = range_summary }
+		end
+		range.content = hunk.content
+		range.index = index
+		hunks[#hunks + 1] = range
+	end
+
+	table.sort(hunks, function(a, b)
+		if a.start_line == b.start_line then return a.end_line < b.end_line end
+		return a.start_line < b.start_line
+	end)
+	for index = 2, #hunks do
+		if hunks[index].start_line <= hunks[index - 1].end_line then
+			return {
+				is_error = true,
+				content = "hunks #" .. hunks[index - 1].index .. " and #" .. hunks[index].index .. " overlap; no edits were applied",
+				summary = "overlapping hunks",
+			}
+		end
+	end
+
+	local result_lines = original_lines
+	local replaced, inserted = 0, 0
+	for index = #hunks, 1, -1 do
+		local hunk = hunks[index]
+		local new_lines = replacement_lines(hunk.content)
+		replaced = replaced + hunk.end_line - hunk.start_line + 1
+		inserted = inserted + #new_lines
+		result_lines = replace_line_range(result_lines, hunk.start_line, hunk.end_line, new_lines)
+	end
+
+	local final = table.concat(result_lines, "\n")
+	if content:sub(-1) == "\n" then final = final .. "\n" end
+	local lint_output = introduced_lint_error(target, content, final)
+	if lint_output then
+		return {
+			is_error = true,
+			content = blocked_edit_content(lint_output, {
+				path = args.path,
+				start_line = hunks[1].start_line,
+				end_line = hunks[#hunks].end_line,
+			}, result_lines, hunks[1].start_line),
+			summary = "syntax error — not written",
+		}
+	end
+
+	local write_ok, write_error = pcall(fs.write_file, target, final)
+	if not write_ok then
+		return { is_error = true, content = tostring(write_error), summary = "write failed" }
+	end
+	return {
+		is_error = false,
+		content = string.format("Edited %s atomically: applied %d non-overlapping hunks (%d lines replaced, %d lines inserted)", args.path, #hunks, replaced, inserted),
+		summary = tostring(#hunks) .. " hunks applied",
 	}
 end
 
@@ -217,6 +335,9 @@ function edit.execute(args, context)
 			content = "path is required",
 			summary = "missing path",
 		}
+	end
+	if args.edits ~= nil then
+		return execute_multi(args, context)
 	end
 
 	-- Tag-based edit (preferred): uses line numbers + tags
