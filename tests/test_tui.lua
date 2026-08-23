@@ -115,7 +115,7 @@ test("realistic failure recovery settles into listening state", function()
 	assert_eq(#state.tools, 16)
 end)
 
-test("tool events create truthful semantic stream fragments", function()
+test("file tools become filename objects instead of source or diff fragments", function()
 	local state = tui.State.new({ clock = function() return 10 end })
 	state:tool_event(finish("read-1", "read", { path = "lua/agent/core.lua" }, {
 		is_error = false, summary = "2 lines", content = "336:aB9z: function core.run_session(session)\n337:q1Wx: return true",
@@ -129,10 +129,16 @@ test("tool events create truthful semantic stream fragments", function()
 		_raw_content = "local current = make_current(width)\nreturn current",
 	}, { is_error = false, summary = "replaced 3 lines" }))
 	local by_kind = {}
-	for _, stream in ipairs(state.streams) do by_kind[stream.kind] = stream.text end
-	assert_contains(by_kind.read, "core.lua · function core.run_session(session)")
-	assert_eq(by_kind.remove, "− lines 20–22")
-	assert_eq(by_kind.add, "+ local current = make_current(width)")
+	for _, stream in ipairs(state.streams) do
+		by_kind[stream.kind] = stream
+		if stream.text:find("function core.run_session", 1, true) or stream.text:find("local current", 1, true) then
+			error("source content leaked into filename stream")
+		end
+	end
+	assert_eq(by_kind.file_read.text, "core.lua")
+	assert_eq(by_kind.file_changed.text, "tui.lua")
+	assert_eq(by_kind.file_changed.file, true)
+	assert_eq(by_kind.file_changed.verb, "edit")
 end)
 
 test("UTF-8 editor handles cursor history backspace and delete", function()
@@ -181,6 +187,22 @@ test("parallel tool fragments occupy lanes and move with the current", function(
 	local second_b = app.renderer.previous:plain_line(2)
 	if first_a == second_a then error("grep fragment did not flow") end
 	if first_b == second_b then error("run fragment did not flow") end
+end)
+
+test("filename objects morph and bounce instead of wrapping", function()
+	local backend = fake_backend({ width = 120, height = 32 })
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:tool_event(start("file-a", "edit", { path = "lua/agent/tui.lua" }))
+	local app = tui.App.new({ backend = backend, state = state })
+	local positions = {}
+	for _, dt in ipairs({ 0.1, 1.0, 6.0 }) do
+		app:render(dt)
+		local line = app.renderer.previous:plain_line(1)
+		assert_contains(line, "tui.lua")
+		positions[#positions + 1] = assert(line:find("tui.lua", 1, true))
+	end
+	if positions[2] <= positions[1] then error("filename did not travel outward") end
+	if positions[3] >= positions[2] then error("filename wrapped instead of bouncing back") end
 end)
 
 test("terminal lifecycle restores after injected failure", function()

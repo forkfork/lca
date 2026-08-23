@@ -60,9 +60,9 @@ lca repl --tui
 rows above the input dock, while completed user and assistant messages remain
 in normal terminal scrollback. It does not use the alternate screen. Without
 that flag, the existing readline interface and terminal output are unchanged.
-Real filenames, commands, read excerpts, and compact edit fragments travel
-through the current as tools run. The TUI requires a POSIX terminal and the
-sibling `lcatui` Lua rock.
+Real filenames become bouncing, morphing objects with small wakes as tools read
+and change them; commands and verification remain compact signals in the same
+current. The TUI requires a POSIX terminal and the sibling `lcatui` Lua rock.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

@@ -137,9 +137,10 @@ function State.new(opts)
 	}, State)
 end
 
-function State:_stream(text, kind, tool, duration)
+function State:_stream(text, kind, tool, duration, meta)
 	text = snippet_line(text, 58)
 	if text == "" then return nil end
+	meta = meta or {}
 	self.stream_sequence = self.stream_sequence + 1
 	local stream = {
 		id = self.stream_sequence,
@@ -150,15 +151,24 @@ function State:_stream(text, kind, tool, duration)
 		direction = self.stream_sequence % 2 == 0 and -1 or 1,
 		age = 0,
 		duration = duration,
+		file = meta.file == true,
+		verb = meta.verb,
 	}
 	self.streams[#self.streams + 1] = stream
 	while #self.streams > 24 do table.remove(self.streams, 1) end
 	return stream
 end
 
-local function source_content(args)
-	args = args or {}
-	return args._raw_content or args.content or args.newText or ""
+local FILE_TOOLS = { read = true, edit = true, write = true }
+
+local function result_filename(name, args, result)
+	if FILE_TOOLS[name] and args.path then return basename(args.path) end
+	if (name == "grep" or name == "find") and result.content then
+		local first = tostring(result.content):match("^([^\r\n]+)") or ""
+		local path = first:match("^([^:]+):%d+:") or first:match("^([^%s]+)")
+		if path and path ~= "" and not path:match("^%[") then return basename(path) end
+	end
+	return ""
 end
 
 function State:_finish_streams(tool, event)
@@ -168,21 +178,10 @@ function State:_finish_streams(tool, event)
 	local args, result = event.args or {}, event.result or {}
 	local name, path = tostring(event.name), basename(args.path)
 	local failed = result.is_error == true
-	if name == "edit" and not failed then
-		local removed = snippet_line(args.oldText, 42)
-		if removed == "" and args.start_line then
-			removed = "lines " .. tostring(args.start_line) .. "–" .. tostring(args.end_line or args.start_line)
-		end
-		if removed ~= "" then self:_stream("− " .. removed, "remove", tool, 3.8) end
-		local added = snippet_line(source_content(args), 46)
-		self:_stream("+ " .. (added ~= "" and added or path), "add", tool, 4.4)
-	elseif name == "write" and not failed then
-		local added = snippet_line(source_content(args), 42)
-		self:_stream("+ " .. path .. (added ~= "" and (" · " .. added) or ""), "add", tool, 4.5)
-	elseif (name == "read" or name == "grep") and not failed then
-		local excerpt = snippet_line(result.content, 46)
-		local subject = name == "grep" and ("/" .. tostring(args.pattern or "match") .. "/") or path
-		self:_stream(subject .. (excerpt ~= "" and (" · " .. excerpt) or ""), "read", tool, 4.2)
+	local filename = result_filename(name, args, result)
+	if filename ~= "" then
+		local kind = failed and "file_error" or (name == "edit" or name == "write") and "file_changed" or "file_read"
+		self:_stream(filename, kind, tool, 5.2, { file = true, verb = name })
 	elseif name == "run" or name == "shell" then
 		local marker = failed and "× " or "◆ "
 		self:_stream(marker .. compact_args(name, args) .. " · " .. tostring(result.summary or "done"), failed and "error" or "success", tool, 4.8)
@@ -267,7 +266,12 @@ function State:tool_event(event)
 		local key = event_key(event)
 		self.tool_queues[key] = self.tool_queues[key] or {}
 		self.tool_queues[key][#self.tool_queues[key] + 1] = tool
-		self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool)
+		local event_args = event.args or {}
+		if FILE_TOOLS[event.name] and event_args.path then
+			self:_stream(basename(event_args.path), "file_active", tool, nil, { file = true, verb = event.name })
+		else
+			self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool)
+		end
 	else
 		tool = self:_resolve_tool(event)
 		if not tool then
@@ -550,17 +554,40 @@ local function center(buffer, row, text, style)
 	buffer:write(row, col, text, style, buffer.width - col + 1)
 end
 
-local function stream_position(stream, width)
-	local text_width = lcatui.width.string(stream.text)
+local FILE_MORPHS = {
+	{ "‹", "›" }, { "{", "}" }, { "⟨", "⟩" }, { "[", "]" },
+}
+
+local function stream_display(stream)
+	if not stream.file then return stream.text end
+	local frame = FILE_MORPHS[(math.floor(stream.age * 8 + stream.id) % #FILE_MORPHS) + 1]
+	local marker = stream.kind == "file_error" and "×"
+		or stream.kind == "file_changed" and "◆"
+		or stream.kind == "file_read" and "◇"
+		or stream.verb == "edit" and "✦"
+		or stream.verb == "write" and "✧"
+		or "·"
+	return marker .. " " .. frame[1] .. stream.text .. frame[2]
+end
+
+local function stream_position(stream, width, display)
+	local text_width = lcatui.width.string(display or stream_display(stream))
 	local span = math.max(1, width - text_width - 2)
 	local progress
-	if stream.duration then
+	local travel_direction = 1
+	if stream.file or not stream.duration then
+		local cycles = stream.file and (stream.age * 24 / span) or (stream.age / 7)
+		local phase = (cycles + stream.id * 0.137) % 2
+		progress = phase <= 1 and phase or 2 - phase
+		travel_direction = phase <= 1 and 1 or -1
+	elseif stream.duration then
 		progress = clamp(stream.age / math.max(0.1, stream.duration), 0, 1)
-	else
-		progress = (stream.age / 7 + stream.id * 0.137) % 1
 	end
-	if stream.direction < 0 then progress = 1 - progress end
-	return 2 + math.floor(span * progress)
+	if stream.direction < 0 then
+		progress = 1 - progress
+		travel_direction = -travel_direction
+	end
+	return 2 + math.floor(span * progress), travel_direction
 end
 
 local App = {}
@@ -644,6 +671,12 @@ function App:render(frame_dt)
 	local dt = frame_dt == nil and clamp(now - self.last_frame, 0, 0.1) or frame_dt
 	self.last_frame = now
 	self.flow_time = self.flow_time + dt
+	local live_streams = {}
+	for _, stream in ipairs(self.state.streams) do
+		stream.age = stream.age + dt
+		if not stream.duration or stream.age <= stream.duration then live_streams[#live_streams + 1] = stream end
+	end
+	self.state.streams = live_streams
 	local listening = self.state.mode == "listening"
 	local listening_breath = listening and (0.5 + 0.5 * math.sin(self.flow_time * 1.7)) or 0
 	local failed = self.state.disturbance > 0
@@ -660,6 +693,12 @@ function App:render(frame_dt)
 	for _, tool in ipairs(visible_tools) do
 		local row = clamp(tool.lane or 1, 1, world_rows)
 		local x = tool_position(tool.id, width, 1, world_rows)
+		for index = #live_streams, 1, -1 do
+			if live_streams[index].tool == tool then
+				x = stream_position(live_streams[index], width)
+				break
+			end
+		end
 		vortices[#vortices + 1] = {
 			x = x, y = row, radius = tool.status == "active" and 7 or 4,
 			strength = tool.status == "active" and 1.2 or 0.25,
@@ -698,21 +737,28 @@ function App:render(frame_dt)
 		style = field_style,
 	})
 
-	local live_streams = {}
-	for _, stream in ipairs(self.state.streams) do
-		stream.age = stream.age + dt
-		if not stream.duration or stream.age <= stream.duration then live_streams[#live_streams + 1] = stream end
-	end
-	self.state.streams = live_streams
 	for _, stream in ipairs(live_streams) do
 		local row = clamp(stream.lane or 1, 1, world_rows)
-		local x = stream_position(stream, width)
-		local stream_style = stream.kind == "error" and rgb(241, 79, 115, { "bold" })
-			or stream.kind == "remove" and rgb(226, 102, 122)
-			or (stream.kind == "add" or stream.kind == "success") and rgb(91, 224, 169, { "bold" })
-			or stream.kind == "active" and rgb(72, 221, 228, { "bold" })
+		local display = stream_display(stream)
+		local x, travel_direction = stream_position(stream, width, display)
+		local stream_style = (stream.kind == "error" or stream.kind == "file_error") and rgb(241, 79, 115, { "bold" })
+			or (stream.kind == "success" or stream.kind == "file_changed") and rgb(91, 224, 169, { "bold" })
+			or stream.kind == "file_read" and rgb(104, 190, 196)
+			or (stream.kind == "active" or stream.kind == "file_active") and rgb(72, 221, 228, { "bold" })
 			or rgb(132, 177, 181)
-		buffer:write(row, x, stream.text, stream_style, math.max(1, width - x))
+		if stream.file then
+			local wake_style = stream.kind == "file_error" and rgb(176, 61, 91, { "dim" })
+				or stream.kind == "file_changed" and rgb(57, 151, 117, { "dim" })
+				or rgb(54, 126, 137, { "dim" })
+			for wake = 1, 4 do
+				local wake_x = x - travel_direction * (wake * 3 + 1)
+				local wake_y = clamp(row + ((wake + stream.id) % 3) - 1, 1, world_rows)
+				if wake_x >= 1 and wake_x <= width then
+					buffer:set(wake_y, wake_x, ({ "⠁", "⠂", "⠄", "·" })[wake], wake_style)
+				end
+			end
+		end
+		buffer:write(row, x, display, stream_style, math.max(1, width - x))
 	end
 
 	if self.state.failure then
