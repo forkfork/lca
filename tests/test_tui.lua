@@ -231,7 +231,7 @@ test("completed turn rests on elapsed time and one context token number", functi
 	if middle:find("exit 0", 1, true) then error("raw exit code displaced the completion summary") end
 	assert_eq(app.celebration_active, true)
 	local burst_frame = {}
-	for row = 1, 6 do burst_frame[#burst_frame + 1] = app.renderer.previous:plain_line(row) end
+	for row = 2, 5 do burst_frame[#burst_frame + 1] = app.renderer.previous:plain_line(row) end
 	local burst = table.concat(burst_frame, "\n")
 	if not burst:find("✦", 1, true) and not burst:find("⋆", 1, true) and not burst:find("◆", 1, true) then
 		error("completion pop did not emit a visible spark")
@@ -293,13 +293,13 @@ test("parallel tool fragments occupy lanes and move with the current", function(
 	local app = tui.App.new({ backend = backend, state = state })
 	app:render(0.1)
 	local first = {}
-	for row = 1, 6 do first[#first + 1] = app.renderer.previous:plain_line(row) end
+	for row = 2, 5 do first[#first + 1] = app.renderer.previous:plain_line(row) end
 	local first_frame = table.concat(first, "\n")
 	assert_contains(first_frame, "grep · /on_tool/ lua")
 	assert_contains(first_frame, "run · make test")
 	app:render(1.0)
 	local second = {}
-	for row = 1, 6 do second[#second + 1] = app.renderer.previous:plain_line(row) end
+	for row = 2, 5 do second[#second + 1] = app.renderer.previous:plain_line(row) end
 	if first_frame == table.concat(second, "\n") then error("tool personalities did not move") end
 end)
 
@@ -400,7 +400,7 @@ test("edit filenames are pulled from the edge toward assembly", function()
 	for _, dt in ipairs({ 0.1, 0.8, 1.6 }) do
 		app:render(dt)
 		local found
-		for row = 1, 6 do
+		for row = 2, 5 do
 			local line = app.renderer.previous:plain_line(row)
 			found = found or line:find("tui.lua", 1, true)
 		end
@@ -422,7 +422,7 @@ test("visual conductor preserves focal streams and reduces older labels to trail
 	state:tool_event(start("edit-focus", "edit", { path = "src/focus.lua" }))
 	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
 	app:render(0.1)
-	if #app.foreground_streams > 6 then error("conductor exceeded the six-row foreground budget") end
+	if #app.foreground_streams > 4 then error("conductor exceeded the four-row foreground budget") end
 	local focused = false
 	for _, stream in ipairs(app.foreground_streams) do
 		if stream.text == "focus.lua" and stream.kind == "file_active" then focused = true end
@@ -431,7 +431,7 @@ test("visual conductor preserves focal streams and reduces older labels to trail
 	if #state.streams <= #app.foreground_streams then error("older activity was not demoted to trails") end
 end)
 
-test("visual conductor keeps six concurrent tools ahead of the request trail", function()
+test("visual conductor prioritizes four concurrent tools ahead of the request trail", function()
 	local state = tui.State.new({ clock = function() return 10 end })
 	state:submit("run a busy batch")
 	for index, spec in ipairs({
@@ -446,7 +446,7 @@ test("visual conductor keeps six concurrent tools ahead of the request trail", f
 	end
 	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
 	app:render(0.1)
-	assert_eq(#app.foreground_streams, 6)
+	assert_eq(#app.foreground_streams, 4)
 	for _, stream in ipairs(app.foreground_streams) do
 		if not stream.tool or stream.tool.status ~= "active" then error("non-tool displaced concurrent active work") end
 	end
@@ -482,7 +482,7 @@ test("terminal lifecycle restores after injected failure", function()
 	if output:find(lcatui.ansi.leave_alt_screen, 1, true) then error("compact TUI emitted alternate-screen restore") end
 end)
 
-test("248x69 terminal keeps a fast fixed nine-row inline strip", function()
+test("248x69 terminal keeps a fast fixed eight-row inline strip", function()
 	local backend = fake_backend({ width = 248, height = 69, color = true })
 	local app = tui.App.new({ backend = backend })
 	app.renderer:mount("inline")
@@ -499,8 +499,8 @@ test("248x69 terminal keeps a fast fixed nine-row inline strip", function()
 		error(string.format("average frame emits %.0f bytes (budget 4999)", bytes / 60))
 	end
 	local lower_glyphs = 0
-	assert_eq(app.renderer.previous.height, 9)
-	for row = 4, 6 do
+	assert_eq(app.renderer.previous.height, 8)
+	for row = 3, 5 do
 		for char in app.renderer.previous:plain_line(row):gmatch(utf8.charpattern) do
 			if char ~= " " then lower_glyphs = lower_glyphs + 1 end
 		end
@@ -552,7 +552,7 @@ test("terminal lifecycle restores after cancellation", function()
 	if output:find(lcatui.ansi.enter_alt_screen, 1, true) then error("cancellation path entered alternate screen") end
 end)
 
-test("render caps a tall terminal to six flow rows plus the dock", function()
+test("render caps a tall terminal to four flow rows between dividers and the dock", function()
 	local backend = fake_backend()
 	local app = tui.App.new({
 		backend = backend,
@@ -560,17 +560,18 @@ test("render caps a tall terminal to six flow rows plus the dock", function()
 	})
 	app:render()
 	assert_eq(app.flow_width, 132)
-	assert_eq(app.flow_height, 6)
-	assert_eq(app.renderer.previous.height, 9)
-	assert_contains(app.renderer.previous:plain_line(8), "input ›")
-	assert_eq(app.renderer.previous.rows[8][10].style.attrs[1], "reverse")
+	assert_eq(app.flow_height, 4)
+	assert_eq(app.renderer.previous.height, 8)
+	assert_contains(app.renderer.previous:plain_line(1), "────")
+	assert_contains(app.renderer.previous:plain_line(7), "input ›")
+	assert_eq(app.renderer.previous.rows[7][10].style.attrs[1], "reverse")
 	for _ = 1, 20 do app.last_frame = app.last_frame - 0.05; app:render() end
 	local lower_before = {}
-	for row = 4, 6 do lower_before[#lower_before + 1] = app.renderer.previous:plain_line(row) end
+	for row = 3, 5 do lower_before[#lower_before + 1] = app.renderer.previous:plain_line(row) end
 	app.last_frame = app.last_frame - 0.05
 	app:render()
 	local lower_after, lower_glyphs = {}, 0
-	for row = 4, 6 do
+	for row = 3, 5 do
 		local line = app.renderer.previous:plain_line(row)
 		lower_after[#lower_after + 1] = line
 		for char in line:gmatch(utf8.charpattern) do if char ~= " " then lower_glyphs = lower_glyphs + 1 end end
@@ -623,11 +624,11 @@ test("submitted input clears the dock and is acknowledged before work", function
 	app:render(1 / 30)
 	local buffer = app.renderer.previous
 	assert_contains(table.concat(backend.output), "you › explain this project")
-	if buffer:plain_line(8):find("explain this project", 1, true) then
+	if buffer:plain_line(7):find("explain this project", 1, true) then
 		error("submitted text remained in the input dock")
 	end
-	assert_eq(buffer.rows[8][10].style.attrs[1], "reverse")
-	assert_contains(buffer:plain_line(9), "working")
+	assert_eq(buffer.rows[7][10].style.attrs[1], "reverse")
+	assert_contains(buffer:plain_line(8), "working")
 end)
 
 test("expired notices disappear from the compact status row", function()
@@ -640,7 +641,7 @@ test("expired notices disappear from the compact status row", function()
 	state:listen()
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 32 }), state = state })
 	app:render(1 / 30)
-	local status = app.renderer.previous:plain_line(9)
+	local status = app.renderer.previous:plain_line(8)
 	assert_contains(status, "LCA · listening")
 	if status:find("session cleared", 1, true) then error("expired notice remained in status row") end
 end)

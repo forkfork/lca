@@ -57,10 +57,11 @@ lca repl --tui
 lca --tui --tui-effect filament
 ```
 
-`--tui` enables an opt-in compact living-current strip: six animated activity
-rows above the input dock, while completed user and assistant messages remain
-in normal terminal scrollback. It does not use the alternate screen. Without
-that flag, the existing readline interface and terminal output are unchanged.
+`--tui` enables an opt-in compact living-current strip: four animated activity
+rows between a faint scrollback boundary and the input dock, while completed
+user and assistant messages remain in normal terminal scrollback. It does not
+use the alternate screen. Without that flag, the existing readline interface
+and terminal output are unchanged.
 Real filenames become bouncing, morphing objects with small wakes as tools read
 and change them. Current plan-task names drift through more slowly, while
 commands and verification remain compact signals in the same current. The TUI

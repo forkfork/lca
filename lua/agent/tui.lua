@@ -26,6 +26,23 @@ local function rgb(r, g, b, attrs)
 	return { fg = { r, g, b }, attrs = attrs or {} }
 end
 
+local function buffer_view(buffer, row_offset, height)
+	local view = { width = buffer.width, height = height }
+	function view:set(row, col, char, style)
+		buffer:set(row + row_offset, col, char, style)
+		return self
+	end
+	function view:fill(first_row, first_col, last_row, last_col, char, style)
+		buffer:fill(first_row + row_offset, first_col, last_row + row_offset, last_col, char, style)
+		return self
+	end
+	function view:write(row, col, text, style, max_width)
+		buffer:write(row + row_offset, col, text, style, max_width)
+		return self
+	end
+	return view
+end
+
 local function compact_text(value, limit)
 	value = tostring(value or ""):gsub("\r", " "):gsub("\n", " "):gsub("%s+", " ")
 	value = value:gsub("^%s+", ""):gsub("%s+$", "")
@@ -742,7 +759,7 @@ local function completion_pop(buffer, row, text, age)
 	for index = 1, sparks do
 		local angle = (index - 1) / sparks * math.pi * 2 + 0.17
 		local horizontal = text_radius + 1 + progress * (7 + index % 4)
-		local vertical = 0.7 + progress * 2.5
+		local vertical = 0.55 + progress * 1.1
 		local x = clamp(math.floor(centre_x + math.cos(angle) * horizontal + 0.5), 1, buffer.width)
 		local y = clamp(math.floor(row + math.sin(angle) * vertical - progress * progress * 0.35 + 0.5), 1, buffer.height)
 		local glyph = progress < 0.3 and (index % 3 == 0 and "✦" or "◆")
@@ -873,8 +890,8 @@ end
 local App = {}
 App.__index = App
 
-local STRIP_FLOW_ROWS = 6
-local STRIP_ROWS = STRIP_FLOW_ROWS + 3
+local STRIP_FLOW_ROWS = 4
+local STRIP_ROWS = STRIP_FLOW_ROWS + 4
 
 function App.new(opts)
 	opts = opts or {}
@@ -967,8 +984,9 @@ end
 function App:render(frame_dt)
 	local width, terminal_height = self:_size()
 	local height = math.min(STRIP_ROWS, terminal_height)
-	local world_rows = math.max(3, height - 3)
-	local divider_row, input_row, status_row = world_rows + 1, world_rows + 2, world_rows + 3
+	local world_rows = math.max(3, height - 4)
+	local top_divider_row, flow_top = 1, 2
+	local divider_row, input_row, status_row = world_rows + 2, world_rows + 3, world_rows + 4
 	local notice = self.state.notices[#self.state.notices]
 	local state_now = self.state.clock()
 	if notice and notice.created_at and state_now - notice.created_at > 8 then notice = nil end
@@ -1052,7 +1070,8 @@ function App:render(frame_dt)
 		math.floor(self.palette.g + 0.5),
 		math.floor(self.palette.b + 0.5)
 	)
-	local buffer = lcatui.Buffer.new(width, height)
+	local screen = lcatui.Buffer.new(width, height)
+	local buffer = buffer_view(screen, flow_top - 1, world_rows)
 	buffer:fill(1, 1, world_rows, width, " ", field_style)
 	flow:render(buffer, {
 		active = active,
@@ -1144,27 +1163,28 @@ function App:render(frame_dt)
 		self.celebration_active = false
 	end
 
-	buffer:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
-	buffer:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
-	buffer:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
+	screen:write(top_divider_row, 1, string.rep("─", width), rgb(40, 65, 70, { "dim" }), width)
+	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
+	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
+	screen:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
 	local status = self.busy and "working · Ctrl-C cancels · input may be queued"
 		or "listening · Enter submits · Ctrl-D exits"
 	local active_count = #self.state:active_tools()
 	if active_count > 0 then status = status .. " · " .. tostring(active_count) .. " tools active" end
 	if notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
-	buffer:write(status_row, 2, "LCA · " .. self.state.model_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
+	screen:write(status_row, 2, "LCA · " .. self.state.model_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
 	self.state:set_input(self.editor:text(), self.editor:display_cursor())
 	local cursor_col = math.min(width, 10 + self.editor:display_cursor())
-	local cursor_cell = buffer.rows[input_row][cursor_col]
+	local cursor_cell = screen.rows[input_row][cursor_col]
 	local cursor_style = cursor_cell.style or rgb(224, 219, 229)
 	cursor_cell.style = { fg = cursor_style.fg, bg = cursor_style.bg, attrs = { "reverse" } }
-	local layout_key = table.concat({ width, height, world_rows, divider_row, input_row, status_row }, ":")
+	local layout_key = table.concat({ width, height, world_rows, top_divider_row, divider_row, input_row, status_row }, ":")
 	if layout_key ~= self.logged_layout then
 		core.debug_log("[tui] inline strip=%sx%s terminal_height=%s flow_rows=%s divider_row=%s input_row=%s status_row=%s",
 			width, height, terminal_height, world_rows, divider_row, input_row, status_row)
 		self.logged_layout = layout_key
 	end
-	self.renderer:set_cursor(nil):draw(buffer)
+	self.renderer:set_cursor(nil):draw(screen)
 end
 
 function App:commit_lines(lines)
