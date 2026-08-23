@@ -77,6 +77,9 @@ changed.
 While the model is composing hidden tool protocol, the TUI reports that work
 separately from execution—for example, `model drafting edit · src/main.js ·
 4.2k chars`. A tool is only shown as active after its real runtime start event.
+The default drift treatment eases between sparse listening dust, a flowing
+model-composition ribbon, local tool eddies, failure turbulence, and a resolving
+verification pulse before settling back to dust.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

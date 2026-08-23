@@ -278,6 +278,31 @@ test("drift is the default animation effect", function()
 	assert_eq(app.flow.mode, "drift")
 end)
 
+test("drift eases through model tool failure and verification states", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	state:listen()
+	app:render(0.2)
+	state:model_activity({ status = "model drafting edit · tui.lua · 2.0k chars" })
+	app:render(0.2)
+	local composing = app.flow.morph.energy
+	if composing <= 0 or composing >= 1 then error("composition transition snapped") end
+	if app.palette.r <= 55 or app.palette.r >= 132 then error("composition palette did not ease") end
+	state:tool_event(start("edit-a", "edit", { path = "lua/agent/tui.lua" }))
+	app:render(0.2)
+	local tooling = app.flow.morph.tools
+	if tooling <= 0 or tooling >= 1 then error("tool transition snapped") end
+	state:tool_event(finish("build-a", "run", { command = "make test" }, { is_error = true, summary = "exit 1" }))
+	app:render(0.2)
+	local disturbed = app.flow.morph.failure
+	if disturbed <= 0 or disturbed >= 1 then error("failure transition snapped") end
+	if app.palette.r <= 132 or app.palette.r >= 205 then error("failure palette did not ease") end
+	state:tool_event(finish("build-b", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
+	app:render(0.2)
+	if app.flow.morph.resolution <= 0 then error("verification did not begin resolving the drift") end
+	if app.flow.morph.failure <= 0 then error("failure disturbance vanished instead of easing out") end
+end)
+
 test("filename objects morph and bounce instead of wrapping", function()
 	local backend = fake_backend({ width = 120, height = 32 })
 	local state = tui.State.new({ clock = function() return 10 end })

@@ -712,6 +712,7 @@ function App.new(opts)
 		flow_width = nil,
 		flow_height = nil,
 		flow_time = 0,
+		palette = { r = 55, g = 151, b = 157 },
 		size_provider = opts.size_provider,
 		logged_size = nil,
 		logged_layout = nil,
@@ -830,17 +831,27 @@ function App:render(frame_dt)
 		active = active,
 		listening = listening,
 		failed = failed,
+		proof = self.state.proof,
 		breath = listening_breath,
 		center_x = width * 0.5,
 		center_y = listening and world_rows * 0.64 or world_rows * 0.5,
 		vortices = vortices,
 	})
 
-	local field_style = self.state.proof > 0 and rgb(62, 205, 153)
-		or failed and rgb(205, 66, 101)
-		or listening and rgb(55, 151, 157)
-		or active and rgb(132, 69, 171)
-		or rgb(46, 105, 112)
+	local target_palette = listening and { r = 55, g = 151, b = 157 }
+		or self.state.proof > 0 and { r = 62, g = 205, b = 153 }
+		or failed and { r = 205, g = 66, b = 101 }
+		or active and { r = 132, g = 69, b = 171 }
+		or { r = 46, g = 105, b = 112 }
+	local palette_mix = 1 - math.exp(-(failed and 5.5 or 2.8) * math.max(0, dt))
+	for channel, target in pairs(target_palette) do
+		self.palette[channel] = self.palette[channel] + (target - self.palette[channel]) * palette_mix
+	end
+	local field_style = rgb(
+		math.floor(self.palette.r + 0.5),
+		math.floor(self.palette.g + 0.5),
+		math.floor(self.palette.b + 0.5)
+	)
 	local buffer = lcatui.Buffer.new(width, height)
 	buffer:fill(1, 1, world_rows, width, " ", field_style)
 	flow:render(buffer, {
