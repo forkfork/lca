@@ -229,8 +229,32 @@ test("completed turn rests on elapsed time and one context token number", functi
 	local middle = app.renderer.previous:plain_line(3)
 	assert_contains(middle, "✓ 48s · 56k tokens")
 	if middle:find("exit 0", 1, true) then error("raw exit code displaced the completion summary") end
+	assert_eq(app.celebration_active, true)
+	local burst_frame = {}
+	for row = 1, 6 do burst_frame[#burst_frame + 1] = app.renderer.previous:plain_line(row) end
+	local burst = table.concat(burst_frame, "\n")
+	if not burst:find("✦", 1, true) and not burst:find("⋆", 1, true) and not burst:find("◆", 1, true) then
+		error("completion pop did not emit a visible spark")
+	end
+	now = now + 1
+	app:render(1.0)
+	assert_eq(app.celebration_active, false)
+	assert_contains(app.renderer.previous:plain_line(3), "✓ 48s · 56k tokens")
 	state:submit("next request")
 	assert_eq(state.completion_summary, nil)
+end)
+
+test("failed turns do not trigger the completion pop", function()
+	local now = 20
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("run the build")
+	state:assistant_complete("The build failed.", { tokens = 2048 })
+	state.failure = "build failed"
+	now = now + 1
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(1.0)
+	assert_eq(app.celebration_active, false)
+	assert_contains(app.renderer.previous:plain_line(3), "build failed")
 end)
 
 test("submitted request ripples through the current", function()

@@ -88,6 +88,9 @@ file changes are followed by verification, small pulses travel from those file
 objects into the verification tool. The completed time/token summary first
 crystallizes from scattered characters, then remains readable until the next
 request.
+As crystallization completes, one short mint/gold/lilac spark ring pops around
+the time/token summary and decays into dots. It only fires once on successful
+completion; failures and cancellations do not celebrate.
 The bar also conducts busy batches: the highest-value event in each lane keeps
 its readable label while older activity falls back to faint trail particles.
 Reads skim, searches scatter, edits and writes pull toward assembly, builds

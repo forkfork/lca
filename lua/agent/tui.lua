@@ -726,6 +726,34 @@ local function crystallize(buffer, row, text, age, style)
 	end
 end
 
+local function completion_pop(buffer, row, text, age)
+	local start_age, duration = 0.68, 1.05
+	local progress = ((tonumber(age) or 0) - start_age) / duration
+	if progress < 0 or progress > 1 then return false end
+	local centre_x = (buffer.width + 1) / 2
+	local text_radius = lcatui.width.string(text) / 2
+	local burst = math.sin(progress * math.pi)
+	local sparks = 14
+	local styles = {
+		rgb(104, 231, 185, { "bold" }),
+		rgb(238, 190, 91, { "bold" }),
+		rgb(190, 142, 231, { "bold" }),
+	}
+	for index = 1, sparks do
+		local angle = (index - 1) / sparks * math.pi * 2 + 0.17
+		local horizontal = text_radius + 1 + progress * (7 + index % 4)
+		local vertical = 0.7 + progress * 2.5
+		local x = clamp(math.floor(centre_x + math.cos(angle) * horizontal + 0.5), 1, buffer.width)
+		local y = clamp(math.floor(row + math.sin(angle) * vertical - progress * progress * 0.35 + 0.5), 1, buffer.height)
+		local glyph = progress < 0.3 and (index % 3 == 0 and "✦" or "◆")
+			or progress < 0.72 and (index % 2 == 0 and "⋆" or "·")
+			or (index % 3 == 0 and "˙" or "·")
+		local style = styles[index % #styles + 1]
+		if burst > 0.08 then buffer:set(y, x, glyph, style) end
+	end
+	return true
+end
+
 local FILE_MORPHS = {
 	{ "‹", "›" }, { "{", "}" }, { "⟨", "⟩" }, { "[", "]" },
 }
@@ -887,6 +915,7 @@ function App.new(opts)
 		busy = false,
 		fatal_error = nil,
 		foreground_streams = {},
+		celebration_active = false,
 	}, App)
 end
 
@@ -1094,16 +1123,25 @@ function App:render(frame_dt)
 	end
 
 	if self.state.failure then
+		self.celebration_active = false
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
 	elseif self.state.completion_summary then
+		local completion_age = state_now - (self.state.assistant_completed_at or state_now)
+		self.celebration_active = completion_pop(buffer, math.max(1, math.floor(world_rows * 0.5)),
+			self.state.completion_summary, completion_age)
 		crystallize(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.completion_summary,
-			state_now - (self.state.assistant_completed_at or state_now), rgb(91, 224, 169, { "bold" }))
+			completion_age, rgb(91, 224, 169, { "bold" }))
 	elseif self.state.verification then
+		self.celebration_active = false
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "◆ " .. compact_text(self.state.verification, width - 12), rgb(91, 224, 169, { "bold" }))
 	elseif self.state.cancelled then
+		self.celebration_active = false
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "cancelled", rgb(218, 158, 93, { "bold" }))
 	elseif #visible_tools == 0 and active then
+		self.celebration_active = false
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.model_phase, rgb(178, 157, 199, { "bold" }))
+	else
+		self.celebration_active = false
 	end
 
 	buffer:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
