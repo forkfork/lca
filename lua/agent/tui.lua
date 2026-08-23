@@ -469,52 +469,11 @@ local function center(buffer, row, text, style)
 	buffer:write(row, col, text, style, buffer.width - col + 1)
 end
 
-local function response_lines(text, width, maximum_lines)
-	local limit = math.max(24, math.min(88, width - 24))
-	local lines, overflow = {}, false
-	local function add_line(line)
-		if #lines >= maximum_lines then overflow = true; return false end
-		lines[#lines + 1] = line
-		return true
-	end
-	local function clean(line)
-		line = line:gsub("^%s+", ""):gsub("%s+$", "")
-		if line:match("^```") then return "" end
-		line = line:gsub("^#+%s*", "")
-		line = line:gsub("%[([^%]]+)%]%([^%)]+%)", "%1")
-		line = line:gsub("%*%*", ""):gsub("__", "")
-		line = line:gsub("^[-*+]%s+", "• ")
-		return line
-	end
-	for raw in (response_text(text, 6000) .. "\n"):gmatch("(.-)\n") do
-		local source = clean(raw)
-		if source ~= "" then
-			local line, continuation = "", source:sub(1, 2) == "• " and "  " or ""
-			for word in source:gmatch("%S+") do
-				word = lcatui.width.string(word) > limit and lcatui.width.truncate(word, limit - 1) .. "…" or word
-				local candidate = line == "" and word or (line .. " " .. word)
-				if lcatui.width.string(candidate) <= limit then
-					line = candidate
-				else
-					if not add_line(line) then break end
-					line = continuation .. word
-				end
-			end
-			if overflow then break end
-			if line ~= "" and not add_line(line) then break end
-		end
-	end
-	if #lines == 0 then lines[1] = "" end
-	if overflow then
-		local last = lines[#lines]:gsub("%s+%S*$", "")
-		if last == "" then last = lcatui.width.truncate(lines[#lines], limit - 2) end
-		lines[#lines] = last .. " …"
-	end
-	return lines
-end
-
 local App = {}
 App.__index = App
+
+local STRIP_FLOW_ROWS = 6
+local STRIP_ROWS = STRIP_FLOW_ROWS + 3
 
 function App.new(opts)
 	opts = opts or {}
@@ -525,8 +484,6 @@ function App.new(opts)
 		renderer = opts.renderer or lcatui.Renderer.new(backend, {
 			mode = "inline",
 			synchronized = true,
-			damage_spans = true,
-			damage_gap = 4,
 		}),
 		state = opts.state or State.new(),
 		editor = opts.editor or Editor.new(opts.history),
@@ -535,9 +492,6 @@ function App.new(opts)
 		flow_width = nil,
 		flow_height = nil,
 		flow_time = 0,
-		response_entities = nil,
-		response_layout = nil,
-		response_key = nil,
 		size_provider = opts.size_provider,
 		logged_size = nil,
 		logged_layout = nil,
@@ -584,42 +538,14 @@ function App:_flow_for(width, rows)
 	return self.flow
 end
 
-function App:_response_for(text, width, world_rows)
-	local maximum_lines = math.max(3, math.min(10, math.floor(world_rows * 0.18)))
-	local lines = response_lines(text, width, maximum_lines)
-	local key = table.concat(lines, "\n") .. "\0" .. tostring(width) .. "x" .. tostring(world_rows)
-	if key ~= self.response_key then
-		local entities, layout = {}, {}
-		local first_row = math.max(4, math.floor(world_rows * 0.50) - math.floor((#lines - 1) / 2))
-		for index, line in ipairs(lines) do
-			local col = math.max(3, math.floor((width - lcatui.width.string(line)) / 2) + 1)
-			layout[#layout + 1] = { row = first_row + index - 1, col = col, width = lcatui.width.string(line) }
-			local scattered = lcatui.kinetic.scatter(line, first_row + index - 1, col, {
-				width = width, height = world_rows,
-			}, 47 + index * 19)
-			for _, entity in ipairs(scattered) do entities[#entities + 1] = entity end
-		end
-		self.response_key, self.response_entities, self.response_layout = key, entities, layout
-	end
-	return self.response_entities, self.response_layout, lines
-end
-
 function App:render(frame_dt)
-	local width, height = self:_size()
-	local dock_top = height - 3
-	local world_rows = dock_top - 1
-	local assistant = self.state.assistant_stream ~= "" and self.state.assistant_stream or self.state.assistant
-	local response_visible = assistant ~= "" and (self.state.mode == "streaming"
-		or self.state.mode == "complete" or self.state.mode == "listening")
-	local response_entities, response_layout
-	if response_visible then response_entities, response_layout = self:_response_for(assistant, width, world_rows) end
+	local width, terminal_height = self:_size()
+	local height = math.min(STRIP_ROWS, terminal_height)
+	local world_rows = math.max(3, height - 3)
+	local divider_row, input_row, status_row = world_rows + 1, world_rows + 2, world_rows + 3
 	local notice = self.state.notices[#self.state.notices]
 	local state_now = self.state.clock()
 	if notice and notice.created_at and state_now - notice.created_at > 8 then notice = nil end
-	local top_reserved = 1
-	if self.state.prompt ~= "" then top_reserved = top_reserved + 1 end
-	if notice then top_reserved = top_reserved + 1 end
-	local world_top = math.min(math.max(2, world_rows - 1), top_reserved + 2)
 	local flow = self:_flow_for(width, world_rows)
 	local now = socket.gettime()
 	local dt = frame_dt == nil and clamp(now - self.last_frame, 0, 0.1) or frame_dt
@@ -629,16 +555,22 @@ function App:render(frame_dt)
 	local listening_breath = listening and (0.5 + 0.5 * math.sin(self.flow_time * 1.7)) or 0
 	local failed = self.state.disturbance > 0
 	local active = not listening and self.state.mode ~= "complete" and self.state.mode ~= "cancelled"
-	local vortices = {}
-	for _, tool in ipairs(self.state.tools) do
-		if tool.status == "active" or (tool.finished_at and now - tool.finished_at < 3.5) then
-			local x, y = tool_position(tool.id, width, world_top, math.max(world_top, world_rows - 1))
-			vortices[#vortices + 1] = {
-				x = x, y = y, radius = tool.status == "active" and 9 or 5,
-				strength = tool.status == "active" and 1.25 or 0.28,
-				direction = (#tool.id % 2 == 0) and -1 or 1,
-			}
+	local visible_tools = {}
+	for index = #self.state.tools, 1, -1 do
+		local tool = self.state.tools[index]
+		if tool.status == "active" or (tool.finished_at and now - tool.finished_at < 4) then
+			visible_tools[#visible_tools + 1] = tool
+			if #visible_tools >= world_rows then break end
 		end
+	end
+	local vortices = {}
+	for row, tool in ipairs(visible_tools) do
+		local x = tool_position(tool.id, width, 1, world_rows)
+		vortices[#vortices + 1] = {
+			x = x, y = row, radius = tool.status == "active" and 7 or 4,
+			strength = tool.status == "active" and 1.2 or 0.25,
+			direction = (#tool.id % 2 == 0) and -1 or 1,
+		}
 	end
 	if failed then
 		vortices[#vortices + 1] = { x = width * 0.5, y = world_rows * 0.5, radius = 15, strength = 1.7, direction = -1 }
@@ -650,7 +582,7 @@ function App:render(frame_dt)
 		failed = failed,
 		breath = listening_breath,
 		center_x = width * 0.5,
-		center_y = listening and world_rows * 0.72 or world_rows * 0.47,
+		center_y = listening and world_rows * 0.64 or world_rows * 0.5,
 		vortices = vortices,
 	})
 
@@ -660,7 +592,7 @@ function App:render(frame_dt)
 		or active and rgb(132, 69, 171)
 		or rgb(46, 105, 112)
 	local buffer = lcatui.Buffer.new(width, height)
-	buffer:fill(top_reserved + 1, 1, world_rows - 1, width, " ", field_style)
+	buffer:fill(1, 1, world_rows, width, " ", field_style)
 	flow:render(buffer, {
 		active = active,
 		listening = listening,
@@ -670,92 +602,69 @@ function App:render(frame_dt)
 		core_y = world_rows * 0.47,
 		threshold = 0.13,
 		style = field_style,
-		mask = function(x, y)
-			if not (y > top_reserved and y < world_rows) then return false end
-			for _, region in ipairs(response_layout or {}) do
-				if y == region.row and x >= region.col - 2 and x <= region.col + region.width + 1 then return false end
-			end
-			return true
-		end,
 	})
 
-	buffer:write(1, 2, "LCA · " .. self.state.model_phase, rgb(98, 222, 218, { "bold" }), width - 2)
-	local header_row = 2
-	if self.state.prompt ~= "" then
-		buffer:write(header_row, 2, "you · " .. compact_text(self.state.prompt, width - 8), rgb(110, 132, 151), width - 2)
-		header_row = header_row + 1
-	end
-	if notice then
-		buffer:write(header_row, 2, compact_text(notice.text, width - 3), notice.kind == "error" and rgb(241, 79, 115) or rgb(95, 135, 143), width - 2)
-	end
-
-	local shown = 0
-	for index = #self.state.tools, 1, -1 do
-		local tool = self.state.tools[index]
-		if shown >= 10 then break end
-		if tool.status == "active" or (tool.finished_at and now - tool.finished_at < 5) then
-			local x, y = tool_position(tool.id, width, world_top, math.max(world_top, world_rows - 1))
-			local glyph = tool.status == "active" and ({ "◜", "◝", "◞", "◟" })[math.floor(now * 9 + shown) % 4 + 1]
-				or tool.status == "ok" and "◆" or tool.status == "error" and "×" or "◇"
-			local style = tool.status == "error" and rgb(241, 79, 115, { "bold" })
-				or tool.status == "ok" and rgb(91, 224, 169, { "bold" }) or rgb(72, 221, 228, { "bold" })
-			local label = glyph .. " " .. tool.name .. (tool.args ~= "" and ("  " .. tool.args) or "")
-			buffer:write(y, x, label, style, math.max(1, width - x))
-			if tool.status ~= "active" and tool.result ~= "" and y + 1 < dock_top then
-				buffer:write(y + 1, x + 2, compact_text(tool.result, 42), rgb(105, 143, 145), math.max(1, width - x - 2))
-			end
-			shown = shown + 1
-		end
+	for row, tool in ipairs(visible_tools) do
+		local x = tool_position(tool.id, width, 1, world_rows)
+		local glyph = tool.status == "active" and ({ "◜", "◝", "◞", "◟" })[math.floor(now * 9 + row) % 4 + 1]
+			or tool.status == "ok" and "◆" or tool.status == "error" and "×" or "◇"
+		local tool_style = tool.status == "error" and rgb(241, 79, 115, { "bold" })
+			or tool.status == "ok" and rgb(91, 224, 169, { "bold" }) or rgb(72, 221, 228, { "bold" })
+		local detail = tool.status == "active" and tool.args or tool.result
+		local label = glyph .. " " .. tool.name .. (detail ~= "" and (" · " .. compact_text(detail, 48)) or "")
+		buffer:write(row, x, label, tool_style, math.max(1, width - x))
 	end
 
 	if self.state.failure then
-		center(buffer, math.max(world_top, math.floor(world_rows * 0.52)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
 	elseif self.state.verification then
-		center(buffer, math.max(world_top, math.floor(world_rows * 0.52)), "◆ " .. compact_text(self.state.verification, width - 12), rgb(91, 224, 169, { "bold" }))
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "◆ " .. compact_text(self.state.verification, width - 12), rgb(91, 224, 169, { "bold" }))
 	elseif self.state.cancelled then
-		center(buffer, math.max(world_top, math.floor(world_rows * 0.52)), "cancelled", rgb(218, 158, 93, { "bold" }))
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "cancelled", rgb(218, 158, 93, { "bold" }))
+	elseif #visible_tools == 0 and active then
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.model_phase, rgb(178, 157, 199, { "bold" }))
 	end
 
-	if type(self.state.plan) == "table" and #self.state.plan > 0 then
-		local row = math.max(world_top, world_rows - math.min(3, #self.state.plan) - 1)
-		for index, item in ipairs(self.state.plan) do
-			if index > 3 then break end
-			local mark = item.status == "completed" and "✓" or item.status == "in_progress" and "◉" or "○"
-			buffer:write(row + index - 1, 3, mark .. " " .. compact_text(item.step, math.floor(width * 0.42)), rgb(144, 119, 178), math.floor(width * 0.45))
-		end
-	end
-
-	if response_visible then
-		local response_now = state_now
-		local started = self.state.mode == "streaming" and self.state.assistant_updated_at
-			or self.state.assistant_completed_at or self.state.assistant_started_at or response_now
-		local settle = clamp((response_now - started) / 1.25, 0, 1)
-		lcatui.kinetic.draw(buffer, response_entities, settle, {
-			style = function(_, amount)
-				return rgb(122 + math.floor(amount * 104), 171 + math.floor(amount * 48),
-					176 + math.floor(amount * 55), { amount > 0.88 and "bold" or "dim" })
-			end,
-		})
-	end
-
-	buffer:write(dock_top, 1, string.rep("─", width), rgb(49, 65, 76), width)
-	buffer:write(dock_top + 1, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
-	buffer:write(dock_top + 1, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
+	buffer:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
+	buffer:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
+	buffer:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
 	local status = self.busy and "working · Ctrl-C cancels · input may be queued"
 		or "listening · Enter submits · Ctrl-D exits"
-	buffer:write(dock_top + 2, 2, status, rgb(74, 93, 105), width - 2)
+	local active_count = #self.state:active_tools()
+	if active_count > 0 then status = status .. " · " .. tostring(active_count) .. " tools active" end
+	if notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
+	buffer:write(status_row, 2, "LCA · " .. self.state.model_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
 	self.state:set_input(self.editor:text(), self.editor:display_cursor())
 	local cursor_col = math.min(width, 10 + self.editor:display_cursor())
-	local cursor_cell = buffer.rows[dock_top + 1][cursor_col]
+	local cursor_cell = buffer.rows[input_row][cursor_col]
 	local cursor_style = cursor_cell.style or rgb(224, 219, 229)
 	cursor_cell.style = { fg = cursor_style.fg, bg = cursor_style.bg, attrs = { "reverse" } }
-	local layout_key = table.concat({ width, height, dock_top, world_rows }, ":")
+	local layout_key = table.concat({ width, height, world_rows, divider_row, input_row, status_row }, ":")
 	if layout_key ~= self.logged_layout then
-		core.debug_log("[tui] frame=%sx%s world_rows=%s divider_row=%s input_row=%s status_row=%s",
-			width, height, world_rows, dock_top, dock_top + 1, dock_top + 2)
+		core.debug_log("[tui] inline strip=%sx%s terminal_height=%s flow_rows=%s divider_row=%s input_row=%s status_row=%s",
+			width, height, terminal_height, world_rows, divider_row, input_row, status_row)
 		self.logged_layout = layout_key
 	end
 	self.renderer:set_cursor(nil):draw(buffer)
+end
+
+function App:commit_lines(lines)
+	self.renderer:set_cursor(nil)
+	return self.renderer:commit(lines)
+end
+
+function App:commit_user(text)
+	return self:commit_lines({ "you › " .. response_text(text, 6000) })
+end
+
+function App:commit_assistant(text)
+	local lines, first = {}, true
+	for line in (response_text(text, 12000) .. "\n"):gmatch("(.-)\n") do
+		lines[#lines + 1] = (first and "lca › " or "      ") .. line
+		first = false
+	end
+	lines[#lines + 1] = ""
+	return self:commit_lines(lines)
 end
 
 function App:_handle_action(action)
@@ -825,7 +734,6 @@ function tui.with_terminal(terminal, renderer, callback)
 	if not started then return nil, start_err or "TUI requires an interactive POSIX terminal" end
 	local mounted, mount_err = pcall(function()
 		renderer:mount("inline")
-		renderer:switch("fullscreen")
 	end)
 	if not mounted then
 		pcall(function() terminal:stop() end)
@@ -834,6 +742,7 @@ function tui.with_terminal(terminal, renderer, callback)
 	local results = table.pack(xpcall(callback, debug.traceback))
 	if not results[1] then core.debug_log("[tui] fatal error: %s", tostring(results[2])) end
 	pcall(function() renderer.backend:write(lcatui.ansi.end_synchronized_update) end)
+	pcall(function() renderer:commit({}) end)
 	pcall(function() renderer:unmount() end)
 	pcall(function() terminal:stop() end)
 	if not results[1] then return nil, results[2] end
@@ -909,6 +818,7 @@ function tui.run(options)
 			app.state:listen()
 			local line = app:next_submission()
 			if not line then break end
+			app:commit_user(line)
 			if line:sub(1, 1) == "/" then
 				app.state.prompt = compact_text(line, 240)
 				app.state.model_phase = "running command"
@@ -951,10 +861,12 @@ function tui.run(options)
 					local final = protocol.strip_tool_results(protocol.strip_tool_calls(turn_result.text or ""))
 					app.state:assistant_complete(final)
 					session:add_assistant(turn_result.text, turn_result._output_items)
+					app:commit_assistant(final)
 					maybe_auto_compact()
 				else
 					app.state:notice(tostring(turn_result), "error")
 					app.state.mode = "failed"
+					app:commit_lines({ "error › " .. compact_text(turn_result, 240), "" })
 				end
 				app:render()
 			end

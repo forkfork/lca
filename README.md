@@ -56,9 +56,11 @@ lca --tui
 lca repl --tui
 ```
 
-`--tui` enables the opt-in full-screen living-current interface. Without that
-flag, the existing readline interface and terminal output are unchanged. The
-TUI requires a POSIX terminal and the sibling `lcatui` Lua rock.
+`--tui` enables an opt-in compact living-current strip: six animated activity
+rows above the input dock, while completed user and assistant messages remain
+in normal terminal scrollback. It does not use the alternate screen. Without
+that flag, the existing readline interface and terminal output are unchanged.
+The TUI requires a POSIX terminal and the sibling `lcatui` Lua rock.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

@@ -148,24 +148,23 @@ end
 test("terminal lifecycle restores after injected failure", function()
 	local backend = fake_backend()
 	local terminal = lcatui.Terminal.new(backend)
-	local renderer = lcatui.Renderer.new(backend, { mode = "fullscreen", synchronized = true })
+	local renderer = lcatui.Renderer.new(backend, { mode = "inline", synchronized = true })
 	local ok, err = tui.with_terminal(terminal, renderer, function() error("injected render failure") end)
 	assert_eq(ok, nil)
 	assert_contains(err, "injected render failure")
 	assert_eq(backend.raw, false)
 	local output = table.concat(backend.output)
-	assert_contains(output, lcatui.ansi.enter_alt_screen)
 	assert_contains(output, lcatui.ansi.end_synchronized_update)
 	assert_contains(output, lcatui.ansi.show_cursor)
-	assert_contains(output, lcatui.ansi.leave_alt_screen)
 	assert_contains(output, lcatui.ansi.disable_bracketed_paste)
+	if output:find(lcatui.ansi.enter_alt_screen, 1, true) then error("compact TUI entered alternate screen") end
+	if output:find(lcatui.ansi.leave_alt_screen, 1, true) then error("compact TUI emitted alternate-screen restore") end
 end)
 
-test("248x69 fullscreen animation stays inside its frame and output budgets", function()
+test("248x69 terminal keeps a fast fixed nine-row inline strip", function()
 	local backend = fake_backend({ width = 248, height = 69, color = true })
 	local app = tui.App.new({ backend = backend })
 	app.renderer:mount("inline")
-	app.renderer:switch("fullscreen")
 	app:render(1 / 30)
 	backend.output = {}
 	local started = os.clock()
@@ -175,16 +174,17 @@ test("248x69 fullscreen animation stays inside its frame and output budgets", fu
 	if elapsed / 60 >= 1 / 30 then
 		error(string.format("average frame %.2fms exceeds 33.33ms", elapsed / 60 * 1000))
 	end
-	if bytes / 60 >= 10000 then
-		error(string.format("average frame emits %.0f bytes (budget 9999)", bytes / 60))
+	if bytes / 60 >= 5000 then
+		error(string.format("average frame emits %.0f bytes (budget 4999)", bytes / 60))
 	end
 	local lower_glyphs = 0
-	for row = 35, 64 do
+	assert_eq(app.renderer.previous.height, 9)
+	for row = 4, 6 do
 		for char in app.renderer.previous:plain_line(row):gmatch(utf8.charpattern) do
 			if char ~= " " then lower_glyphs = lower_glyphs + 1 end
 		end
 	end
-	if lower_glyphs < 20 then error("performance frame did not reach the lower screen") end
+	if lower_glyphs < 10 then error("animation did not reach the lower strip rows") end
 end)
 
 test("frame scheduling uses deadlines rather than adding render time", function()
@@ -208,7 +208,7 @@ end)
 test("terminal lifecycle restores after cancellation", function()
 	local backend = fake_backend()
 	local terminal = lcatui.Terminal.new(backend)
-	local renderer = lcatui.Renderer.new(backend, { mode = "fullscreen", synchronized = true })
+	local renderer = lcatui.Renderer.new(backend, { mode = "inline", synchronized = true })
 	local state = tui.State.new()
 	local ok, err = tui.with_terminal(terminal, renderer, function()
 		state:cancel("Ctrl-C")
@@ -217,10 +217,12 @@ test("terminal lifecycle restores after cancellation", function()
 	assert_eq(ok, true, err)
 	assert_eq(state.mode, "cancelled")
 	assert_eq(backend.raw, false)
-	assert_contains(table.concat(backend.output), lcatui.ansi.leave_alt_screen)
+	local output = table.concat(backend.output)
+	assert_contains(output, lcatui.ansi.show_cursor)
+	if output:find(lcatui.ansi.enter_alt_screen, 1, true) then error("cancellation path entered alternate screen") end
 end)
 
-test("render uses the real tall terminal size for flow and input dock", function()
+test("render caps a tall terminal to six flow rows plus the dock", function()
 	local backend = fake_backend()
 	local app = tui.App.new({
 		backend = backend,
@@ -228,44 +230,32 @@ test("render uses the real tall terminal size for flow and input dock", function
 	})
 	app:render()
 	assert_eq(app.flow_width, 132)
-	assert_eq(app.flow_height, 43)
-	if app.renderer.previous:plain_line(2):find("you ›", 1, true) then error("top row looks like a second input prompt") end
-	assert_contains(app.renderer.previous:plain_line(45), "input ›")
-	assert_eq(app.renderer.previous.rows[45][10].style.attrs[1], "reverse")
+	assert_eq(app.flow_height, 6)
+	assert_eq(app.renderer.previous.height, 9)
+	assert_contains(app.renderer.previous:plain_line(8), "input ›")
+	assert_eq(app.renderer.previous.rows[8][10].style.attrs[1], "reverse")
 	for _ = 1, 20 do app.last_frame = app.last_frame - 0.05; app:render() end
 	local lower_before = {}
-	for row = 24, 42 do lower_before[#lower_before + 1] = app.renderer.previous:plain_line(row) end
+	for row = 4, 6 do lower_before[#lower_before + 1] = app.renderer.previous:plain_line(row) end
 	app.last_frame = app.last_frame - 0.05
 	app:render()
 	local lower_after, lower_glyphs = {}, 0
-	for row = 24, 42 do
+	for row = 4, 6 do
 		local line = app.renderer.previous:plain_line(row)
 		lower_after[#lower_after + 1] = line
 		for char in line:gmatch(utf8.charpattern) do if char ~= " " then lower_glyphs = lower_glyphs + 1 end end
 	end
-	if lower_glyphs < 20 then error("lower half of the flow field is empty") end
-	if table.concat(lower_before, "\n") == table.concat(lower_after, "\n") then error("lower half of the flow field is not moving") end
+	if lower_glyphs < 8 then error("lower half of the compact flow field is empty") end
+	if table.concat(lower_before, "\n") == table.concat(lower_after, "\n") then error("compact flow field is not moving") end
 end)
 
-test("completed assistant response settles kinetically in the center", function()
-	local now = 20
-	local state = tui.State.new({ clock = function() return now end })
-	state:assistant_complete("Supabase starter created. Build passes.")
-	now = 22
-	local app = tui.App.new({
-		backend = fake_backend({ width = 100, height = 32 }),
-		state = state,
-	})
+test("completed assistant response is committed intact above the strip", function()
+	local backend = fake_backend({ width = 248, height = 69, color = true })
+	local app = tui.App.new({ backend = backend })
+	app.renderer:mount("inline")
 	app:render(1 / 30)
-	local middle = {}
-	for row = 12, 19 do middle[#middle + 1] = app.renderer.previous:plain_line(row) end
-	assert_contains(table.concat(middle, "\n"), "Supabase starter created. Build passes.")
-end)
-
-test("long markdown response wraps cleanly without a full-width dead band", function()
-	local now = 30
-	local state = tui.State.new({ clock = function() return now end })
-	state:assistant_complete([[This is a small **Vite + Supabase starter app**. It provides:
+	backend.output = {}
+	app:commit_assistant([[This is a small **Vite + Supabase starter app**. It provides:
 
 - **Email magic-link authentication** via Supabase Auth.
 - A simple authenticated **notes app**.
@@ -273,24 +263,12 @@ test("long markdown response wraps cleanly without a full-width dead band", func
 - **Row-level security** so users can only access their own notes.
 
 The project includes environment setup and build instructions for local development.]])
-	now = 32
-	local app = tui.App.new({ backend = fake_backend({ width = 248, height = 69, color = true }), state = state })
-	for _ = 1, 24 do app:render(1 / 30) end
-	if #app.response_layout < 5 then error("tall response used too few lines") end
-	local settled, outside_glyphs = {}, 0
-	for _, region in ipairs(app.response_layout) do
-		local line = app.renderer.previous:plain_line(region.row)
-		settled[#settled + 1] = line
-		for col = 1, 248 do
-			if col < region.col - 3 or col > region.col + region.width + 2 then
-				if app.renderer.previous.rows[region.row][col].char ~= " " then outside_glyphs = outside_glyphs + 1 end
-			end
-		end
-	end
-	local text = table.concat(settled, "\n")
-	assert_contains(text, "• Email magic-link authentication")
-	if text:find("**", 1, true) then error("markdown emphasis leaked into terminal copy") end
-	if outside_glyphs < 20 then error("response mask still forms a full-width dead band") end
+	local output = table.concat(backend.output)
+	assert_contains(output, "lca › This is a small **Vite + Supabase starter app**")
+	assert_contains(output, "- **Email magic-link authentication** via Supabase Auth.")
+	assert_contains(output, "The project includes environment setup and build instructions")
+	assert_eq(app.renderer.inline_height, 0)
+	assert_eq(app.renderer.previous, nil)
 end)
 
 test("stream window never slices through a UTF-8 bullet", function()
@@ -300,7 +278,7 @@ test("stream window never slices through a UTF-8 bullet", function()
 	assert_eq(utf8.len(state.assistant_stream) ~= nil, true)
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 32 }), state = state })
 	local ok, err = pcall(function() app:render(1 / 30) end)
-	if not ok then error("UTF-8 stream crashed kinetic rendering: " .. tostring(err)) end
+	if not ok then error("UTF-8 stream crashed strip rendering: " .. tostring(err)) end
 end)
 
 test("submitted input clears the dock and is acknowledged before work", function()
@@ -310,17 +288,19 @@ test("submitted input clears the dock and is acknowledged before work", function
 	local submitted = app.editor:submit()
 	app.state:submit(submitted)
 	app.busy = true
+	app.renderer:mount("inline")
+	app:commit_user(submitted)
 	app:render(1 / 30)
 	local buffer = app.renderer.previous
-	assert_contains(buffer:plain_line(2), "you · explain this project")
-	if buffer:plain_line(30):find("explain this project", 1, true) then
+	assert_contains(table.concat(backend.output), "you › explain this project")
+	if buffer:plain_line(8):find("explain this project", 1, true) then
 		error("submitted text remained in the input dock")
 	end
-	assert_eq(buffer.rows[30][10].style.attrs[1], "reverse")
-	assert_contains(buffer:plain_line(31), "working")
+	assert_eq(buffer.rows[8][10].style.attrs[1], "reverse")
+	assert_contains(buffer:plain_line(9), "working")
 end)
 
-test("top area avoids duplicate assistant text and expires old notices", function()
+test("expired notices disappear from the compact status row", function()
 	local now = 40
 	local state = tui.State.new({ clock = function() return now end })
 	state.prompt = "whats this project"
@@ -330,15 +310,9 @@ test("top area avoids duplicate assistant text and expires old notices", functio
 	state:listen()
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 32 }), state = state })
 	app:render(1 / 30)
-	assert_contains(app.renderer.previous:plain_line(1), "LCA · listening")
-	assert_contains(app.renderer.previous:plain_line(2), "you · whats this project")
-	local top = table.concat({
-		app.renderer.previous:plain_line(1),
-		app.renderer.previous:plain_line(2),
-		app.renderer.previous:plain_line(3),
-	}, "\n")
-	if top:find("assistant ·", 1, true) then error("assistant response was duplicated at the top") end
-	if top:find("session cleared", 1, true) then error("expired notice remained at the top") end
+	local status = app.renderer.previous:plain_line(9)
+	assert_contains(status, "LCA · listening")
+	if status:find("session cleared", 1, true) then error("expired notice remained in status row") end
 end)
 
 io.write("\n" .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed\n")
