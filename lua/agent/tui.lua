@@ -30,6 +30,19 @@ end
 local function response_text(value, limit)
 	value = tostring(value or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
 	value = value:gsub("[%z\1-\8\11\12\14-\31]", "")
+	if not utf8.len(value) then
+		local repaired, position = {}, 1
+		while position <= #value do
+			local ok, codepoint = pcall(utf8.codepoint, value, position, position)
+			if ok then
+				local char = utf8.char(codepoint)
+				repaired[#repaired + 1], position = char, position + #char
+			else
+				repaired[#repaired + 1], position = "�", position + 1
+			end
+		end
+		value = table.concat(repaired)
+	end
 	limit = limit or 6000
 	if #value <= limit then return value end
 	local result, bytes = {}, 0
@@ -144,10 +157,7 @@ function State:model_stream(text)
 	self.assistant_completed_at = nil
 	self.mode = "streaming"
 	self.model_phase = "assistant streaming"
-	self.assistant_stream = self.assistant_stream .. text
-	if #self.assistant_stream > 1200 then
-		self.assistant_stream = self.assistant_stream:sub(-1200)
-	end
+	self.assistant_stream = response_text(self.assistant_stream .. text, 6000)
 end
 
 function State:reviewing(info)
@@ -780,7 +790,11 @@ function App:drive_frame()
 	local now = socket.gettime()
 	if not self.next_frame_at or now >= self.next_frame_at then
 		local ok, err = pcall(function() self:render(1 / 30) end)
-		if not ok then self.fatal_error = err; self.exit_requested = true end
+		if not ok then
+			self.fatal_error = err
+			self.exit_requested = true
+			core.debug_log("[tui] fatal frame error: %s", tostring(err))
+		end
 		local finished = socket.gettime()
 		self.next_frame_at = (self.next_frame_at or now) + 1 / 30
 		while self.next_frame_at <= finished do self.next_frame_at = self.next_frame_at + 1 / 30 end
@@ -818,6 +832,7 @@ function tui.with_terminal(terminal, renderer, callback)
 		return nil, mount_err
 	end
 	local results = table.pack(xpcall(callback, debug.traceback))
+	if not results[1] then core.debug_log("[tui] fatal error: %s", tostring(results[2])) end
 	pcall(function() renderer.backend:write(lcatui.ansi.end_synchronized_update) end)
 	pcall(function() renderer:unmount() end)
 	pcall(function() terminal:stop() end)
@@ -950,7 +965,10 @@ function tui.run(options)
 		save_history(history_path, app.editor.history)
 		return true
 	end)
-	if not result then return nil, err end
+	if not result then
+		core.debug_log("[tui] exiting after fatal error: %s", tostring(err))
+		return nil, err
+	end
 	return true
 end
 

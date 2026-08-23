@@ -293,6 +293,16 @@ The project includes environment setup and build instructions for local developm
 	if outside_glyphs < 20 then error("response mask still forms a full-width dead band") end
 end)
 
+test("stream window never slices through a UTF-8 bullet", function()
+	local state = tui.State.new({ clock = function() return 50 end })
+	local payload = "x•" .. string.rep("b", 1198)
+	state:model_stream(payload)
+	assert_eq(utf8.len(state.assistant_stream) ~= nil, true)
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 32 }), state = state })
+	local ok, err = pcall(function() app:render(1 / 30) end)
+	if not ok then error("UTF-8 stream crashed kinetic rendering: " .. tostring(err)) end
+end)
+
 test("submitted input clears the dock and is acknowledged before work", function()
 	local backend = fake_backend({ width = 100, height = 32 })
 	local app = tui.App.new({ backend = backend })
