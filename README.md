@@ -54,6 +54,7 @@ lca run "add the feature" --model gpt-5.6-sol
 lca repl
 lca --tui
 lca repl --tui
+lca --tui --tui-effect filament
 ```
 
 `--tui` enables an opt-in compact living-current strip: six animated activity
@@ -65,13 +66,22 @@ and change them. Current plan-task names drift through more slowly, while
 commands and verification remain compact signals in the same current. The TUI
 requires a POSIX terminal and the sibling `lcatui` Lua rock.
 
+The animation engine has three interchangeable treatments: `filament` (the
+default coherent spring-like current), `contours` (edge arcs and vortices), and
+`drift` (a sparse particle current). Choose one at launch with
+`--tui-effect NAME`, set `LCA_TUI_EFFECT`, or switch live with `/effect NAME`.
+Entering `/effect` by itself shows the current choice. Files, tasks, tool
+identity, and failure/success state are preserved when the visual treatment is
+changed.
+
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool
 calls. Use `--xml-tools` to compare or temporarily fall back; `--native-tools`
 can opt another Codex model into the same adapter.
 
 Useful REPL commands: `/help`, `/status`, `/model`, `/reasoning`, `/clear`,
-`/exit`.
+`/exit`. In TUI mode, `/effect` and `/effect NAME` inspect or change the
+animation treatment.
 
 Codex/OpenAI uses the Responses WebSocket transport by default, with HTTPS/SSE
 fallback on transport failure. To force the old HTTPS/SSE path:

@@ -19,7 +19,7 @@ local options = {
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--tui] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
+  lua bin/repl.lua [--tui] [--tui-effect filament|contours|drift] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
 ]])
 	os.exit(2)
 end
@@ -53,6 +53,11 @@ while index <= #arg do
 	elseif arg[index] == "--tui" then
 		options.tui = true
 		index = index + 1
+	elseif arg[index] == "--tui-effect" then
+		options.tui = true
+		options.tui_effect = arg[index + 1]
+		if not options.tui_effect then usage() end
+		index = index + 2
 	elseif arg[index] == "--help" then
 		usage()
 	else

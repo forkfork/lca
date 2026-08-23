@@ -95,8 +95,8 @@ end
 local function usage()
 	io.stderr:write([[
 Usage:
-  lca [--tui] [repl options]
-  lca repl [--tui] [repl options]
+  lca [--tui] [--tui-effect filament|contours|drift] [repl options]
+  lca repl [--tui] [--tui-effect filament|contours|drift] [repl options]
   lca run <prompt> [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools]
   lca login <openai|bedrock|deepseek> [login options]
   lca auth <login|refresh> [auth options]
@@ -104,6 +104,7 @@ Usage:
 Examples:
   lca
   lca --tui
+  lca --tui --tui-effect filament
   lca repl --tui
   lca repl --model gpt-5.6-sol
   lca run "Explain this project"
@@ -156,7 +157,7 @@ if local_file then
 	local require_tui = false
 	if subcommand == "repl" then
 		for index = start_index, #arg do
-			if arg[index] == "--tui" then require_tui = true; break end
+			if arg[index] == "--tui" or arg[index] == "--tui-effect" then require_tui = true; break end
 		end
 	end
 	executable = lua_command_prefix(require_tui) .. " " .. shell_quote(target.local_path)

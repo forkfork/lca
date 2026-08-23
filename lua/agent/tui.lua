@@ -15,6 +15,8 @@ local FRAME_SECONDS = 1 / 25
 local FRAME_MILLISECONDS = 40
 local FILE_COLUMNS_PER_SECOND = 21.6
 local TASK_COLUMNS_PER_SECOND = 14
+local EFFECTS = { filament = true, contours = true, drift = true }
+local EFFECT_NAMES = { "filament", "contours", "drift" }
 
 local function clamp(value, low, high)
 	return math.max(low, math.min(high, value))
@@ -636,6 +638,10 @@ local STRIP_ROWS = STRIP_FLOW_ROWS + 3
 function App.new(opts)
 	opts = opts or {}
 	local backend = opts.backend or lcatui.backends.posix.new()
+	local effect = opts.effect or "filament"
+	if not EFFECTS[effect] then
+		error("unknown TUI effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")")
+	end
 	return setmetatable({
 		backend = backend,
 		terminal = opts.terminal or lcatui.Terminal.new(backend),
@@ -647,6 +653,7 @@ function App.new(opts)
 		editor = opts.editor or Editor.new(opts.history),
 		input = nil,
 		flow = nil,
+		effect = effect,
 		flow_width = nil,
 		flow_height = nil,
 		flow_time = 0,
@@ -688,11 +695,26 @@ end
 
 function App:_flow_for(width, rows)
 	if not self.flow or self.flow_width ~= width or self.flow_height ~= rows then
-		self.flow = lcatui.Current.new(width, rows, { seed = 19 })
+		self.flow = lcatui.Current.new(width, rows, { seed = 19, mode = self.effect })
 		self.flow_width, self.flow_height = width, rows
 		self.flow_time = 0
 	end
 	return self.flow
+end
+
+function App:set_effect(effect)
+	if not EFFECTS[effect] then
+		return nil, "unknown effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")"
+	end
+	self.effect = effect
+	if self.flow and self.flow.set_mode then
+		local ok, err = self.flow:set_mode(effect)
+		if not ok then return nil, err end
+	else
+		self.flow = nil
+	end
+	self.state:notice("animation · " .. effect)
+	return true
 end
 
 function App:render(frame_dt)
@@ -737,13 +759,16 @@ function App:render(frame_dt)
 			end
 		end
 		vortices[#vortices + 1] = {
+			id = tool.id,
 			x = x, y = row, radius = tool.status == "active" and 7 or 4,
 			strength = tool.status == "active" and 1.2 or 0.25,
+			failed = tool.status == "error",
+			resolved = tool.status == "ok",
 			direction = (#tool.id % 2 == 0) and -1 or 1,
 		}
 	end
 	if failed then
-		vortices[#vortices + 1] = { x = width * 0.5, y = world_rows * 0.5, radius = 15, strength = 1.7, direction = -1 }
+		vortices[#vortices + 1] = { id = "failure", x = width * 0.5, y = world_rows * 0.5, radius = 15, strength = 1.7, direction = -1, failed = true }
 	end
 	flow:step(dt, {
 		activity = active and 0.88 or listening and (0.19 + listening_breath * 0.08) or 0.18,
@@ -970,6 +995,7 @@ function tui.run(options)
 		terminal = options.terminal,
 		renderer = options.renderer,
 		history = load_history(history_path),
+		effect = options.tui_effect or os.getenv("LCA_TUI_EFFECT"),
 	})
 	local facade = command_ui(app.state)
 	local last_auto_compact_messages = 0
@@ -1004,6 +1030,15 @@ function tui.run(options)
 				app.state.prompt = compact_text(line, 240)
 				app.state.model_phase = "running command"
 				app:drive_frame()
+				local requested_effect = line:match("^/effect%s+([%w_-]+)%s*$")
+				if line:match("^/effect%s*$") then
+					app.state:notice("animation · " .. app.effect .. " · choose " .. table.concat(EFFECT_NAMES, ", "))
+					goto continue
+				elseif line:match("^/effect[%s]") then
+					local changed, effect_err = app:set_effect(requested_effect)
+					if not changed then app.state:notice(effect_err, "error") end
+					goto continue
+				end
 				local command_result = commands.dispatch(line, session, facade)
 				if command_result == true then break end
 				if command_result ~= "run" then goto continue end
