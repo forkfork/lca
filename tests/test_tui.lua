@@ -247,5 +247,20 @@ test("render uses the real tall terminal size for flow and input dock", function
 	if table.concat(lower_before, "\n") == table.concat(lower_after, "\n") then error("lower half of the flow field is not moving") end
 end)
 
+test("completed assistant response settles kinetically in the center", function()
+	local now = 20
+	local state = tui.State.new({ clock = function() return now end })
+	state:assistant_complete("Supabase starter created. Build passes.")
+	now = 22
+	local app = tui.App.new({
+		backend = fake_backend({ width = 100, height = 32 }),
+		state = state,
+	})
+	app:render(1 / 30)
+	local middle = {}
+	for row = 12, 19 do middle[#middle + 1] = app.renderer.previous:plain_line(row) end
+	assert_contains(table.concat(middle, "\n"), "Supabase starter created. Build passes.")
+end)
+
 io.write("\n" .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed\n")
 if failed > 0 then os.exit(1) end

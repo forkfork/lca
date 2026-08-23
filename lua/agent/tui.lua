@@ -71,6 +71,9 @@ function State.new(opts)
 		prompt = "",
 		assistant = "",
 		assistant_stream = "",
+		assistant_started_at = nil,
+		assistant_updated_at = nil,
+		assistant_completed_at = nil,
 		notices = {},
 		plan = nil,
 		tools = {},
@@ -118,6 +121,10 @@ end
 
 function State:model_stream(text)
 	if not text or text == "" then return end
+	local now = self.clock()
+	if self.assistant_stream == "" then self.assistant_started_at = now end
+	self.assistant_updated_at = now
+	self.assistant_completed_at = nil
 	self.mode = "streaming"
 	self.model_phase = "assistant streaming"
 	self.assistant_stream = self.assistant_stream .. text
@@ -207,6 +214,7 @@ end
 function State:assistant_complete(text)
 	self.assistant = compact_text(text, 1600)
 	self.assistant_stream = ""
+	self.assistant_completed_at = self.clock()
 	self.mode = "complete"
 	self.model_phase = "assistant complete"
 end
@@ -434,6 +442,27 @@ local function center(buffer, row, text, style)
 	buffer:write(row, col, text, style, buffer.width - col + 1)
 end
 
+local function response_lines(text, width, maximum_lines)
+	local limit = math.max(24, math.min(96, width - 20))
+	local words, lines, line = {}, {}, ""
+	for word in compact_text(text, limit * maximum_lines):gmatch("%S+") do words[#words + 1] = word end
+	for _, word in ipairs(words) do
+		local candidate = line == "" and word or (line .. " " .. word)
+		if lcatui.width.string(candidate) <= limit then
+			line = candidate
+		else
+			if line ~= "" then lines[#lines + 1] = line end
+			line = lcatui.width.truncate(word, limit)
+			if #lines == maximum_lines then break end
+		end
+	end
+	if line ~= "" and #lines < maximum_lines then lines[#lines + 1] = line end
+	if #lines == maximum_lines and #table.concat(lines, " ") < #compact_text(text, limit * maximum_lines) then
+		lines[#lines] = lcatui.width.truncate(lines[#lines], limit - 1) .. "…"
+	end
+	return lines
+end
+
 local App = {}
 App.__index = App
 
@@ -456,6 +485,8 @@ function App.new(opts)
 		flow_width = nil,
 		flow_height = nil,
 		flow_time = 0,
+		response_entities = nil,
+		response_key = nil,
 		size_provider = opts.size_provider,
 		logged_size = nil,
 		logged_layout = nil,
@@ -502,11 +533,31 @@ function App:_flow_for(width, rows)
 	return self.flow
 end
 
+function App:_response_for(text, width, world_rows)
+	local lines = response_lines(text, width, 3)
+	local key = table.concat(lines, "\n") .. "\0" .. tostring(width) .. "x" .. tostring(world_rows)
+	if key ~= self.response_key then
+		local entities = {}
+		local first_row = math.max(4, math.floor(world_rows * 0.50) - math.floor((#lines - 1) / 2))
+		for index, line in ipairs(lines) do
+			local col = math.max(3, math.floor((width - lcatui.width.string(line)) / 2) + 1)
+			local scattered = lcatui.kinetic.scatter(line, first_row + index - 1, col, {
+				width = width, height = world_rows,
+			}, 47 + index * 19)
+			for _, entity in ipairs(scattered) do entities[#entities + 1] = entity end
+		end
+		self.response_key, self.response_entities = key, entities
+	end
+	return self.response_entities, lines
+end
+
 function App:render(frame_dt)
 	local width, height = self:_size()
 	local dock_top = height - 3
 	local world_rows = dock_top - 1
 	local assistant = self.state.assistant_stream ~= "" and self.state.assistant_stream or self.state.assistant
+	local response_visible = assistant ~= "" and (self.state.mode == "streaming"
+		or self.state.mode == "complete" or self.state.mode == "listening")
 	local notice = self.state.notices[#self.state.notices]
 	local top_reserved = 1
 	if self.state.prompt ~= "" then top_reserved = top_reserved + 1 end
@@ -564,7 +615,9 @@ function App:render(frame_dt)
 		threshold = 0.13,
 		style = field_style,
 		mask = function(_, y)
-			return y > top_reserved and y < world_rows
+			if not (y > top_reserved and y < world_rows) then return false end
+			if response_visible and math.abs(y - world_rows * 0.50) < 3.2 then return false end
+			return true
 		end,
 	})
 
@@ -616,6 +669,20 @@ function App:render(frame_dt)
 			local mark = item.status == "completed" and "✓" or item.status == "in_progress" and "◉" or "○"
 			buffer:write(row + index - 1, 3, mark .. " " .. compact_text(item.step, math.floor(width * 0.42)), rgb(144, 119, 178), math.floor(width * 0.45))
 		end
+	end
+
+	if response_visible then
+		local entities = self:_response_for(assistant, width, world_rows)
+		local response_now = self.state.clock()
+		local started = self.state.mode == "streaming" and self.state.assistant_updated_at
+			or self.state.assistant_completed_at or self.state.assistant_started_at or response_now
+		local settle = clamp((response_now - started) / 1.25, 0, 1)
+		lcatui.kinetic.draw(buffer, entities, settle, {
+			style = function(_, amount)
+				return rgb(122 + math.floor(amount * 104), 171 + math.floor(amount * 48),
+					176 + math.floor(amount * 55), { amount > 0.88 and "bold" or "dim" })
+			end,
+		})
 	end
 
 	buffer:write(dock_top, 1, string.rep("─", width), rgb(49, 65, 76), width)
