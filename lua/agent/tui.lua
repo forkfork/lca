@@ -638,7 +638,7 @@ local STRIP_ROWS = STRIP_FLOW_ROWS + 3
 function App.new(opts)
 	opts = opts or {}
 	local backend = opts.backend or lcatui.backends.posix.new()
-	local effect = opts.effect or "filament"
+	local effect = opts.effect or "drift"
 	if not EFFECTS[effect] then
 		error("unknown TUI effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")")
 	end

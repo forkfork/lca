@@ -66,9 +66,9 @@ and change them. Current plan-task names drift through more slowly, while
 commands and verification remain compact signals in the same current. The TUI
 requires a POSIX terminal and the sibling `lcatui` Lua rock.
 
-The animation engine has three interchangeable treatments: `filament` (the
-default coherent spring-like current), `contours` (edge arcs and vortices), and
-`drift` (a sparse particle current). Choose one at launch with
+The animation engine has three interchangeable treatments: `drift` (the
+default sparse particle current), `filament` (a coherent spring-like current),
+and `contours` (edge arcs and vortices). Choose one at launch with
 `--tui-effect NAME`, set `LCA_TUI_EFFECT`, or switch live with `/effect NAME`.
 Entering `/effect` by itself shows the current choice. Files, tasks, tool
 identity, and failure/success state are preserved when the visual treatment is

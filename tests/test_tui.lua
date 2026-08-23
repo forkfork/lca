@@ -242,6 +242,13 @@ test("invalid launch effect fails clearly", function()
 	assert_contains(err, "unknown TUI effect 'lava-lamp'")
 end)
 
+test("drift is the default animation effect", function()
+	local app = tui.App.new({ backend = fake_backend() })
+	app:render(0.1)
+	assert_eq(app.effect, "drift")
+	assert_eq(app.flow.mode, "drift")
+end)
+
 test("filename objects morph and bounce instead of wrapping", function()
 	local backend = fake_backend({ width = 120, height = 32 })
 	local state = tui.State.new({ clock = function() return 10 end })
@@ -367,7 +374,7 @@ test("render caps a tall terminal to six flow rows plus the dock", function()
 		lower_after[#lower_after + 1] = line
 		for char in line:gmatch(utf8.charpattern) do if char ~= " " then lower_glyphs = lower_glyphs + 1 end end
 	end
-	if lower_glyphs < 8 then error("lower half of the compact flow field is empty") end
+	if lower_glyphs < 3 then error("lower half of the compact flow field is empty") end
 	if table.concat(lower_before, "\n") == table.concat(lower_after, "\n") then error("compact flow field is not moving") end
 end)
 
