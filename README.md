@@ -83,6 +83,11 @@ verification pulse before settling back to dust.
 After a completed turn, the resting summary shows end-to-end work time and one
 rounded final model-context number, such as `✓ 48s · 56k tokens`, instead of a
 raw process result such as `exit 0`.
+Submitting a request sends a short text ripple through the current. When recent
+file changes are followed by verification, small pulses travel from those file
+objects into the verification tool. The completed time/token summary first
+crystallizes from scattered characters, then remains readable until the next
+request.
 
 GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
 Lua tool execution and tagged-edit safety while avoiding XML-emulated tool

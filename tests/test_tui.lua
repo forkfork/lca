@@ -222,11 +222,43 @@ test("completed turn rests on elapsed time and one context token number", functi
 	state:listen()
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
 	app:render(0.1)
+	local forming = app.renderer.previous:plain_line(3)
+	if forming:find("✓ 48s · 56k tokens", 1, true) then error("completion summary did not crystallize") end
+	now = now + 1
+	app:render(0.9)
 	local middle = app.renderer.previous:plain_line(3)
 	assert_contains(middle, "✓ 48s · 56k tokens")
 	if middle:find("exit 0", 1, true) then error("raw exit code displaced the completion summary") end
 	state:submit("next request")
 	assert_eq(state.completion_summary, nil)
+end)
+
+test("submitted request ripples through the current", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:submit("explain the renderer timing")
+	local ripple = state.streams[#state.streams]
+	assert_eq(ripple.kind, "request")
+	assert_eq(ripple.text, "› explain the renderer timing")
+	assert_eq(ripple.turn, 1)
+	assert_eq(ripple.duration, 2.6)
+end)
+
+test("recent changed files hand off into verification", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	state:submit("change and verify")
+	state:tool_event(finish("edit-a", "edit", { path = "lua/agent/tui.lua" }, { is_error = false, summary = "replaced 2 lines" }))
+	state:tool_event(finish("write-b", "write", { path = "tests/test_tui.lua" }, { is_error = false, summary = "wrote 4 lines" }))
+	state:tool_event(start("build", "run", { command = "make test" }))
+	assert_eq(#state.handoffs, 2)
+	assert_eq(state.handoffs[1].target.id, "build")
+	local linked = {}
+	for _, handoff in ipairs(state.handoffs) do linked[handoff.source.text] = true end
+	assert_eq(linked["tui.lua"], true)
+	assert_eq(linked["test_tui.lua"], true)
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	app:render(0.2)
+	assert_eq(#state.handoffs, 2)
+	if state.handoffs[1].age <= 0 then error("handoff pulse did not advance") end
 end)
 
 test("parallel tool fragments occupy lanes and move with the current", function()

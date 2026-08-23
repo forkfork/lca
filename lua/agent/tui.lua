@@ -132,6 +132,9 @@ function State.new(opts)
 		tool_sequence = 0,
 		streams = {},
 		stream_sequence = 0,
+		handoffs = {},
+		handoff_sequence = 0,
+		turn_sequence = 0,
 		failure = nil,
 		verification = nil,
 		disturbance = 0,
@@ -161,6 +164,7 @@ function State:_stream(text, kind, tool, duration, meta)
 		task = meta.task == true,
 		verb = meta.verb,
 		task_status = meta.status,
+		turn = self.turn_sequence,
 	}
 	self.streams[#self.streams + 1] = stream
 	while #self.streams > 24 do table.remove(self.streams, 1) end
@@ -234,6 +238,7 @@ function State:set_input(text, cursor)
 end
 
 function State:submit(text)
+	self.turn_sequence = self.turn_sequence + 1
 	self.prompt = compact_text(text, 240)
 	self.assistant_stream = ""
 	self.failure = nil
@@ -243,8 +248,10 @@ function State:submit(text)
 	self.cancelled = false
 	self.turn_started_at = self.clock()
 	self.completion_summary = nil
+	self.handoffs = {}
 	self.mode = "waiting"
 	self.model_phase = "model waiting"
+	self:_stream("› " .. self.prompt, "request", nil, 2.6)
 end
 
 function State:model_waiting(label)
@@ -310,6 +317,21 @@ function State:tool_event(event)
 			self:_stream(basename(event_args.path), "file_active", tool, nil, { file = true, verb = event.name })
 		else
 			self:_stream(tostring(event.name) .. (tool.args ~= "" and (" · " .. tool.args) or ""), "active", tool)
+		end
+		if event.name == "run" or event.name == "shell" then
+			local linked = 0
+			for index = #self.streams, 1, -1 do
+				local source = self.streams[index]
+				if source.turn == self.turn_sequence and source.kind == "file_changed" then
+					self.handoff_sequence = self.handoff_sequence + 1
+					self.handoffs[#self.handoffs + 1] = {
+						id = self.handoff_sequence, source = source, target = tool,
+						age = 0, duration = 1.5,
+					}
+					linked = linked + 1
+					if linked >= 3 then break end
+				end
+			end
 		end
 	else
 		tool = self:_resolve_tool(event)
@@ -673,6 +695,27 @@ local function center(buffer, row, text, style)
 	buffer:write(row, col, text, style, buffer.width - col + 1)
 end
 
+local function crystallize(buffer, row, text, age, style)
+	local chars = lcatui.width.chars(text)
+	local text_width = lcatui.width.string(text)
+	local target_start = math.max(1, math.floor((buffer.width - text_width) / 2) + 1)
+	local progress = clamp((tonumber(age) or 0) / 0.85, 0, 1)
+	if progress >= 1 then center(buffer, row, text, style); return end
+	local eased = 1 - (1 - progress) ^ 3
+	local target_x = target_start
+	for index, char in ipairs(chars) do
+		local width = math.max(0, lcatui.width.string(char))
+		if char ~= " " and width > 0 then
+			local start_x = 1 + ((index * 37 + #chars * 11) % math.max(1, buffer.width))
+			local start_y = 1 + ((index * 5 + #chars) % math.max(1, row * 2 - 1))
+			local x = clamp(math.floor(start_x + (target_x - start_x) * eased + 0.5), 1, buffer.width)
+			local y = clamp(math.floor(start_y + (row - start_y) * eased + 0.5), 1, buffer.height)
+			buffer:write(y, x, char, style, width)
+		end
+		target_x = target_x + width
+	end
+end
+
 local FILE_MORPHS = {
 	{ "‹", "›" }, { "{", "}" }, { "⟨", "⟩" }, { "[", "]" },
 }
@@ -830,6 +873,12 @@ function App:render(frame_dt)
 		if not stream.duration or stream.age <= stream.duration then live_streams[#live_streams + 1] = stream end
 	end
 	self.state.streams = live_streams
+	local live_handoffs = {}
+	for _, handoff in ipairs(self.state.handoffs) do
+		handoff.age = handoff.age + dt
+		if handoff.age <= handoff.duration then live_handoffs[#live_handoffs + 1] = handoff end
+	end
+	self.state.handoffs = live_handoffs
 	local listening = self.state.mode == "listening"
 	local listening_breath = listening and (0.5 + 0.5 * math.sin(self.flow_time * 1.7)) or 0
 	local failed = self.state.disturbance > 0
@@ -903,6 +952,25 @@ function App:render(frame_dt)
 		style = field_style,
 	})
 
+	for _, handoff in ipairs(live_handoffs) do
+		local source_display = stream_display(handoff.source)
+		local source_x = stream_position(handoff.source, width, source_display)
+		local source_y = clamp(handoff.source.lane or 1, 1, world_rows)
+		local target_x, target_y = tool_position(handoff.target.id, width, 1, world_rows)
+		target_y = clamp(handoff.target.lane or target_y, 1, world_rows)
+		for mark = 1, 4 do
+			local fraction = mark / 5
+			local x = clamp(math.floor(source_x + (target_x - source_x) * fraction + 0.5), 1, width)
+			local y = clamp(math.floor(source_y + (target_y - source_y) * fraction + 0.5), 1, world_rows)
+			buffer:set(y, x, "·", rgb(93, 119, 147, { "dim" }))
+		end
+		local progress = clamp(handoff.age / handoff.duration, 0, 1)
+		local eased = 1 - (1 - progress) ^ 2
+		local pulse_x = clamp(math.floor(source_x + (target_x - source_x) * eased + 0.5), 1, width)
+		local pulse_y = clamp(math.floor(source_y + (target_y - source_y) * eased + 0.5), 1, world_rows)
+		buffer:set(pulse_y, pulse_x, "◆", rgb(104, 218, 207, { "bold" }))
+	end
+
 	for _, stream in ipairs(live_streams) do
 		local row = clamp(stream.lane or 1, 1, world_rows)
 		local display = stream_display(stream)
@@ -913,6 +981,7 @@ function App:render(frame_dt)
 			or stream.kind == "task" and rgb(165, 137, 202)
 			or stream.kind == "file_read" and rgb(104, 190, 196)
 			or (stream.kind == "active" or stream.kind == "file_active") and rgb(72, 221, 228, { "bold" })
+			or stream.kind == "request" and rgb(218, 158, 93, { "bold" })
 			or rgb(132, 177, 181)
 		if stream.file then
 			local wake_style = stream.kind == "file_error" and rgb(176, 61, 91, { "dim" })
@@ -932,7 +1001,8 @@ function App:render(frame_dt)
 	if self.state.failure then
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
 	elseif self.state.completion_summary then
-		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.completion_summary, rgb(91, 224, 169, { "bold" }))
+		crystallize(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.completion_summary,
+			state_now - (self.state.assistant_completed_at or state_now), rgb(91, 224, 169, { "bold" }))
 	elseif self.state.verification then
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "◆ " .. compact_text(self.state.verification, width - 12), rgb(91, 224, 169, { "bold" }))
 	elseif self.state.cancelled then
