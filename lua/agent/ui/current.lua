@@ -29,14 +29,13 @@ local function line(buffer, x1, y1, x2, y2, cell_style, mask)
   end
 end
 
-local MODES = { contours = true, drift = true, filament = true }
+local MODES = { contours = true, drift = true }
 
 function Current.new(cols, rows, opts)
   opts = opts or {}
   local mode = MODES[opts.mode] and opts.mode or "contours"
   return setmetatable({
     cols = cols, rows = rows, time = 0, actors = {}, mode = mode,
-    filament = {}, filament_accumulator = 0,
     morph = { energy = 0, tools = 0, failure = 0, resolution = 0, listening = 1 },
   }, Current)
 end
@@ -48,81 +47,7 @@ function Current:set_mode(mode)
 end
 
 function Current.modes()
-  return { "filament", "contours", "drift" }
-end
-
-local function filament_samples(current)
-  local count = math.max(12, math.floor(current.cols / 2))
-  while #current.filament < count do
-    local index = #current.filament + 1
-    current.filament[index] = { y = math.sin(index * 0.47) * 0.16, velocity = 0 }
-  end
-  while #current.filament > count do table.remove(current.filament) end
-  return current.filament
-end
-
-local function actor_sample(actor, count)
-  if actor.x then return clamp(math.floor((actor.x - 1) / math.max(1, actor._cols or 1) * (count - 1)) + 1, 1, count) end
-  return actor.hash % count + 1
-end
-
-function Current:_step_filament(dt, scene)
-  local samples = filament_samples(self)
-  self.filament_accumulator = self.filament_accumulator + math.min(0.12, math.max(0, dt))
-  while self.filament_accumulator >= 1 / 60 do
-    local step = 1 / 60
-    local accelerations = {}
-    for index, sample in ipairs(samples) do
-      local left = samples[index - 1] or samples[#samples]
-      local right = samples[index + 1] or samples[1]
-      local laplacian = left.y + right.y - sample.y * 2
-      local breath = scene.listening and 0.16 or 0.28
-      local ambient = math.sin(self.time * (scene.listening and 1.15 or 2.1) - index * 0.31) * breath
-      accelerations[index] = laplacian * 22 - sample.y * 3.4 - sample.velocity * 4.8 + ambient
-    end
-    for _, actor in pairs(self.actors) do
-      local centre = actor_sample(actor, #samples)
-      local spread = math.max(2, math.floor((actor.radius or 7) / 2))
-      local polarity = (actor.failed or scene.failed) and -1 or 1
-      local pulse = math.sin(self.time * (actor.resolved and 3.2 or 5.3) + actor.hash * 0.031)
-      local strength = (actor.strength or actor.amplitude or 0.8) * actor.presence
-      for offset = -spread, spread do
-        local index = ((centre + offset - 1) % #samples) + 1
-        local falloff = 1 - math.abs(offset) / (spread + 1)
-        accelerations[index] = accelerations[index] + polarity * strength * falloff * (2.2 + pulse)
-      end
-    end
-    for index, sample in ipairs(samples) do
-      sample.velocity = sample.velocity + accelerations[index] * step
-      sample.y = clamp(sample.y + sample.velocity * step, -math.max(1, self.rows * 0.38), math.max(1, self.rows * 0.38))
-    end
-    self.filament_accumulator = self.filament_accumulator - step
-  end
-end
-
-function Current:_render_filament(buffer, scene)
-  local samples = filament_samples(self)
-  local baseline = (self.rows + 1) / 2
-  local previous_row
-  for x = 1, self.cols do
-    local position = 1 + (x - 1) / math.max(1, self.cols - 1) * (#samples - 1)
-    local left = math.floor(position)
-    local fraction = position - left
-    local a, b = samples[left], samples[math.min(#samples, left + 1)]
-    local offset = a.y + (b.y - a.y) * fraction
-    local travelling = math.sin(x * 0.115 - self.time * (scene.listening and 1.4 or 3.1))
-    offset = offset + travelling * (scene.listening and 0.62 or 0.34)
-    local row = clamp(math.floor(baseline + offset + 0.5), 1, self.rows)
-    local delta = previous_row and row - previous_row or 0
-    local glyph = delta > 0 and "╲" or delta < 0 and "╱" or (x % 11 == 0 and "━" or "─")
-    local intensity = clamp(0.32 + math.abs(offset) * 0.24 + math.abs(delta) * 0.18, 0.2, 1)
-    buffer:set(row, x, glyph, style_for(scene, intensity, {}))
-    if (x + math.floor(self.time * 9)) % 19 == 0 then
-      local halo_row = clamp(row + (((x + math.floor(self.time * 3)) % 2 == 0) and -1 or 1), 1, self.rows)
-      if halo_row ~= row then buffer:set(halo_row, x, "·", style_for(scene, 0.16, {})) end
-    end
-    previous_row = row
-  end
+  return { "contours", "drift" }
 end
 
 local function mix(a, b, amount) return a + (b - a) * amount end
@@ -200,13 +125,11 @@ function Current:step(dt, scene)
   morph.failure = ease(morph.failure, scene.failed and 1 or 0, scene.failed and 5.5 or 1.8, dt)
   morph.resolution = ease(morph.resolution, scene.proof and scene.proof > 0 and not scene.listening and 1 or 0, 3.4, dt)
   morph.listening = ease(morph.listening, scene.listening and 1 or 0, 1.7, dt)
-  if self.mode == "filament" then self:_step_filament(dt, scene) end
   return self
 end
 
 function Current:render(buffer, scene)
   scene = scene or {}
-  if self.mode == "filament" then self:_render_filament(buffer, scene); return buffer end
   if self.mode == "drift" then self:_render_drift(buffer, scene); return buffer end
   local core_x = math.floor(scene.core_x or self.cols * 0.53)
   local core_y = math.floor(scene.core_y or self.rows * 0.52)

@@ -1,7 +1,7 @@
 local effects = {}
-
-local NAMES = { "drift", "mycelium", "cytoplasm", "ink", "filament", "contours" }
-local NATIVE = { drift = true, filament = true, contours = true }
+local squall = require("agent.effects.squall")
+local NAMES = { "drift", "mycelium", "cytoplasm", "ink", "duet", "contours", "squall", "nightfall" }
+local NATIVE = { drift = true, contours = true }
 local KNOWN = {}
 for _, name in ipairs(NAMES) do KNOWN[name] = true end
 
@@ -160,7 +160,19 @@ end
 function effects.known(name) return KNOWN[name] == true end
 function effects.native(name) return NATIVE[name] == true end
 
+-- Applied after labels, so illumination covers the river without erasing its text.
+function effects.flash_style(name, time)
+	if name == "squall" then return squall.flash_style(time) end
+end
+
+function effects.step_duet(state, dt, scene)
+	return require("agent.effects.duet").step(state, dt, scene)
+end
+
 function effects.render(name, buffer, context)
+	if name == "duet" then return require("agent.effects.duet").render(buffer, context) end
+	if name == "squall" then return squall.render(buffer, context) end
+	if name == "nightfall" then return require("agent.effects.nightfall").render(buffer, context) end
 	if NATIVE[name] then
 		-- Select a paint mode without changing the simulation (including dissolves).
 		local flow = setmetatable({ mode = name }, { __index = context.flow })

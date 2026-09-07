@@ -44,31 +44,19 @@ h.test("waiting retains only quiet edge fossils", function()
   h.equal(nonblank(buffer, 25, 55), 0)
 end)
 
-h.test("filament spans the aperture and responds to concurrent actors", function()
-  local current = Current.new(100, 6, { mode = "filament" })
-  for _ = 1, 20 do
-    current:step(0.04, { actors = {
-      { id = "read-a", x = 20, strength = 1.1 },
-      { id = "edit-b", x = 78, strength = 1.4, failed = true },
-    } })
-  end
-  local buffer = Buffer.new(100, 6)
-  current:render(buffer, { failed = true })
-  h.truthy(nonblank(buffer, 1, 20) > 12)
-  h.truthy(nonblank(buffer, 41, 60) > 12)
-  h.truthy(nonblank(buffer, 81, 100) > 12)
-end)
-
 h.test("effect modes can be changed without replacing the current", function()
   local current = Current.new(80, 6, { mode = "drift" })
   local drift = Buffer.new(80, 6)
   current:step(0.2, { listening = true })
   current:render(drift, { listening = true })
   h.truthy(nonblank(drift, 1, 80) >= 8)
-  h.truthy(current:set_mode("filament"))
-  local filament = Buffer.new(80, 6)
-  current:render(filament, { listening = true })
-  h.truthy(nonblank(filament, 1, 80) >= 60)
+  h.truthy(current:set_mode("contours"))
+  local contours = Buffer.new(80, 6)
+  current:render(contours, { listening = true })
+  h.truthy(nonblank(contours, 1, 80) >= 8)
+  h.equal(current:set_mode("filament"), nil)
+  h.equal(current.mode, "contours")
+  h.equal(table.concat(Current.modes(), ","), "contours,drift")
   h.equal(current:set_mode("unknown"), nil)
 end)
 

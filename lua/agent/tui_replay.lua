@@ -127,6 +127,9 @@ function Replay:feed_input(chunk)
 		if not input.paste and input.buffer == "" and byte == "\16" then
 			self.paused = not self.paused
 		elseif not input.paste and input.buffer == "" and byte == "\18" then self:restart()
+		elseif not input.paste and input.buffer == "" and byte == "\5" then
+			self.app:next_effect()
+			if self.paused then self.app.effect_transition_from = nil end
 		elseif not input.paste and input.buffer == "" and byte == "\6" then
 			self.speed_index = self.speed_index % #SPEEDS + 1
 		elseif not input.paste and input.buffer == "" and byte == "\14" then
@@ -139,8 +142,8 @@ function Replay:feed_input(chunk)
 end
 
 function Replay:label()
-	return string.format("replay %.2fs / %.2fs · %gx · %s", self.now, self.duration,
-		SPEEDS[self.speed_index], self.finished and "finished" or self.paused and "paused" or "playing")
+	return string.format("replay %.2fs / %.2fs · %gx · %s · %s", self.now, self.duration,
+		SPEEDS[self.speed_index], self.finished and "finished" or self.paused and "paused" or "playing", self.app.effect)
 end
 
 return Replay

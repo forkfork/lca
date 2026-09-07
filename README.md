@@ -76,7 +76,7 @@ and cancellation. No commands in the fixture are executed and no session is save
 Type a draft, inspect tools, and resize your terminal while it plays.
 
 **Ctrl-P** pauses, **Ctrl-R** restarts (preserving your draft), **Ctrl-F** cycles
-0.25×–4× speed, **Ctrl-N** advances one fixed 40 ms step, and **Ctrl-C** exits.
+0.25×–4× speed, **Ctrl-N** steps, **Ctrl-E** cycles effects, and **Ctrl-C** exits.
 The runner accepts `[fixture.json] [effect]`; the default fixture is
 `tests/fixtures/tui-replay.json`. Fixtures contain a sorted `events` array with
 `at` (seconds), `kind` (`submit`, `tool`, `waiting`, `complete`, `cancel`), and
@@ -147,9 +147,31 @@ Useful TUI commands: `/help`, `/status`, `/reasoning`, `/resume`, `/clear`,
 
 Animation adds visual polish: startup picks a style at random, then usually keeps
 it, with a 20% chance of changing at each safe turn boundary after the first.
-All styles are equally likely. Pin a launch style with `--tui-effect NAME` or
-`LCA_TUI_EFFECT`; `/effect NAME` changes it live, `/effect manual` stops rotation,
+The established styles are equally likely. Pin a launch style with `--tui-effect NAME`
+or `LCA_TUI_EFFECT`; `/effect NAME` changes it live, `/effect manual` stops rotation,
 and `/effect auto` restores occasional changes.
+
+**Duet** (`/effect duet` or `lca --tui-effect duet`) is a two-voice counterpoint:
+a cool model-activity phrase and a warm tool-response phrase, with independent
+rests, overlapping calls, suspended failures, and a closing cadence. It follows
+observable activity, not hidden reasoning. Preview without model/tool calls:
+`lua scripts/tui-replay.lua tests/fixtures/tui-performance-analysis.jsonl duet`.
+**Squall** joins drift, mycelium, cytoplasm, ink, and contours in normal
+startup selection and automatic rotation. It has slate-blue rain, small lightning
+bolts, and a brief white flash confined to the river (not the prompt or scrollback).
+Select it with `/effect squall`, or preview without model/tool calls:
+
+```bash
+lua scripts/tui-replay.lua tests/fixtures/tui-performance-analysis.jsonl squall
+```
+
+**Nightfall** (`/effect nightfall`) is a quiet braille sky: a fixed silver crescent,
+sparse stars with slow twinkling, and a short fading shooting star every 18 visual
+seconds. It participates in startup selection and automatic rotation. Preview with
+`lua scripts/tui-replay.lua tests/fixtures/tui-replay.json nightfall`.
+
+Press **Ctrl-E** to cycle effects; the replay status shows the current name.
+While paused, cycling switches immediately. Squall lives in `lua/agent/effects/squall.lua`.
 
 The status bar always shows delivered animation FPS. It counts completed full frames,
 includes stalls, and excludes repaint-only draws.
@@ -181,6 +203,12 @@ make test    # run all Lua tests
 make check   # make local, then make test
 ```
 
+On Linux, also run `python3 tests/test_tui_pty.py` with the LuaRocks environment
+loaded. It exercises actual terminal polling, slow-reader backpressure, complete
+colored transcript writes, and Ctrl-D cleanup. Input polling must use a separately
+opened terminal descriptor: polling stdin can make shared stdout nonblocking and
+silently truncate river output. After upgrading an affected running session,
+launch LCA in a fresh terminal to avoid inheriting the old descriptor flags.
 `make local` installs LCA and its bundled terminal runtime together. UI primitives
 live in `lua/agent/ui/`; agent state, layout, and interaction remain in
 `lua/agent/tui.lua`. The imported UI suites live in `tests/ui/` and run as part of

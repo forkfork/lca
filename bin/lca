@@ -96,8 +96,8 @@ end
 local function usage()
 	io.stderr:write([[
 Usage:
-  lca [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--tool-stage|--no-tool-stage] [options]
-  lca repl [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--tool-stage|--no-tool-stage] [options]
+  lca [--tui-effect drift|mycelium|cytoplasm|ink|duet|contours|squall|auto] [--tool-stage|--no-tool-stage] [options]
+  lca repl [--tui-effect drift|mycelium|cytoplasm|ink|duet|contours|squall|auto] [--tool-stage|--no-tool-stage] [options]
   lca run <prompt> [--model model] [--credentials path] [--reasoning effort] [--service-tier tier]
   lca login [--out path]
   lca auth <login|refresh> [auth options]
@@ -105,7 +105,7 @@ Usage:
 Examples:
   lca
   lca --tool-stage
-  lca --tui-effect filament
+  lca --tui-effect drift
   lca repl
   lca run "Explain this project"
   lca login

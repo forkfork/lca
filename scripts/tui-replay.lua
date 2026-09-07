@@ -8,14 +8,14 @@ local uv = require("luv")
 local socket = require("socket")
 if arg[1] == "--help" then
 	print("lua scripts/tui-replay.lua [fixture.json] [effect]")
-	print("Ctrl-P pause · Ctrl-R restart · Ctrl-F speed · Ctrl-N step · Ctrl-T inspect · Ctrl-C quit")
+	print("Ctrl-E effect · Ctrl-P pause · Ctrl-R restart · Ctrl-F speed · Ctrl-N step · Ctrl-T inspect · Ctrl-C quit")
 	os.exit(0)
 end
 local player = Replay.new(Replay.load(arg[1] or root .. "/tests/fixtures/tui-replay.json"), { effect = arg[2] })
 local timer, poll
 local ok, err = tui.with_terminal(player.app.terminal, player.app.renderer, function()
 	player.app:commit_lines({ "Replay only: no model, tools, or session writes.",
-		"Ctrl-P pause · Ctrl-R restart · Ctrl-F speed · Ctrl-N step · Ctrl-T inspect · Ctrl-C quit", "" })
+		"Ctrl-E effect · Ctrl-P pause · Ctrl-R restart · Ctrl-F speed · Ctrl-N step · Ctrl-T inspect · Ctrl-C quit", "" })
 	local last = socket.gettime()
 	local failure
 	local function guarded(fn)

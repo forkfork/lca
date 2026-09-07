@@ -887,6 +887,10 @@ end
 function Editor:backspace()
 	if self.cursor > 0 then table.remove(self.chars, self.cursor); self.cursor = self.cursor - 1 end
 end
+function Editor:backspace_word()
+	while self.cursor > 0 and self.chars[self.cursor]:match("%s") do self:backspace() end
+	while self.cursor > 0 and not self.chars[self.cursor]:match("%s") do self:backspace() end
+end
 function Editor:delete()
 	if self.cursor < #self.chars then table.remove(self.chars, self.cursor + 1) end
 end
@@ -915,6 +919,7 @@ local ESCAPES = {
 	["\27[A"] = "up", ["\27[B"] = "down", ["\27[C"] = "right", ["\27[D"] = "left",
 	["\27[H"] = "home", ["\27[F"] = "end", ["\27[1~"] = "home", ["\27[4~"] = "end",
 	["\27[3~"] = "delete", ["\27[200~"] = "paste_start",
+	["\27\127"] = "backspace_word", ["\27\8"] = "backspace_word",
 }
 
 local function escape_prefix(value)
@@ -948,6 +953,7 @@ function Input:_action(name)
 	elseif name == "home" then editor.cursor = 0
 	elseif name == "end" then editor.cursor = #editor.chars
 	elseif name == "delete" then editor:delete()
+	elseif name == "backspace_word" then editor:backspace_word()
 	elseif name == "paste_start" then self.paste = true; self.paste_buffer = "" end
 	return nil
 end
@@ -1827,6 +1833,12 @@ function App:advance(frame_dt)
 		vortices = vortices,
 	}
 	flow:step(visual_dt, scene)
+	if self.effect == "duet" or self.effect_transition_from == "duet" then
+		scene.tools, scene.turn = self.state.tools, self.state.turn_sequence
+		self.duet = tui_effects.step_duet(self.duet, visual_dt, scene)
+	else
+		self.duet = nil
+	end
 
 	local target_palette = listening and { r = 55, g = 151, b = 157 }
 		or self.state.proof > 0 and { r = 62, g = 205, b = 153 }
@@ -1885,7 +1897,7 @@ function App:draw()
 	local buffer = buffer_view(screen, flow_top - 1, world_rows)
 	buffer:fill(1, 1, world_rows, width, " ", field_style)
 	local effect_context = {
-		flow = flow, scene = scene, time = self.flow_time,
+		flow = flow, scene = scene, time = self.flow_time, duet = self.duet,
 	}
 	if self.effect_transition_from then
 		local progress = clamp(self.effect_transition_age / 0.72, 0, 1)
@@ -2120,6 +2132,12 @@ function App:draw()
 		self.renderer.previous = nil
 		self.renderer.inline_height = 0
 		self.redraw_requested = false
+	end
+	local flash_style = tui_effects.flash_style(self.effect, self.flow_time)
+	if flash_style then
+		for row = flow_top, flow_top + world_rows - 1 do
+			for col = 1, width do screen.rows[row][col].style = flash_style end
+		end
 	end
 	self.renderer:set_cursor(nil):draw(screen)
 end
@@ -2364,6 +2382,8 @@ function App:commit_river(status)
 	if not self.state.river_trace or self.river_committed == self.state.turn_sequence then return end
 	self.state.river_trace:finish(self.state.clock())
 	self.river_committed = self.state.turn_sequence
+	-- Plain conversation needs no tool-activity banner between prompt and reply.
+	if self.state.river_trace:summary().calls == 0 then return end
 	local width = select(1, self:_size())
 	local lines = river_divider.render({ width = width, color = self.backend:supports_color(),
 		seed = self.river_seed or "lca", turn = self.state.turn_sequence, status = status,
@@ -2458,9 +2478,9 @@ function App:feed_input(chunk)
 	for _, action in ipairs(self.input:feed_chunk(chunk, self.busy)) do self:_handle_action(action) end
 end
 
-local function stdin_chunk_reader(read)
+local function stdin_chunk_reader(read, fd)
 	return function()
-		local chunk, err = read(0, 128, -1)
+		local chunk, err = read(fd or 0, 128, -1)
 		if chunk then return chunk end
 		if err then core.debug_log("[tui] stdin read failed: %s", tostring(err)) end
 		return ""
@@ -2471,28 +2491,34 @@ tui._stdin_chunk_reader = stdin_chunk_reader
 
 function App:start_io()
 	self.input = Input.new(self.editor)
+	-- uv_poll makes its descriptor nonblocking. fd 0 often shares an open
+	-- file description with stdout, so polling it can truncate large writes.
+	-- Open the terminal independently (dup would still share those flags).
+	self.stdin_fd = assert(uv.fs_open(self.backend.tty_path or "/dev/tty", "r", 0))
 	self:render(0)
 	self.frame_timer = uv.new_timer()
 	self.frame_timer:start(FRAME_MILLISECONDS, FRAME_MILLISECONDS, function()
 		self:drive_frame()
 	end)
-	if not self.input_reader then
-		-- Keep fd readiness and reads inside libuv. Buffered io.stdin:read(1)
-		-- can swallow the tail of an arrow-key escape sequence, leaving libuv
-		-- nothing to wake on until the user's next keypress.
-		self.input_reader = stdin_chunk_reader(uv.fs_read)
-	end
-	self.stdin_poll = uv.new_poll(0)
+	self.active_input_reader = self.input_reader or stdin_chunk_reader(uv.fs_read, self.stdin_fd)
+	self.stdin_poll = uv.new_poll(self.stdin_fd)
 	self.stdin_poll:start("r", function()
-		self:feed_input(self.input_reader())
+		self:feed_input(self.active_input_reader())
 	end)
 end
 
 function App:stop_io()
-	for _, handle in ipairs({ self.stdin_poll, self.frame_timer }) do
-		if handle and not handle:is_closing() then handle:stop(); handle:close() end
+	if self.frame_timer and not self.frame_timer:is_closing() then
+		self.frame_timer:stop(); self.frame_timer:close()
 	end
-	self.stdin_poll, self.frame_timer = nil, nil
+	local fd = self.stdin_fd
+	if self.stdin_poll and not self.stdin_poll:is_closing() then
+		self.stdin_poll:stop()
+		self.stdin_poll:close(function() if fd then uv.fs_close(fd) end end)
+	elseif fd then
+		uv.fs_close(fd)
+	end
+	self.stdin_poll, self.frame_timer, self.stdin_fd, self.active_input_reader = nil, nil, nil, nil
 	uv.run("nowait")
 end
 

@@ -223,6 +223,32 @@ test("UTF-8 editor handles cursor history backspace and delete", function()
 	assert_eq(action.text, "older command")
 end)
 
+test("Alt-Backspace deletes the previous word for both backspace encodings", function()
+	for _, key in ipairs({ "\27\127", "\27\8" }) do
+		local editor = tui.Editor.new()
+		local input = tui.Input.new(editor)
+		editor:set("one héλ \t tail")
+		editor.cursor = 10
+		assert_eq(#input:feed_chunk(key, false), 0)
+		assert_eq(editor:text(), "one tail")
+		assert_eq(editor.cursor, 4)
+		input:feed_chunk("\27", false)
+		assert_eq(editor:text(), "one tail")
+		input:feed_chunk(key:sub(2), false)
+		assert_eq(editor:text(), "tail")
+		assert_eq(editor.cursor, 0)
+		input:feed_chunk(key, false)
+		assert_eq(editor:text(), "tail")
+		editor:set(" \t ")
+		input:feed_chunk(key, false)
+		assert_eq(editor:text(), "")
+		editor:set("")
+		input:feed_chunk(key, false)
+		assert_eq(editor.cursor, 0)
+		input:feed_chunk("ok\127", false)
+		assert_eq(editor:text(), "o")
+	end
+end)
 test("complete arrow-key chunks move exactly one history entry", function()
 	local editor = tui.Editor.new({ "first", "second", "third" })
 	local input = tui.Input.new(editor)
@@ -442,7 +468,7 @@ end)
 test("repainting does not advance or expire animation and semantic state", function()
 	local now = 10
 	local state = tui.State.new({ clock = function() return now end })
-	local app = tui.App.new({ backend = fake_backend(), state = state, effect = "filament" })
+	local app = tui.App.new({ backend = fake_backend(), state = state, effect = "drift" })
 	state:submit("change a file")
 	state:tool_event(start("edit", "edit", { path = "README.md" }))
 	state:tool_event(finish("edit", "edit", { path = "README.md" }, { summary = "changed" }))
@@ -1039,23 +1065,23 @@ test("animation effects switch without replacing semantic state", function()
 	assert_eq(app.effect, "drift")
 	assert_eq(app.flow.mode, "drift")
 	assert_eq(#state:active_tools(), 1)
-	local ok, err = app:set_effect("filament")
+	local ok, err = app:set_effect("contours")
 	assert_eq(ok, true, err)
 	app:render(0.1)
-	assert_eq(app.flow.mode, "filament")
+	assert_eq(app.flow.mode, "contours")
 	assert_eq(#state:active_tools(), 1)
 	local living_flow = app.flow
 	assert_eq(app:set_effect("mycelium"), true)
 	assert_eq(app.flow, living_flow, "switching treatment replaced the living current")
 	assert_eq(#state:active_tools(), 1)
-	local invalid = app:set_effect("lava-lamp")
+	local invalid = app:set_effect("filament")
 	assert_eq(invalid, nil)
 	assert_eq(app.effect, "mycelium")
 end)
 
 test("organic effects render concurrent tools without losing their labels", function()
 	local frames = {}
-	for _, effect in ipairs({ "mycelium", "cytoplasm", "ink" }) do
+	for _, effect in ipairs({ "mycelium", "cytoplasm", "ink", "squall", "duet", "nightfall" }) do
 		local state = tui.State.new({ clock = function() return 10 end })
 		state:tool_event(start("read-a", "read", { path = "lua/agent/core.lua" }))
 		state:tool_event(start("edit-b", "edit", { path = "lua/agent/tui.lua" }))
@@ -1180,7 +1206,7 @@ test("split tool tags still expose streamed activity", function()
 end)
 
 test("default rotation can start at every style and choose every other style", function()
-	local names = { "drift", "mycelium", "cytoplasm", "ink", "filament", "contours" }
+	local names = { "drift", "mycelium", "cytoplasm", "ink", "duet", "contours", "squall", "nightfall" }
 	for initial, name in ipairs(names) do
 		for choice = 1, #names - 1 do
 			local draws = 0
@@ -1346,7 +1372,8 @@ end)
 
 test("248x69 terminal keeps a fast fixed eight-row inline strip", function()
 	local backend = fake_backend({ width = 248, height = 69, color = true })
-	local app = tui.App.new({ backend = backend })
+	-- This density assertion belongs to drift, not sparse skies or resting effects.
+	local app = tui.App.new({ backend = backend, effect = "drift" })
 	app.renderer:mount("inline")
 	app:render(1 / 30)
 	backend.output = {}
@@ -1521,6 +1548,27 @@ test("Ctrl+L reanchors the viewport without changing the draft or task", functio
 	local input = tui.Input.new(editor)
 	local actions = input:feed_chunk("\27[200~draft\12\27[201~", false)
 	assert_eq(#actions, 0, "pasted Ctrl+L must not trigger redraw")
+end)
+
+test("plain replies follow the prompt without a decorative tool banner", function()
+	local backend = fake_backend({ width = 248, height = 68, color = true })
+	local app = tui.App.new({ backend = backend })
+	app.renderer:mount("inline")
+	app:commit_user("hows it going")
+	app.state:submit("hows it going")
+	app:render(1 / 30)
+	backend.output = {}
+	app.state:assistant_complete("Going well!")
+	app:commit_river()
+	assert_eq(table.concat(backend.output), "")
+	app:commit_assistant("Going well!")
+	assert_contains(table.concat(backend.output), "Going well!")
+	assert_eq(table.concat(backend.output):find("turn 1", 1, true), nil)
+	backend.output = {}
+	app:commit_river()
+	assert_eq(table.concat(backend.output), "")
+	app:render(1 / 30)
+	assert_eq(app.renderer.inline_height, 8)
 end)
 
 test("completed assistant response becomes a colored riverbank transcript", function()
