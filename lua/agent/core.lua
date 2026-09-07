@@ -11,15 +11,11 @@ local uv = require("luv")
 local core = {}
 
 local MAX_TOOL_STEPS = 40
-local INSANITYWOLF_MAX_TOOL_STEPS = 80
-local INSANITYWOLF_MAX_CYCLES = 3
 local MAX_BATCH_SIZE = 10
 local MAX_READ_ONLY_BATCH_SIZE = 7
 local SLIM_CONTEXT_TOKENS = 60000
-local MAX_CONSECUTIVE_READ_ONLY_BATCHES = 4
 local NORMAL_TOOL_RESERVE = 12
 local NORMAL_FAILURE_RECOVERY_STEPS = 12
-local INSANITYWOLF_TOOL_RESERVE = 8
 
 local function last_user_text(session)
 	for i = #session.messages, 1, -1 do
@@ -115,65 +111,6 @@ local function workspace_is_blank(cwd)
 		if not name then return true end
 		if name ~= ".git" and name ~= ".gitkeep" then return false end
 	end
-end
-
-local function plan_is_complete(plan)
-	if type(plan) ~= "table" or #plan == 0 then
-		return false
-	end
-	for _, item in ipairs(plan) do
-		if item.status ~= "completed" then
-			return false
-		end
-	end
-	return true
-end
-
-local function batch_updates_plan(batch)
-	for _, tc in ipairs(batch or {}) do
-		if tc.name == "update_plan" then
-			return true
-		end
-	end
-	return false
-end
-
-local function insanitywolf_receipt(session)
-	if type(session) ~= "table" or session.flow ~= "insanitywolf" then return "" end
-	local ledger = type(session.wolf_ledger) == "table" and session.wolf_ledger or {}
-	local current = session.wolf_status
-	if #ledger == 0 and type(current) ~= "table" then return "" end
-	local lines = { "## Insanity Wolf run" }
-	local shipped_cycles = {}
-	for _, item in ipairs(ledger) do
-		local cycle = tonumber(item.cycle) or (#shipped_cycles + 1)
-		shipped_cycles[cycle] = true
-		lines[#lines + 1] = "- ✅ **" .. tostring(cycle) .. "/3 — " .. tostring(item.title or "Unnamed mutation") .. " — shipped.**"
-		if item.payoff and item.payoff ~= "" then lines[#lines + 1] = "  Payoff: " .. tostring(item.payoff) end
-		if item.proof and item.proof ~= "" then lines[#lines + 1] = "  Proof: " .. tostring(item.proof) end
-	end
-	if type(current) == "table" and current.phase ~= "shipped" and not shipped_cycles[tonumber(current.cycle)] then
-		local plan = type(session.plan) == "table" and session.plan or {}
-		local completed, stopped_at = 0, nil
-		for _, item in ipairs(plan) do
-			if item.status == "completed" then completed = completed + 1
-			elseif not stopped_at then stopped_at = item.step end
-		end
-		local progress = #plan > 0 and (" (" .. tostring(completed) .. "/" .. tostring(#plan) .. " plan steps complete)") or ""
-		lines[#lines + 1] = "- ⚠️ **" .. tostring(tonumber(current.cycle) or (#ledger + 1)) .. "/3 — "
-			.. tostring(current.title or "Unnamed mutation") .. " — incomplete" .. progress .. ".**"
-		if current.payoff and current.payoff ~= "" then lines[#lines + 1] = "  Intended payoff: " .. tostring(current.payoff) end
-		if stopped_at and stopped_at ~= "" then lines[#lines + 1] = "  Stopped at: " .. tostring(stopped_at) end
-	end
-	return table.concat(lines, "\n")
-end
-
-local function with_insanitywolf_receipt(session, text)
-	local receipt = insanitywolf_receipt(session)
-	text = tostring(text or "")
-	if receipt == "" then return text end
-	if text == "" then return receipt end
-	return receipt .. "\n\n" .. text
 end
 
 local function get_provider(credentials_path)
@@ -423,11 +360,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 
 	local total_tool_executions = 0
 	local last_batch_tool_executions = 0
-	local consecutive_read_only_batches = 0
-	local read_only_guard_used = false
 	local last_response_meta = nil
-	local insanitywolf_checkpoints = 0
-	local insanitywolf_budget_warned = false
 	local normal_budget_warned = false
 	local normal_recovery_activated = false
 	local normal_closure_activated = false
@@ -444,7 +377,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 		return false
 	end
 	local tool_call_sequence = 0
-	local max_tool_steps = session.flow == "insanitywolf" and INSANITYWOLF_MAX_TOOL_STEPS or MAX_TOOL_STEPS
+	local max_tool_steps = MAX_TOOL_STEPS
 	local intra_turn_compactions = 0
 	local turn_usage = {
 		prompt_tokens = 0,
@@ -749,8 +682,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				end
 				goto continue_session_loop
 			end
-			if session.flow ~= "insanitywolf"
-				and session.completion_audit ~= false
+			if session.completion_audit ~= false
 				and not completion_audit_used
 				and had_successful_file_mutation
 				and research_build_request(requested_task)
@@ -783,17 +715,12 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			if session.record_usage then
 				session:record_usage(response._usage, #session.messages)
 			end
-			-- A normal plan is transient progress UI, not a second workflow the model
-			-- must administer. Reaching a final answer closes it automatically. Wolf
-			-- cycles deliberately keep explicit completion semantics because the plan
-			-- controls checkpointing and subsequent autonomous cycles.
-			if session.flow ~= "insanitywolf" then
-				session.plan = nil
-				session.journey = nil
-			end
+			-- Plans are transient progress UI; the final answer closes them.
+			session.plan = nil
+			session.journey = nil
 			log_separator("NO TOOL CALL - RETURNING TEXT")
 			return {
-				text = with_insanitywolf_receipt(session, text),
+				text = text,
 				events = events,
 				_usage = response._usage,
 				_turn_usage = turn_usage,
@@ -882,52 +809,9 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				})
 			end
 		end
-		local read_only_batch = batch_is_read_only(batch)
-		if read_only_batch then
-			consecutive_read_only_batches = consecutive_read_only_batches + 1
-		else
-			consecutive_read_only_batches = 0
-			read_only_guard_used = false
-		end
-		local guard_read_only_loop = read_only_batch
-			and MAX_CONSECUTIVE_READ_ONLY_BATCHES > 0
-			and consecutive_read_only_batches > MAX_CONSECUTIVE_READ_ONLY_BATCHES
-		if guard_read_only_loop then
-			local tool_names = {}
-			for _, tc in ipairs(batch) do
-				tool_names[#tool_names + 1] = tc.name
-			end
-			log("[context] read-only loop guard batches=%d tools=%s",
-				consecutive_read_only_batches,
-				table.concat(tool_names, ",")
-			)
-			if read_only_guard_used then
-				local text = "Stopped after repeated read-only tool batches. Make a change, run a verification command, or explain the blocker instead of reading more context."
-				log_separator("READ-ONLY TOOL LOOP STOPPED")
-				log("%s", text)
-				return {
-					text = text,
-					events = events,
-					_response_meta = last_response_meta,
-					_context_compactions = intra_turn_compactions,
-				}
-			end
-			read_only_guard_used = true
-			session:add_user(table.concat({
-				"Read-only loop guard: you have repeatedly called read-only tools without making changes.",
-				"Do not call read, grep, find, ls, job_status, or job_output again for this task unless you first make a concrete edit/write/run action or explain exactly what blocks progress.",
-				"Use the context already gathered. If enough information is available, make the edit now.",
-			}, "\n"))
-			if on_thinking then
-				on_thinking({
-					step = step,
-					messages = #session.messages,
-					tools = #batch,
-					total_tools = total_tool_executions,
-					status = "read-only loop guard",
-				})
-			end
-		else
+		do
+			-- Read-only investigation is legitimate progress. Duplicate-read handling
+			-- and the general tool budget bound repetition without requiring edits.
 
 			-- Only store the actually executed tool calls. The model can emit
 			-- duplicates or calls past the batch cap; keeping those in history
@@ -962,13 +846,17 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					end
 				elseif event.phase == "progress" then
 					local progress = type(event.progress) == "table" and event.progress or {}
-					log("--- TOOL PROGRESS: %s elapsed_ms=%s output_bytes=%s output_chunks=%s ---",
-						event.name, tostring(progress.elapsed_ms), tostring(progress.output_bytes), tostring(progress.output_chunks))
+					if progress.output_bytes ~= nil then
+						log("--- TOOL PROGRESS: %s elapsed_ms=%s output_bytes=%s output_chunks=%s ---",
+							event.name, tostring(progress.elapsed_ms), tostring(progress.output_bytes), tostring(progress.output_chunks))
+					else
+						log("--- TOOL PROGRESS: %s elapsed_ms=%s ---", event.name, tostring(progress.elapsed_ms))
+					end
 				else
 					local started_ns = tool_started_ns[event_id]
 					if started_ns then event.duration_ms = math.floor((observed_ns - started_ns) / 1000000) end
 					tool_started_ns[event_id] = nil
-					if MUTATING_TOOLS[event.name] or (event.result and event.result.is_error) then
+					if MUTATING_TOOLS[event.name] or event.name:match("^job_") or (event.result and event.result.is_error) then
 						log("\n--- TOOL RESULT: %s ---", event.name)
 						log("is_error: %s", tostring(event.result and event.result.is_error))
 						log("summary: %s", tostring(event.result and event.result.summary))
@@ -1011,8 +899,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					session:add_tool_result(tc.name, msg, tc.native_call_id)
 				end
 			end
-			if session.flow ~= "insanitywolf"
-				and batch_failed
+			if batch_failed
 				and not normal_recovery_activated
 				and total_tool_executions >= (MAX_TOOL_STEPS - NORMAL_TOOL_RESERVE)
 			then
@@ -1077,73 +964,6 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				end
 			end
 
-			if session.flow == "insanitywolf"
-				and insanitywolf_checkpoints < INSANITYWOLF_MAX_CYCLES - 1
-				and batch_updates_plan(batch)
-				and plan_is_complete(session.plan)
-			then
-				insanitywolf_checkpoints = insanitywolf_checkpoints + 1
-				if on_thinking then
-					on_thinking({
-						step = step,
-						messages = #session.messages,
-						tools = last_batch_tool_executions,
-						total_tools = total_tool_executions,
-						status = "checkpointing insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/" .. tostring(INSANITYWOLF_MAX_CYCLES),
-					})
-				end
-				local ok, compacted, msgs_removed, new_tokens = pcall(function()
-					return compaction.compact(session, {
-						force = true,
-						preserve_next_improvements = true,
-						preserve_current_plan = true,
-					})
-				end)
-				if not ok then
-					log("[context] insanitywolf checkpoint failed: %s", tostring(compacted))
-				elseif compacted then
-					log("[context] insanitywolf checkpoint cycle=%d messages=%d remaining_tokens=%d",
-						insanitywolf_checkpoints,
-						tonumber(msgs_removed) or 0,
-						tonumber(new_tokens) or 0
-					)
-					session.plan = nil
-					session:add_user(table.concat({
-						"Insanitywolf checkpoint complete.",
-						"Before continuing, write a short visible transition note for the user.",
-						"The transition note must name the capability that shipped, the next product bet, its user-visible payoff, and why it coheres with the product direction.",
-						"Continue only if the checkpoint summary's Next Steps contain a strong product bet that adds power, removes substantial central-workflow friction, or makes the product noticeably more intelligent or expressive.",
-						"Do not start a cycle merely for tests, hardening, cleanup, refactoring, documentation, inventory checks, rereads, optional probes, or verification that already passed. Those are supporting work only.",
-						"Prefer the smallest complete vertical slice that proves the next capability. Be bold about reversible local product choices instead of retreating to maintenance.",
-						"If continuing, write the transition note first, then immediately call update_plan for the next implementation cycle, then implement and verify it.",
-						"Do not ask permission, say you can continue, or wait for the user when a valid next cycle is present.",
-						"Stop if no candidate has a concrete user-visible payoff, or if the next work is destructive, difficult to reverse, requires external services or secrets, paid resources, or an incompatible architecture migration.",
-						"When stopping, report the strongest remaining product bets without beginning them.",
-					}, "\n"))
-					if on_thinking then
-						on_thinking({
-							step = step,
-							messages = #session.messages,
-							tools = last_batch_tool_executions,
-							total_tools = total_tool_executions,
-							status = "checkpointed insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/" .. tostring(INSANITYWOLF_MAX_CYCLES),
-							checkpoint_summary = session.compaction_summary,
-							checkpoint_cycle = insanitywolf_checkpoints,
-							checkpoint_tokens = new_tokens,
-						})
-					end
-					session.insanitywolf_cycle = insanitywolf_checkpoints + 1
-					if is_cancelled() then
-						log_separator("CANCELLED BY USER")
-						return {
-							text = "",
-							events = events,
-							_response_meta = last_response_meta,
-						}
-					end
-				end
-			end
-
 			-- Check for cancellation after tool execution
 			if is_cancelled() then
 				log_separator("CANCELLED BY USER")
@@ -1155,8 +975,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			end
 		end
 
-		if session.flow ~= "insanitywolf"
-			and not normal_budget_warned
+		if not normal_budget_warned
 			and total_tool_executions >= (MAX_TOOL_STEPS - NORMAL_TOOL_RESERVE)
 		then
 			normal_budget_warned = true
@@ -1174,31 +993,10 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					status = "normal tool reserve",
 				})
 			end
-		elseif session.flow == "insanitywolf"
-			and not insanitywolf_budget_warned
-			and total_tool_executions >= (max_tool_steps - INSANITYWOLF_TOOL_RESERVE)
-		then
-			insanitywolf_budget_warned = true
-			session:add_user(table.concat({
-				"Insanitywolf tool budget reserve reached.",
-				"Do not start broad new edits or exploratory reads in this turn.",
-				"Use the remaining tools only to finish the active cycle: make any small required fix, run the narrowest verification, update the plan truthfully, and then checkpoint or stop.",
-				"If verification cannot be completed inside the remaining tools, stop and clearly report the incomplete verification instead of continuing to edit.",
-			}, "\n"))
-			if on_thinking then
-				on_thinking({
-					step = step,
-					messages = #session.messages,
-					tools = last_batch_tool_executions,
-					total_tools = total_tool_executions,
-					status = "insanitywolf tool reserve",
-				})
-			end
 		end
 
 		if total_tool_executions >= max_tool_steps then
-			if session.flow ~= "insanitywolf"
-				and not normal_closure_activated
+			if not normal_closure_activated
 				and not normal_recovery_activated
 			then
 				normal_closure_activated = true
@@ -1226,13 +1024,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 	end
 
 	log_separator("TOOL BUDGET EXHAUSTED")
-	if session.flow == "insanitywolf" then
-		session:add_user(table.concat({
-			"Tool budget reached in insanitywolf mode.",
-			"Stop using tools now and answer from the information already gathered.",
-			"Report exactly which verification or documentation work remains incomplete, and do not imply the active cycle is complete unless the plan was verified and marked completed.",
-		}, "\n"))
-	elseif normal_recovery_activated then
+	if normal_recovery_activated then
 		session:add_user(table.concat({
 			"Recovery tool budget exhausted.",
 			"Stop using tools now and report the exact failing or incomplete verification without implying completion.",
@@ -1274,7 +1066,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 	track_response_usage(response)
 	if control.on_response then control.on_response(response) end
 	last_response_meta = response_meta(response)
-	local text = with_insanitywolf_receipt(session, clean_assistant_text(response.text))
+	local text = clean_assistant_text(response.text)
 	if session.record_usage then
 		session:record_usage(response._usage, #session.messages)
 	end
@@ -1294,6 +1086,5 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 end
 
 core._dependency_safe_prefix = dependency_safe_prefix
-core._insanitywolf_receipt = insanitywolf_receipt
 
 return core

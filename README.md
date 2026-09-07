@@ -59,11 +59,63 @@ failures, and verification results stay visible while the agent works. The TUI
 requires a POSIX terminal and the sibling `lcatui` Lua rock; it does not use the
 alternate screen.
 
+Press **Ctrl-T** to inspect running or recent tools without losing your draft.
+**Tab** selects the next tool; **↑/↓** scroll arguments and result details;
+**Ctrl-T** returns to the live river. Inspection retains at most 8 KB of arguments
+and 16 KB of result text per retained tool (all active plus 18 completed).
+
+### Fast TUI development
+
+Run `lua scripts/tui-replay.lua` from a checkout for a model-free interactive
+replay: concurrent tools, failed edits, recovery, command progress, completion,
+and cancellation. No commands in the fixture are executed and no session is saved.
+Type a draft, inspect tools, and resize your terminal while it plays.
+
+**Ctrl-P** pauses, **Ctrl-R** restarts (preserving your draft), **Ctrl-F** cycles
+0.25×–4× speed, **Ctrl-N** advances one fixed 40 ms step, and **Ctrl-C** exits.
+The runner accepts `[fixture.json] [effect]`; the default fixture is
+`tests/fixtures/tui-replay.json`. Fixtures contain a sorted `events` array with
+`at` (seconds), `kind` (`submit`, `tool`, `waiting`, `complete`, `cancel`), and
+`event` for tool callback payloads or `text` for other events. Optional `duration`
+keeps the final state visible. Playback stops advancing at the end; restart or quit.
+This is an explicit replay format, not an importer for raw protocol logs.
+
+#### Record a real interaction
+
+Enter `/record` **before the turn you want to capture**, then use LCA normally.
+Captures are automatically named in `/tmp/lca/replays/`, beside the logs and outside
+ the project (temporary storage; copy captures elsewhere to keep them); the
+saved path is printed. `/record off` stops; `/record status` reports status.
+While recording, `/record` also reports status without starting another capture.
+An explicit path still works: `/record /tmp/lca-capture.jsonl`, or launch with
+`LCA_TUI_RECORD=/tmp/lca-capture.jsonl lca`. Recording is off by default.
+Replay with `lua scripts/tui-replay.lua <saved-path>`.
+
+Captures contain prompts, assistant text, tool arguments/results/progress, model
+activity, completion, and cancellation. **These may include secrets and source code;
+there is no automatic redaction.** Files are created exclusively with owner-only
+permissions (0600), never overwritten or uploaded. Choose a trusted local directory.
+Recording stops at 2 MiB with a visible warning rather than silently dropping events.
+Completed JSONL records remain replayable after interruption; an incomplete final
+line is ignored. Writes are immediate but not fsynced (not power-loss durable).
+
+This records subsequent semantic events, not prior session state, keyboard input,
+terminal resize history, or pixel-exact frames. Replay uses the initial effect and
+your current terminal dimensions; later effect changes are not captured. Typing and
+resizing during replay still work. Stopping recording leaves the agent running;
+normal TUI exit closes the capture automatically.
 Interactive startup is deliberately fresh: prior transcript context is not
 loaded until you enter `/resume`. The latest session for the current project
 remains in `.lca-session.json`; when a new session replaces it, LCA first
 archives the previous one under `.lca-sessions/`.
 
+Run `/test make test` to execute tests directly, without model requests or adding
+results to model context. `/test` repeats that exact shell command in the current
+session and project working directory; a fresh session requires selecting it again.
+No command is inferred from repository files. Ctrl-C cancels the process group.
+The terminal shows exit status and bounded stdout/stderr tails; full output stays
+in the displayed durable job logs (subject to normal job pruning). This shortcut
+waits until completion or cancellation; it has no automatic timeout.
 After each turn, the summary reports work time and model-context usage, plus
 changed files, verification results, and prompt-cache share when available.
 Use `/river` to inspect recorded tool activity, failures, concurrency, and repeated
@@ -95,6 +147,8 @@ All styles are equally likely. Pin a launch style with `--tui-effect NAME` or
 `LCA_TUI_EFFECT`; `/effect NAME` changes it live, `/effect manual` stops rotation,
 and `/effect auto` restores occasional changes.
 
+The status bar always shows delivered animation FPS. It counts completed full frames,
+includes stalls, and excludes repaint-only draws.
 Codex/OpenAI uses the Responses WebSocket transport by default, with HTTPS/SSE
 fallback on transport failure. To force the old HTTPS/SSE path:
 

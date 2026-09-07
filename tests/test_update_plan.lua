@@ -51,29 +51,24 @@ test("stores normalized plan on session", function()
 	assert(result.content:find("2. %[in_progress%] Implement tool"), "missing rendered plan content")
 end)
 
-test("stores a concrete user-facing journey beside the mechanical plan", function()
-	local s = session_mod.create({})
-	local result = update_plan.execute({
-		journey = {
-			destination = "a tiny database that makes Linux I/O legible",
-			approach = "fixed pages · sync · threads · raw io_uring",
-			proof = "build · round-trip tests · three comparable benchmarks",
-		},
-		plan = {
-			{ step = "Build the three read paths", status = "in_progress" },
-			{ step = "Prove comparable behavior", status = "pending" },
-		},
-	}, { session = s })
-	assert_eq(result.is_error, false)
-	assert_eq(result.journey.destination, "a tiny database that makes Linux I/O legible")
-	assert_eq(s.journey.approach, "fixed pages · sync · threads · raw io_uring")
-
-	local invalid = update_plan.execute({
-		journey = { destination = "something", approach = "somehow" },
-		plan = { { step = "Do it", status = "in_progress" } },
-	}, { session = session_mod.create({}) })
-	assert_eq(invalid.is_error, true)
-	assert_eq(invalid.summary, "invalid journey")
+test("legacy journey metadata is ignored without changing checklist behavior", function()
+	for _, legacy in ipairs({
+		{ destination = "old goal", approach = "old approach", proof = "old proof" },
+		{ destination = "incomplete metadata" },
+		"invalid legacy metadata",
+	}) do
+		local s = session_mod.create({})
+		s.journey = legacy
+		local result = update_plan.execute({
+			journey = legacy,
+			plan = { { step = "Implement and verify", status = "in_progress" } },
+		}, { session = s })
+		assert_eq(result.is_error, false)
+		assert_eq(result.plan[1].step, "Implement and verify")
+		assert_eq(s.plan[1].status, "in_progress")
+		assert_eq(result.journey, nil)
+		assert_eq(s.journey, nil)
+	end
 end)
 
 test("marks only the first plan after empty state as fresh", function()
@@ -94,58 +89,6 @@ test("marks only the first plan after empty state as fresh", function()
 
 	assert_eq(first.plan_fresh, true)
 	assert_eq(second.plan_fresh, false)
-end)
-
-test("insanitywolf plan publishes stable capability intent and payoff", function()
-	local s = session_mod.create({ flow = "insanitywolf" })
-	local first = update_plan.execute({
-		wolf = {
-			title = "Automatic session recovery",
-			payoff = "reopen LCA and continue without thinking",
-			proof = "restart and recover the unfinished turn",
-		},
-		plan = {
-			{ step = "Build recovery", status = "in_progress" },
-			{ step = "Prove restart", status = "pending" },
-		},
-	}, { session = s })
-
-	assert_eq(first.is_error, false)
-	assert_eq(first.wolf_status.phase, "hunt")
-	assert_eq(first.wolf_status.cycle, 1)
-	assert_eq(first.wolf_status.title, "Automatic session recovery")
-	assert_eq(first.wolf_status.payoff, "reopen LCA and continue without thinking")
-
-	local completed = update_plan.execute({
-		plan = {
-			{ step = "Build recovery", status = "completed" },
-			{ step = "Prove restart", status = "completed" },
-		},
-	}, { session = s })
-	assert_eq(completed.is_error, false)
-	assert_eq(completed.wolf_status.phase, "shipped")
-	assert_eq(completed.wolf_status.title, "Automatic session recovery")
-	assert_eq(#s.wolf_ledger, 1)
-	assert_eq(s.wolf_ledger[1].title, "Automatic session recovery")
-
-	local repeated = update_plan.execute({
-		plan = {
-			{ step = "Build recovery", status = "completed" },
-			{ step = "Prove restart", status = "completed" },
-		},
-	}, { session = s })
-	assert_eq(repeated.is_error, false)
-	assert_eq(#s.wolf_ledger, 1)
-end)
-
-test("insanitywolf requires intent on the first plan of each cycle", function()
-	local s = session_mod.create({ flow = "insanitywolf" })
-	local result = update_plan.execute({
-		plan = { { step = "Mystery work", status = "in_progress" } },
-	}, { session = s })
-	assert_eq(result.is_error, true)
-	assert_eq(result.summary, "missing wolf status")
-	assert_eq(s.plan, nil)
 end)
 
 test("accepts plan array from parsed tool call", function()
@@ -225,7 +168,9 @@ test("tool is advertised through native schema and guidance", function()
 		if spec.name == "update_plan" then
 			found = true
 			assert_eq(spec.parameters.properties.plan.type, "array")
-			assert_eq(spec.parameters.properties.journey.properties.destination.type, "string")
+			assert_eq(spec.parameters.properties.journey, nil)
+			assert(not spec.description:find("journey", 1, true))
+			assert(spec.description:find("how to verify", 1, true))
 		end
 	end
 	assert_eq(found, true)
@@ -233,6 +178,8 @@ test("tool is advertised through native schema and guidance", function()
 	assert(prompt:find("short execution plan", 1, true), "missing native planning guidance")
 	assert(prompt:find("bounded initial inspection batch", 1, true), "missing evidence-before-trajectory guidance")
 	assert(prompt:find("Avoid generic plan steps", 1, true), "missing generic-plan guard")
+	assert(prompt:find("concrete changes and how to verify them", 1, true), "missing verification guidance")
+	assert(not prompt:find("journey", 1, true), "retired journey guidance remains")
 	assert(prompt:find("Do not call read and edit/write for the same file in parallel", 1, true), "missing dependency guidance")
 end)
 test("native prompt requests evidence-dense project orientation", function()

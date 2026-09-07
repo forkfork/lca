@@ -8,7 +8,7 @@ local DEFAULT_SESSION_FILE = ".lca-session.json"
 local SESSION_ARCHIVE_DIR = ".lca-sessions"
 local DEFAULT_MODEL = config.default_model()
 local USAGE_HISTORY_LIMIT = 50
-local SYSTEM_PROMPT_VERSION = 26
+local SYSTEM_PROMPT_VERSION = 28
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -57,22 +57,6 @@ local VALID_SERVICE_TIERS = {
 	flex = true,
 	priority = true,
 }
-
-local VALID_FLOW_MODES = {
-	off = true,
-	insanitywolf = true,
-}
-
-local function resolve_flow(value)
-	if not value or value == "" then
-		return "off"
-	end
-	value = tostring(value):lower()
-	if not VALID_FLOW_MODES[value] then
-		error("invalid mode: " .. tostring(value))
-	end
-	return value
-end
 
 local function resolve_reasoning_effort(value, model)
 	if not value or value == "" then
@@ -126,7 +110,6 @@ function session.create(options)
 			context_compaction_threshold = tonumber(options.context_compaction_threshold),
 			context_hard_limit = tonumber(options.context_hard_limit),
 			compaction_keep_recent_tokens = tonumber(options.compaction_keep_recent_tokens),
-		flow = resolve_flow(options.flow),
 		cwd = cwd,
 		messages = {},
 		system_prompt = nil,
@@ -202,7 +185,6 @@ function session:get_system_prompt()
 		self.system_prompt = system_prompt.build({
 			cwd = self.cwd,
 			model = self.model,
-			flow = self.flow,
 		})
 		self.system_prompt_version = SYSTEM_PROMPT_VERSION
 		self.system_prompt_native_tools = true
@@ -576,7 +558,6 @@ function session:load(path)
 	if data.service_tier and data.service_tier ~= require("cjson").null then
 		self.service_tier = resolve_service_tier(data.service_tier)
 	end
-	self.flow = "off"
 	return true
 end
 
@@ -585,6 +566,5 @@ session.DEFAULT_SESSION_FILE = DEFAULT_SESSION_FILE
 session.SESSION_ARCHIVE_DIR = SESSION_ARCHIVE_DIR
 session.resolve_reasoning_effort = resolve_reasoning_effort
 session.resolve_service_tier = resolve_service_tier
-session.resolve_flow = resolve_flow
 session.SYSTEM_PROMPT_VERSION = SYSTEM_PROMPT_VERSION
 return session

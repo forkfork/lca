@@ -1,6 +1,18 @@
 # From hypothesis to decision
 
-AGENTS.md carries the invariants; this document defines the workflow.
+Read this document before designing or running any hypothesis experiment.
+
+## Experiment invariants
+
+- Default to small `study_kind: screen` matrices: two arms × two or three scenarios, one run per cell (4–6 runs). Screens can reject a treatment or justify fresh broader validation, never promote a default. Reserve long cohorts for architecture claims and promotion decisions; keep cheap offline correctness and activation checks.
+- Start from an observed river signal and its matching raw log. Repeated arguments or failed tests are observations, not proof of wasted work.
+- Register the mechanism, executable intervention, controls, budget, primary metric, and decision rule before live runs.
+- Pin model, reasoning, prompt, fixtures, and engine revision/content hashes. Change one causal factor per comparison; do not silently migrate historical theories or cheaper delegate models.
+- Test graders on known-good and known-bad artifacts and verify intervention activation and protocol compliance before scaling. Stop invalid treatments.
+- Grade artifacts independently of assistant claims. Report protocol failures separately; retain failed-run tokens, cost, and time.
+- Preserve raw requests, responses, observations, original grades, and configuration outside the task workspace. Regrade affected cells symmetrically; never overwrite original evidence.
+- Report artifact correctness alongside tool calls, model calls, elapsed time, tokens, and estimated cost. Fewer calls are not an improvement when necessary work was skipped.
+- Record a drop, further-validation, or adoption decision and limitations in `research/decisions/`. Short pilots cannot establish long-task architectural claims. Remove rejected runtime code and flags; preserve frozen implementations and evidence outside active runtime paths.
 
 ## River → log → hypothesis → eval
 

@@ -18,16 +18,19 @@ function job_wait.execute(args, context)
 	local id, id_error = job_args.require_id(args)
 	if not id then return id_error end
 	local cwd = args.cwd or context.cwd
-	local job, err = jobs.wait(cwd, id, args)
+	local job, err, reason = jobs.wait(cwd, id, args, context)
 	if not job then
-		return { is_error = true, content = err, summary = "unknown job" }
+		return { is_error = true, content = err, summary = reason or "unknown job" }
 	end
 
 	local content = format_job(job)
 	if args.tail then
-		local output = jobs.output(cwd, id, { stream = args.stream or "stdout", tail = args.tail })
-		if output and output ~= "" then
-			content = content .. "\n\n" .. output
+		local streams = args.stream and { args.stream } or { "stdout", "stderr" }
+		for _, stream in ipairs(streams) do
+			local output = jobs.output(cwd, id, { stream = stream, tail = args.tail })
+			if output and output ~= "" then
+				content = content .. "\n\n" .. stream .. ":\n" .. output
+			end
 		end
 	end
 

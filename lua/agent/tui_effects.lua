@@ -162,8 +162,9 @@ function effects.native(name) return NATIVE[name] == true end
 
 function effects.render(name, buffer, context)
 	if NATIVE[name] then
-		context.flow:set_mode(name)
-		return context.flow:render(buffer, context.scene)
+		-- Select a paint mode without changing the simulation (including dissolves).
+		local flow = setmetatable({ mode = name }, { __index = context.flow })
+		return flow:render(buffer, context.scene)
 	end
 	if name == "mycelium" then render_mycelium(buffer, context)
 	elseif name == "cytoplasm" then render_cytoplasm(buffer, context)

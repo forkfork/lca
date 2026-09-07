@@ -629,12 +629,12 @@ test("thinking tool count reports last batch not cumulative total", function()
 	end
 end)
 
-test("normal mode does not add an insanitywolf policy", function()
+test("task prompt has no autonomous mode policy", function()
 	provider_calls = 0
 	provider_response = "normal done"
 	last_request = nil
 
-	local session = session_module.create({ flow = "off" })
+	local session = session_module.create({})
 	session.cwd = project_dir
 	session:add_user("trigger normal mode")
 
@@ -653,181 +653,25 @@ test("normal mode does not add an insanitywolf policy", function()
 	end
 end)
 
-test("insanitywolf mode is included in system prompt", function()
-	provider_response = "insanitywolf done"
-	last_request = nil
-
-	local session = session_module.create({ flow = "insanitywolf" })
-	session.cwd = project_dir
-	session:add_user("trigger insanitywolf")
-
-	local result = core.run_session(session, nil, nil, nil)
-	if result.text ~= "insanitywolf done" then
-		error("unexpected result: " .. tostring(result.text))
-	end
-	if not last_request or type(last_request.system_prompt) ~= "string" then
-		error("provider request was not captured")
-	end
-	if not last_request.system_prompt:find("insanitywolf", 1, true) then
-		error("missing insanitywolf mode policy in system prompt")
-	end
-	for _, phrase in ipairs({
-		"opinionated product inventor",
-		"at least three strong candidate product bets",
-		"user%-visible power",
-		"complete vertical slice",
-		"guardrails or supporting work",
-		"meaningful new capability",
-		"bold about reversible local product",
-		"at most three shipped product%-bet cycles",
-		"do not ask permission",
-		"budget reserve",
-	}) do
-		if not last_request.system_prompt:find(phrase) then
-			error("missing insanitywolf product policy: " .. phrase)
-		end
-	end
-	if last_request.system_prompt:find("CSRF tokens", 1, true)
-		or last_request.system_prompt:find("boring conventional default", 1, true)
-	then
-		error("maintenance-era insanitywolf policy remains in system prompt")
-	end
-end)
-
-test("insanitywolf receipt preserves shipped cycles and incomplete current work", function()
-	local receipt = core._insanitywolf_receipt({
-		flow = "insanitywolf",
-		wolf_ledger = {
-			{ cycle = 1, title = "Smart Capture", payoff = "Turn natural phrases into scheduled tasks", proof = "capture checks passed" },
-			{ cycle = 2, title = "Planning Inbox", payoff = "Triage undated work in one click", proof = "inbox checks passed" },
-		},
-		wolf_status = { cycle = 3, phase = "hunt", title = "Projects", payoff = "Capture and filter tasks by project" },
-		plan = {
-			{ step = "Wire project route", status = "completed" },
-			{ step = "Build project UI", status = "in_progress" },
-			{ step = "Verify project flow", status = "pending" },
-		},
-	})
-	for _, phrase in ipairs({
-		"1/3 — Smart Capture — shipped",
-		"2/3 — Planning Inbox — shipped",
-		"3/3 — Projects — incomplete (1/3 plan steps complete)",
-		"Stopped at: Build project UI",
-	}) do
-		if not receipt:find(phrase, 1, true) then error("missing receipt detail: " .. phrase) end
-	end
-end)
-
-test("insanitywolf checkpoints compact cycle context", function()
+test("completed plans return normally without autonomous checkpoints", function()
 	provider_calls = 0
-	last_request = nil
 	summary_request = nil
-	local main_calls = 0
-	provider_response = function(request)
-		if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
-			return "## Goal\ncheckpoint\n\n## Next Steps\n1. Keep detailed next improvement.\n\n## Critical Context\n- exact next detail"
-		end
-		main_calls = main_calls + 1
-		if main_calls == 1 then
-			return table.concat({
-				'<tool_call name="update_plan">',
-				'{"wolf":{"title":"Power move","payoff":"a visible capability"},"plan":[{"step":"First cycle","status":"completed"}]}',
-				"</tool_call>",
-			}, "\n")
+	provider_response = function()
+		if provider_calls == 1 then
+			return '<tool_call name="update_plan">\n{"plan":[{"step":"Requested work","status":"completed"}]}\n</tool_call>'
 		end
 		return "done"
 	end
-
-	local session = session_module.create({ flow = "insanitywolf" })
+	local session = session_module.create({})
 	session.cwd = project_dir
-	session:add_user("trigger insanitywolf checkpoint")
-	local checkpoint_info
-
-	local result = core.run_session(session, nil, nil, function(info)
-		if info and info.checkpoint_summary then checkpoint_info = info end
-	end)
-
-	if not result.text:find("1/3 — Power move — shipped", 1, true) or not result.text:match("done$") then
-		error("unexpected result: " .. tostring(result.text))
-	end
-	if not summary_request then
-		error("expected insanitywolf checkpoint summarization request")
-	end
-	if not checkpoint_info or checkpoint_info.checkpoint_cycle ~= 1
-		or not tostring(checkpoint_info.status):find("1/3", 1, true)
-	then
-		error("checkpoint did not expose the bounded three-cycle product run")
-	end
-	local prompt = summary_request.messages[1].text or ""
-	if not prompt:find("Additional insanitywolf checkpoint rules", 1, true) then
-		error("missing checkpoint summary instructions")
-	end
-	if not prompt:find("ranked backlog", 1, true)
-		or not prompt:find("user%-visible payoff")
-		or not prompt:find("compounding leverage", 1, true)
-		or not prompt:find("support or protect a user%-visible capability")
-	then
-		error("missing checkpoint product-bet classification rules")
-	end
-	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
-		error("checkpoint summary did not retain current plan")
-	end
-	if session.plan ~= nil then
-		error("completed plan should be cleared before the next insanitywolf cycle")
-	end
-	local found_continue = false
-	for _, message in ipairs(session.messages) do
-		if message.role == "user"
-			and tostring(message.text or ""):find("strong product bet", 1, true)
-			and tostring(message.text or ""):find("user%-visible payoff")
-			and tostring(message.text or ""):find("visible transition note", 1, true)
-			and tostring(message.text or ""):find("tests, hardening, cleanup", 1, true)
-			and tostring(message.text or ""):find("smallest complete vertical slice", 1, true)
-			and tostring(message.text or ""):find("Do not ask permission", 1, true)
-		then
-			found_continue = true
-			break
-		end
-	end
-	if not found_continue then
-		error("checkpoint did not add a continuation instruction")
-	end
-end)
-
-test("insanitywolf does not checkpoint before plan completion", function()
-	provider_calls = 0
-	last_request = nil
-	summary_request = nil
-	local main_calls = 0
-	provider_response = function(request)
-		if tostring(request.system_prompt or ""):find("context summarization assistant", 1, true) then
-			return "unexpected summary"
-		end
-		main_calls = main_calls + 1
-		if main_calls == 1 then
-			return table.concat({
-				'<tool_call name="update_plan">',
-				'{"wolf":{"title":"Power move","payoff":"a visible capability"},"plan":[{"step":"First cycle","status":"in_progress"},{"step":"Next improvement","status":"pending"}]}',
-				"</tool_call>",
-			}, "\n")
-		end
-		return "done"
-	end
-
-	local session = session_module.create({ flow = "insanitywolf" })
-	session.cwd = project_dir
-	session:add_user("trigger incomplete insanitywolf plan")
-
+	session:add_user("finish the requested work")
 	local result = core.run_session(session, nil, nil, nil)
-
-	if not result.text:find("1/3 — Power move — incomplete", 1, true) or not result.text:match("done$") then
-		error("unexpected result: " .. tostring(result.text))
-	end
-	if summary_request then
-		error("checkpoint should not run before plan completion")
-	end
+	assert(result.text == "done")
+	assert(provider_calls == 2)
+	assert(summary_request == nil)
+	assert(session.plan == nil)
+	assert(session.journey == nil)
 end)
-
 test("false tool protocol apology is ignored after tool results", function()
 	provider_calls = 0
 	provider_response = function()
@@ -860,46 +704,6 @@ test("false tool protocol apology is ignored after tool results", function()
 	end
 	if not found_correction then
 		error("missing correction message after false apology")
-	end
-end)
-
-test("insanitywolf warns before tool budget exhaustion", function()
-	provider_calls = 0
-	last_request = nil
-	summary_request = nil
-	provider_response = function()
-		local n = tostring(provider_calls)
-		return table.concat({
-			'<tool_call name="run">',
-			'{"command":"true # budget-a-' .. n .. '"}',
-			"</tool_call>",
-			'<tool_call name="run">',
-			'{"command":"true # budget-b-' .. n .. '"}',
-			"</tool_call>",
-			'<tool_call name="run">',
-			'{"command":"true # budget-c-' .. n .. '"}',
-			"</tool_call>",
-			'<tool_call name="run">',
-			'{"command":"true # budget-d-' .. n .. '"}',
-			"</tool_call>",
-		}, "\n")
-	end
-
-	local session = session_module.create({ flow = "insanitywolf" })
-	session.cwd = project_dir
-	session:add_user("burn budget")
-
-	core.run_session(session, nil, nil, nil)
-
-	local found = false
-	for _, message in ipairs(session.messages) do
-		if message.role == "user" and tostring(message.text or ""):find("Insanitywolf tool budget reserve reached", 1, true) then
-			found = true
-			break
-		end
-	end
-	if not found then
-		error("missing insanitywolf tool budget reserve warning")
 	end
 end)
 

@@ -115,7 +115,7 @@ local native_tool_specs = {
 	run = { "Execute a bounded shell command and return combined stdout and stderr.", object_schema({
 		command = { type = "string" }, timeout = { type = "integer", minimum = 1, description = "Timeout in milliseconds; default 120000." },
 	}, { "command" }) },
-	job_start = { "Start a durable background command and return its job id.", object_schema({
+	job_start = { "Start a durable background command and return its job id. Stdout and stderr are captured automatically; monitor them with job_output or job_wait with tail. Avoid redirecting output to separate files unless the task requires those files, since redirected output is absent from job tails.", object_schema({
 		command = { type = "string" }, cwd = { type = "string" }, timeout = { type = "integer", minimum = 1 }, temporary = { type = "boolean" },
 	}, { "command" }) },
 	job_status = { "Inspect a durable background job.", object_schema({ id = { type = "string" }, cwd = { type = "string" } }, { "id" }) },
@@ -127,18 +127,8 @@ local native_tool_specs = {
 	job_wait = { "Wait briefly for a durable job and return its status and recent output.", object_schema({
 		id = { type = "string" }, cwd = { type = "string" }, timeout_ms = { type = "integer", minimum = 1 }, tail = { type = "integer", minimum = 1 }, stream = { type = "string", enum = { "stdout", "stderr" } },
 	}, { "id" }) },
-	update_plan = { "Create or replace the execution checklist. For a substantial normal task in an unfamiliar repository, first gather one bounded inspection batch, then call this once with a specific journey {destination,approach,proof}; avoid generic inspection steps. The harness turns real reads, mutations, and verification into visible progress and closes the checklist with the final answer. Insanitywolf cycles must still update it explicitly. Use at most one in_progress item.", object_schema({
+	update_plan = { "Create or replace the execution checklist. For substantial work, plan concrete changes and how to verify them. First gather one bounded inspection batch; avoid generic inspection steps. Call this at most once; the harness closes the checklist with the final answer. Use at most one in_progress item.", object_schema({
 		plan = { type = "array", items = object_schema({ step = { type = "string" }, status = { type = "string", enum = { "pending", "in_progress", "completed" } } }, { "step", "status" }) },
-		journey = object_schema({
-			destination = { type = "string", description = "Short user-relevant description of what will exist when the task succeeds." },
-			approach = { type = "string", description = "Short concrete description of the shape or mechanism now emerging." },
-			proof = { type = "string", description = "Short description of the evidence that will establish success." },
-		}, { "destination", "approach", "proof" }),
-		wolf = object_schema({
-			title = { type = "string", description = "Short name of the chosen user-facing capability." },
-			payoff = { type = "string", description = "Concrete user-visible payoff." },
-			proof = { type = "string", description = "How the user can tell the capability works." },
-		}, { "title", "payoff" }),
 	}, { "plan" }) },
 }
 
@@ -180,18 +170,17 @@ You have native tools for inspecting files, editing code, running commands, mana
 - For edits, inspect the target with read or tagged grep evidence first, then use its exact line numbers and four-character tags. Make the smallest coherent change and run focused verification.
 - Batch independent inspection calls when useful. Do not call read and edit/write for the same file in parallel.
 - Use run for bounded commands and job_start for servers, watchers, or long-running commands.
-- For work with several genuinely dependent phases, gather one bounded initial inspection batch, then create one short execution plan. Include a concrete journey destination, approach, and proof so the interface can show where the work is going. Avoid generic plan steps such as “inspect repository structure.” Skip plans for trivial requests.
+- For work with several genuinely dependent phases, gather one bounded initial inspection batch, then create one short execution plan with concrete changes and how to verify them. Avoid generic plan steps such as “inspect repository structure.” Skip plans for trivial requests.
 - For small, fully specified builds, proceed directly from inspection to implementation and verification, even when several files are involved. When a plan is useful and the first edits are already determined, issue the plan and edits in the same response.
 - Minimize model round trips without guessing across dependencies. In each response, call every independent tool whose arguments are already known.
 - When implementation and test-file contents are already determined, write them in the same response, then verify after both writes finish.
-- In normal mode, call update_plan at most once. The harness closes that checklist when you give the final answer, so never rewrite it merely to advance statuses or mark completion. Insanitywolf has separate explicit plan rules.
+- Call update_plan at most once. The harness closes that checklist when you give the final answer, so never rewrite it merely to advance statuses or mark completion.
 - After inspection, use multi_edit when two or more non-overlapping replacements in one file are already known; use edit for one replacement. Never use multi_edit for dependent or overlapping changes.
 - Group known import and body replacements against the same inspected file version. An earlier insertion can shift later line numbers: do not submit a later edit using tags from before that insertion. Batch independent replacements together; re-read before a dependent edit.
 - Once edits succeed, combine known focused checks into one run command using && when later checks do not need model judgment.
 - Do not split plan updates, edits, or redundant verification into separate model turns merely to narrate progress. Start a new tool round only when its arguments depend on results from the previous round.
 - Preserve existing project patterns and user changes. Avoid unrelated refactors and destructive git operations.
-- Never claim a file was read, changed, or tested unless the corresponding tool result established it.
-- If a tool fails, use its actual error to recover or explain the blocker.
+- Never claim a file was read, changed, or tested unless the corresponding tool result established it. Acknowledge tool failures and use the actual error to recover or explain the blocker.
 ]]
 	if not multi_edit_enabled then
 		prompt = prompt:gsub("%- After inspection, use multi_edit.-\n", "- After inspection, batch non-overlapping tagged edits whose replacements are all known.\n")

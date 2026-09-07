@@ -1,0 +1,24 @@
+{
+  "duration": 16,
+  "events": [
+    {"at":0,"kind":"submit","text":"Make tool failures visibly recover"},
+    {"at":0.4,"kind":"tool","event":{"phase":"start","call_id":"read-a","name":"read","args":{"path":"lua/agent/tui.lua","offset":590,"limit":40}}},
+    {"at":0.4,"kind":"tool","event":{"phase":"start","call_id":"list-b","name":"ls","args":{"path":"tests"}}},
+    {"at":1.2,"kind":"tool","event":{"call_id":"list-b","name":"ls","result":{"summary":"2 entries","content":"test_tui.lua\ntest_session.lua"}}},
+    {"at":2,"kind":"tool","event":{"call_id":"read-a","name":"read","result":{"summary":"40 lines","content":"Source loaded; this result arrived after the second tool."}}},
+    {"at":3,"kind":"tool","event":{"phase":"start","call_id":"edit-c","name":"edit","args":{"path":"lua/agent/tui.lua","start_line":600,"content":"small improvement"}}},
+    {"at":3.8,"kind":"tool","event":{"call_id":"edit-c","name":"edit","args":{"path":"lua/agent/tui.lua"},"result":{"is_error":true,"summary":"stale source tag","content":"Source changed since inspection. Read the affected range and retry.\nNo files were changed."}}},
+    {"at":4.5,"kind":"tool","event":{"phase":"start","call_id":"refresh-d","name":"read","args":{"path":"lua/agent/tui.lua","offset":590,"limit":40}}},
+    {"at":5.2,"kind":"tool","event":{"call_id":"refresh-d","name":"read","args":{"path":"lua/agent/tui.lua"},"result":{"summary":"fresh source tags","content":"Updated tagged source is ready."}}},
+    {"at":5.8,"kind":"tool","event":{"phase":"start","call_id":"retry-e","name":"edit","args":{"path":"lua/agent/tui.lua","content":"small improvement"}}},
+    {"at":6.5,"kind":"tool","event":{"call_id":"retry-e","name":"edit","args":{"path":"lua/agent/tui.lua"},"result":{"summary":"replaced 2 lines","content":"Retry applied successfully."}}},
+    {"at":7,"kind":"tool","event":{"phase":"start","call_id":"check-f","name":"run","args":{"command":"make test"}}},
+    {"at":8,"kind":"tool","event":{"phase":"progress","call_id":"check-f","name":"run","progress":{"elapsed_ms":1000,"output_bytes":240,"output_chunks":3}}},
+    {"at":9.5,"kind":"tool","event":{"phase":"progress","call_id":"check-f","name":"run","progress":{"elapsed_ms":2500,"output_bytes":800,"output_chunks":7}}},
+    {"at":11,"kind":"tool","event":{"call_id":"check-f","name":"run","result":{"summary":"exit 0","content":"TUI suite passed\nSession suite passed\nAll checks completed."}}},
+    {"at":12,"kind":"complete","text":"Tool inspection is ready.","metrics":{"elapsed":12,"tokens":2400}},
+    {"at":13.5,"kind":"submit","text":"Try cancellation"},
+    {"at":14,"kind":"tool","event":{"phase":"start","call_id":"cancel-g","name":"run","args":{"command":"long-running command"}}},
+    {"at":15,"kind":"cancel","text":"cancelled by replay"}
+  ]
+}

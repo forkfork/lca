@@ -429,26 +429,6 @@ run_test("old saved system prompt is rebuilt after prompt version changes", func
 	assert_eq(loaded_session.system_prompt_version, session_module.SYSTEM_PROMPT_VERSION)
 end)
 
-run_test("insanitywolf mode is not persisted", function()
-	local path = tmp_dir .. "/session-mode.json"
-	local first = session_module.create({ session_id = "lca-test-session", flow = "insanitywolf" })
-	local ok, err = first:save(path)
-	if not ok then
-		error(err)
-	end
-	local saved = assert(io.open(path, "r")):read("*a")
-	if saved:find('"flow"', 1, true) then
-		error("runtime insanitywolf mode should not be serialized")
-	end
-
-	local second = session_module.create({})
-	local loaded, load_err = second:load(path)
-	if not loaded then
-		error(load_err)
-	end
-	assert_eq(second.flow, "off")
-end)
-
 run_test("controlled experiment knobs survive session handoff", function()
 	local path = tmp_dir .. "/session-experiment.json"
 	local first = session_module.create({
@@ -465,54 +445,27 @@ run_test("controlled experiment knobs survive session handoff", function()
 	assert_eq(second.read_batch_bytes, 48000)
 end)
 
-run_test("insanitywolf command invalidates cached system prompt", function()
+run_test("removed autonomous command is unknown and leaves session unchanged", function()
 	local commands = require("agent.commands")
+	local errors, help = {}, {}
 	local ui = {
-		muted = function() end,
-		error = function(message) error(message) end,
-	}
-	local s = session_module.create({ session_id = "lca-test-session", flow = "off" })
-	s.cwd = tmp_dir
-	local prompt_before = s:get_system_prompt()
-	if type(prompt_before) ~= "string" or prompt_before == "" then
-		error("expected cached prompt")
-	end
-
-	commands.dispatch("/insanitywolf on", s, ui)
-
-	assert_eq(s.flow, "insanitywolf")
-	assert_eq(s.system_prompt, nil)
-	assert_eq(s.system_prompt_version, nil)
-	local prompt_after = s:get_system_prompt()
-	if not prompt_after:find("Mode is insanitywolf.", 1, true) then
-		error("rebuilt prompt did not include insanitywolf mode policy")
-	end
-end)
-
-run_test("insanitywolf command toggles and validates args", function()
-	local commands = require("agent.commands")
-	local errors = {}
-	local muted = {}
-	local ui = {
-		muted = function(message) muted[#muted + 1] = message end,
+		muted = function(message) help[#help + 1] = message end,
+		block = function(message) help[#help + 1] = message end,
 		error = function(message) errors[#errors + 1] = message end,
 	}
-	local s = session_module.create({ session_id = "lca-test-session", flow = "off" })
-
-	local result = commands.dispatch("/insanitywolf", s, ui)
-	assert_eq(result, "run")
-	assert_eq(s.flow, "insanitywolf")
-	assert(muted[1]:find("bite through the fucking wall", 1, true), "missing activation phrase")
-	assert(s.messages[#s.messages].text:find("at least three strong coherent product bets", 1, true), "missing autonomous product-bet request")
-	assert(s.messages[#s.messages].text:find("not the product bet", 1, true), "missing maintenance boundary")
-
-	commands.dispatch("/insanitywolf", s, ui)
-	assert_eq(s.flow, "off")
-	assert_eq(muted[2], "insanitywolf: caged")
-
-	commands.dispatch("/insanitywolf maybe", s, ui)
-	assert_eq(s.flow, "off")
-	assert_eq(errors[1], "usage: /insanitywolf [on|off]")
+	local s = session_module.create({ session_id = "lca-test-session" })
+	s.cwd = tmp_dir
+	local prompt = s:get_system_prompt()
+	local count = #s.messages
+	for _, command in ipairs({ "/insanitywolf", "/insanitywolf on", "/insanitywolf off" }) do
+		assert_eq(commands.dispatch(command, s, ui), false)
+	end
+	assert_eq(#errors, 3)
+	assert(errors[1]:find("unknown command", 1, true))
+	assert_eq(#s.messages, count)
+	assert_eq(s:get_system_prompt(), prompt)
+	commands.dispatch("/help", s, ui)
+	assert(not table.concat(help, "\n"):find("insanitywolf", 1, true))
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))

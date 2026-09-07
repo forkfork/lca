@@ -149,9 +149,6 @@ function State.new(opts)
 		web_search_completed = {},
 		notices = {},
 		plan = nil,
-		journey = nil,
-		journey_phase = nil,
-		journey_detail = nil,
 		tools = {},
 		tools_by_id = {},
 		tool_queues = {},
@@ -176,9 +173,6 @@ function State.new(opts)
 		proof = 0,
 		cancelled = false,
 		flywheel = nil,
-		wolf_effect = nil,
-		wolf_enabled = false,
-		wolf_status = nil,
 		input = "",
 		cursor = 0,
 		clock = opts.clock or socket.gettime,
@@ -209,7 +203,7 @@ function State:flywheel_visual(now)
 	if FLYWHEEL_RELEASE_SECONDS[wheel.phase] then
 		local duration = FLYWHEEL_RELEASE_SECONDS[wheel.phase]
 		release = clamp(age / duration, 0, 1)
-		if age >= duration then self.flywheel = nil; return nil end
+		if age >= duration then return nil end
 	end
 	return {
 		phase = wheel.phase,
@@ -219,18 +213,6 @@ function State:flywheel_visual(now)
 		birth = clamp(age / 0.85, 0, 1),
 		release = release,
 	}
-end
-
-function State:insanitywolf(active, cycle)
-	self.wolf_enabled = active == true
-	if not active then self.wolf_status = nil end
-	self.wolf_effect = {
-		kind = active and (cycle and "cycle" or "awake") or "caged",
-		cycle = tonumber(cycle),
-		started_at = self.clock(),
-		duration = active and 5.2 or 2.2,
-	}
-	self:notice(active and "insanitywolf · bite through the fucking wall" or "insanitywolf · caged")
 end
 
 function State:_stream(text, kind, tool, duration, meta)
@@ -295,61 +277,6 @@ local function focused_plan_step(plan)
 	return nil
 end
 
-local function valid_journey(value)
-	return type(value) == "table"
-		and tostring(value.destination or "") ~= ""
-		and tostring(value.approach or "") ~= ""
-		and tostring(value.proof or "") ~= ""
-end
-
-function State:_set_journey(value, phase, detail)
-	if valid_journey(value) then
-		self.journey = {
-			destination = compact_text(value.destination, 72),
-			approach = compact_text(value.approach, 72),
-			proof = compact_text(value.proof, 72),
-		}
-	end
-	if self.journey then
-		self.journey_phase = phase or self.journey_phase or "direction"
-		self.journey_detail = detail and compact_text(detail, 72) or self.journey_detail
-	end
-end
-
-local JOURNEY_GLYPHS = {
-	direction = "··◉╮··◇",
-	understanding = "···◌··◇",
-	forming = "····◉━━◆",
-	reconsidering = "··◉╮···◆",
-	rethink = "··◌╯···◆",
-	proving = "······◉━◆",
-	proven = "········✦",
-	landed = "········✦",
-}
-
-function State:journey_label()
-	local journey = self.journey
-	if not journey then return nil end
-	local phase = self.journey_phase or "direction"
-	local detail = self.journey_detail
-	local movement
-	if phase == "understanding" then movement = detail and ("reading " .. detail) or "finding the grain"
-	elseif phase == "forming" then movement = detail and ("forming " .. detail) or "the implementation is taking shape"
-	elseif phase == "reconsidering" then movement = detail and ("following the evidence into " .. detail) or "the evidence bends the route"
-	elseif phase == "rethink" then movement = detail and ("reworking after " .. detail) or "the route needs another shape"
-	elseif phase == "proving" then movement = "asking it to prove itself"
-	elseif phase == "proven" or phase == "landed" then movement = detail or journey.proof
-	else movement = "the shape appears · " .. journey.approach end
-	return table.concat({ JOURNEY_GLYPHS[phase] or JOURNEY_GLYPHS.direction, journey.destination, "·", movement }, " ")
-end
-
-local function verification_label(command)
-	command = tostring(command or ""):lower()
-	if command:find("build", 1, true) then return "build passed" end
-	if command:find("test", 1, true) or command:find("spec", 1, true) then return "tests passed" end
-	if command:find("lint", 1, true) or command:find("check", 1, true) then return "checks passed" end
-	return "command exited 0"
-end
 
 function State:_remember_file(path, update)
 	path = tostring(path or "")
@@ -458,19 +385,6 @@ function State:divider_status(now)
 	if self.resolved_recovery and (tonumber(now) or 0) <= self.resolved_recovery.expires_at then
 		return "◆ " .. self.resolved_recovery.filename .. " · recovered", "resolved"
 	end
-	if self.wolf_enabled and type(self.wolf_status) == "table" then
-		local wolf = self.wolf_status
-		local shipped = wolf.phase == "shipped"
-		local phase = shipped and "SHIPPED" or "HUNT"
-		local cycle = tostring(tonumber(wolf.cycle) or 1) .. "/3"
-		local detail_kind = shipped and wolf.proof and "proof" or "payoff"
-		local detail = shipped and wolf.proof or wolf.payoff
-		return "🐺 " .. phase .. " " .. cycle .. " · " .. compact_text(wolf.title, 34)
-			.. " · " .. detail_kind .. ": " .. compact_text(detail, 54), "wolf"
-	end
-	if self.journey and self.mode ~= "listening" and self.mode ~= "cancelled" then
-		return self:journey_label(), "journey"
-	end
 	return nil, "quiet"
 end
 
@@ -525,11 +439,8 @@ function State:_finish_streams(tool, event)
 			self:_stream(filename, kind, tool, 5.2, { file = true, verb = name, personality = tool_personality(name) })
 		end
 	elseif name == "update_plan" and not failed then
-		local journey = valid_journey(result.journey) and result.journey or valid_journey(args.journey) and args.journey or nil
 		local item = focused_plan_step(result.plan or args.plan)
-		if journey then
-			self:_stream(journey.destination, "journey", tool, 6.2, { task = true, personality = "waypoint" })
-		elseif item then
+		if item then
 			self:_stream(item.step, "task", tool, 6.2, { task = true, status = item.status, personality = "waypoint" })
 		end
 	elseif name == "run" or name == "shell" then
@@ -571,9 +482,6 @@ function State:submit(text)
 	self:_set_flywheel("task", { prompt = self.prompt })
 	self.completion_summary = nil
 	self.plan = nil
-	self.journey = nil
-	self.journey_phase = nil
-	self.journey_detail = nil
 	self.web_search_started_at = nil
 	self.web_search_seen = {}
 	self.web_search_completed = {}
@@ -617,9 +525,6 @@ end
 function State:reviewing(info)
 	self.mode = "reviewing"
 	self.model_phase = compact_text(info and info.status or "model continuing after tools", 80)
-	if info and info.checkpoint_cycle then
-		self:insanitywolf(true, info.checkpoint_cycle)
-	end
 end
 
 local WEB_SEARCH_EYES = {
@@ -664,14 +569,30 @@ function State:model_activity(activity)
 	self.model_phase = compact_text(activity.status, 80)
 end
 
-function State:display_model_phase()
+function State:display_model_phase(now)
 	if self.mode ~= "composing" or not self.web_search_started_at then return self.model_phase end
-	return self:_web_search_label()
+	return self:_web_search_label(now)
+end
+
+-- tools_by_id owns tool identity; tools keeps ordered active tools plus a
+-- bounded completed history. Active entries never count against that limit.
+function State:_prune_tools()
+	local completed = 0
+	for index = #self.tools, 1, -1 do
+		local tool = self.tools[index]
+		if tool.status ~= "active" then
+			completed = completed + 1
+			if completed > 18 then
+				table.remove(self.tools, index)
+				self.tools_by_id[tool.id] = nil
+			end
+		end
+	end
 end
 
 function State:_resolve_tool(event)
 	local id = event.call_id and tostring(event.call_id) or nil
-	if id and self.tools_by_id[id] then return self.tools_by_id[id] end
+	if id then return self.tools_by_id[id] end
 	local queue = self.tool_queues[event_key(event)]
 	if queue and #queue > 0 then return queue[1] end
 	return nil
@@ -698,28 +619,10 @@ function State:tool_event(event)
 		self.tools[#self.tools + 1] = tool
 		self.tools_by_id[id] = tool
 		local queue_key = event_key(event)
+		tool.queue_key = queue_key
 		self.tool_queues[queue_key] = self.tool_queues[queue_key] or {}
 		self.tool_queues[queue_key][#self.tool_queues[queue_key] + 1] = tool
 		local event_args = event.args or {}
-		if event.name == "update_plan" and valid_journey(event_args.journey) then
-			self:_set_journey(event_args.journey, "direction", event_args.journey.approach)
-		end
-		if event.name == "update_plan" and type(event_args.wolf) == "table" then
-			self.wolf_status = {
-				phase = "hunt", cycle = self.wolf_status and self.wolf_status.cycle or 1,
-				title = event_args.wolf.title, payoff = event_args.wolf.payoff, proof = event_args.wolf.proof,
-			}
-		end
-		if self.journey then
-			if FILE_MUTATION_TOOLS[event.name] and event_args.path then
-				self:_set_journey(nil, "forming", basename(event_args.path))
-			elseif event.name == "read" or event.name == "grep" or event.name == "find" or event.name == "ls" then
-				local detail = event_args.path and basename(event_args.path) or event_args.pattern
-				self:_set_journey(nil, self.proof > 0 and "reconsidering" or "understanding", detail)
-			elseif (event.name == "run" or event.name == "shell") and next(self.turn_changed_paths) ~= nil then
-				self:_set_journey(nil, "proving", self.journey.proof)
-			end
-		end
 		if FILE_TOOLS[event.name] and event_args.path then
 			local mutation = FILE_MUTATION_TOOLS[event.name]
 			self:_remember_file(event_args.path, {
@@ -733,10 +636,7 @@ function State:tool_event(event)
 		local key = recovery_key(event_args)
 		local recovery = key and self.recoveries[key]
 		local plan_item = event.name == "update_plan" and focused_plan_step(event_args.plan)
-		if event.name == "update_plan" and valid_journey(event_args.journey) then
-			self.plan = event_args.plan
-			self:_stream(event_args.journey.destination, "journey", tool, nil, { task = true, personality = "waypoint" })
-		elseif plan_item then
+		if plan_item then
 			self.plan = event_args.plan
 			self:_stream(plan_item.step, "task_active", tool, nil, { task = true, status = plan_item.status, personality = "waypoint" })
 		elseif recovery and event.name == "read" then
@@ -779,10 +679,6 @@ function State:tool_event(event)
 		tool.output_bytes = tonumber(progress.output_bytes) or 0
 		tool.output_chunks = tonumber(progress.output_chunks) or 0
 		tool.result = format_duration((tool.elapsed_ms or 0) / 1000)
-		if self.journey and (event.name == "run" or event.name == "shell") then
-			local pulse = tool.output_chunks > 0 and "results arriving" or "still running"
-			self:_set_journey(nil, "proving", pulse .. " · " .. tool.result)
-		end
 	else
 		tool = self:_resolve_tool(event)
 		if not tool then
@@ -818,62 +714,31 @@ function State:tool_event(event)
 				self.turn_changed_paths[tostring(args.path)] = true
 				-- A later mutation invalidates earlier proof from the same turn.
 				self.verification_label, self.verification, self.proof = nil, nil, 0
-				if self.journey then
-					local changed = 0
-					for _ in pairs(self.turn_changed_paths) do changed = changed + 1 end
-					local detail = basename(args.path) .. (changed > 1 and (" +" .. tostring(changed - 1)) or "")
-					self:_set_journey(nil, "forming", detail)
-				end
 			end
 		end
-		if self.journey and (event.name == "read" or event.name == "grep" or event.name == "find" or event.name == "ls") then
-			local detail = args.path and basename(args.path) or args.pattern
-			self:_set_journey(nil, self.proof > 0 and "reconsidering" or "understanding", detail)
-		end
-		local queue = self.tool_queues[event_key(event)]
+		local queue_key = tool.queue_key
+		local queue = queue_key and self.tool_queues[queue_key]
 		if queue then
 			for index, queued in ipairs(queue) do
 				if queued == tool then table.remove(queue, index); break end
 			end
+			if #queue == 0 then self.tool_queues[queue_key] = nil end
 		end
 		if event.name == "update_plan" and event.result and type(event.result.plan) == "table" then
 			self.plan = event.result.plan
-			if valid_journey(event.result.journey) then
-				self:_set_journey(event.result.journey, "direction", event.result.journey.approach)
-			end
-		end
-		if event.name == "update_plan" and event.result and type(event.result.wolf_status) == "table" then
-			self.wolf_status = event.result.wolf_status
 		end
 		if event.name == "run" or event.name == "shell" then
-			if event.result and event.result.is_error then
+			-- Exit status reports this command's outcome, not verification of files.
+			-- Do not infer test/build coverage from command text.
+			self.verification, self.verification_label, self.proof = nil, nil, 0
+			if tool.status == "error" then
 				self.failure = tool.result ~= "" and tool.result or "command failed"
-				self.verification = nil
-				self.verification_label = nil
 				self.disturbance = 1
-				self.proof = 0
 				self.mode = "failed"
-				if self.journey and next(self.turn_changed_paths) ~= nil then
-					self:_set_journey(nil, "rethink", result.summary or "verification failed")
-				end
-			else
-				self.verification = tool.result ~= "" and tool.result or "verification passed"
-				self.verification_label = verification_label((event.args or {}).command)
+			elseif tool.status == "ok" then
 				self.failure = nil
 				self.disturbance = 0
-				self.proof = 1
-				self.mode = "verified"
-				if self.journey and next(self.turn_changed_paths) ~= nil then
-					self:_set_journey(nil, "proven", self.verification_label)
-				end
-				for path in pairs(self.turn_changed_paths) do
-					local memory = self.file_memory[path]
-					if memory then
-						memory.state = "verified"
-						memory.verified_at = self.clock()
-						self:_transfer({ kind = "tool", id = tool.id }, { kind = "file", path = path }, "proof", 1.6)
-					end
-				end
+				self.mode = "reviewing"
 			end
 		end
 	end
@@ -881,10 +746,25 @@ function State:tool_event(event)
 	self.model_phase = event.phase == "start" and "tools active"
 		or event.phase == "progress" and "tools active · " .. (tool and tool.result or "working")
 		or "reviewing results"
-	while #self.tools > 18 do
-		local removed = table.remove(self.tools, 1)
-		if removed.status ~= "active" then self.tools_by_id[removed.id] = nil end
+	-- Keep bounded inspection text, not entire result objects or unbounded output.
+	if not tool.args_detail then
+		local ok, encoded = pcall(json.encode, event.args or {})
+		tool.args_detail = response_text(ok and encoded or tool.args, 8000)
 	end
+	if event.result then
+		local result = event.result
+		local text = result.summary or ""
+		if result.content then
+			local content = result.content
+			if type(content) ~= "string" then
+				local ok, encoded = pcall(json.encode, content)
+				content = ok and encoded or tostring(content)
+			end
+			text = text .. "\n" .. content
+		end
+		tool.result_detail = response_text(text, 16000)
+	end
+	self:_prune_tools()
 	return tool
 end
 
@@ -907,7 +787,6 @@ function State:assistant_complete(text, metrics)
 	self.assistant = response_text(text, 6000)
 	self.assistant_stream = ""
 	self.assistant_completed_at = self.clock()
-	if self.journey then self:_set_journey(nil, "landed", self.verification_label or self.journey.proof) end
 	self:_set_flywheel("harvest", { verification = self.verification_label })
 	metrics = metrics or {}
 	local started_at = tonumber(metrics.started_at) or self.turn_started_at
@@ -935,9 +814,11 @@ function State:cancel(reason)
 	self.mode = "cancelled"
 	self.model_phase = compact_text(reason or "cancelled", 80)
 	self:_set_flywheel("release_cancelled", { reason = reason })
-	for _, tool in ipairs(self.tools) do
+	for _, tool in pairs(self.tools_by_id) do
 		if tool.status == "active" then tool.status = "cancelled" end
 	end
+	self.tool_queues = {}
+	self:_prune_tools()
 end
 
 function State:listen()
@@ -948,9 +829,10 @@ end
 
 function State:active_tools()
 	local result = {}
-	for _, tool in ipairs(self.tools) do
+	for _, tool in pairs(self.tools_by_id) do
 		if tool.status == "active" then result[#result + 1] = tool end
 	end
+	table.sort(result, function(a, b) return a.sequence < b.sequence end)
 	return result
 end
 
@@ -1056,6 +938,9 @@ end
 
 function Input:_action(name)
 	local editor = self.editor
+	if self.inspect and (name == "up" or name == "down") then
+		return { type = "inspect_scroll", delta = name == "up" and -1 or 1 }
+	end
 	if name == "up" then editor:history_move(-1)
 	elseif name == "down" then editor:history_move(1)
 	elseif name == "left" then editor.cursor = math.max(0, editor.cursor - 1)
@@ -1090,6 +975,13 @@ function Input:feed(byte, busy)
 	end
 
 	local first = self.buffer:byte(1)
+	if first == 20 then
+		self.buffer = ""
+		self.inspect = not self.inspect
+		return { type = "inspect" }
+	end
+	if self.inspect and first == 9 then self.buffer = ""; return { type = "inspect_next" } end
+	if self.inspect and (first == 10 or first == 13) then self.buffer = ""; return nil end
 	if first == 9 then
 		self.buffer = ""
 		if not busy and #self.editor.chars == 0 then return { type = "focus_next" } end
@@ -1101,6 +993,7 @@ function Input:feed(byte, busy)
 		if #self.editor.chars == 0 then return { type = "exit" } end
 		self.editor:delete(); return nil
 	end
+	if first == 12 then self.buffer = ""; return { type = "redraw" } end
 	if first == 1 then self.buffer = ""; self.editor.cursor = 0; return nil end
 	if first == 5 then self.buffer = ""; self.editor.cursor = #self.editor.chars; return nil end
 	if first == 8 or first == 127 then self.buffer = ""; self.editor:backspace(); return nil end
@@ -1302,15 +1195,13 @@ local function living_divider(buffer, row, width, label, kind, time, previous_la
 		retry = rgb(190, 142, 231, { "bold" }),
 		resolved = rgb(91, 224, 169, { "bold" }),
 		task = rgb(194, 158, 224),
-		journey = rgb(118, 189, 214, { "bold" }),
 		active = rgb(105, 180, 184),
-		wolf = rgb(255, 74, 126, { "bold" }),
 	}
 	local text = " " .. lcatui.width.truncate(label, math.max(12, width - 16)) .. " "
 	local text_width = lcatui.width.string(text)
 	local start = math.max(2, math.floor((width - text_width) / 2) + 1)
 	local cell_style = styles[kind] or styles.active
-	if previous_label and (kind == "task" or kind == "journey") and (molt_progress or 1) < 1 then
+	if previous_label and kind == "task" and (molt_progress or 1) < 1 then
 		local progress = clamp(tonumber(molt_progress) or 0, 0, 1)
 		local chars = lcatui.width.chars(text)
 		local centre = (#chars + 1) / 2
@@ -1572,72 +1463,6 @@ App.__index = App
 local STRIP_FLOW_ROWS = 4
 local STRIP_ROWS = STRIP_FLOW_ROWS + 4
 
-local WOLF_PHRASES = {
-	"BITE THROUGH THE FUCKING WALL.",
-	"NO TINY SAFE SHIT. MUTATE THE PRODUCT.",
-	"RIP OUT FRICTION. MAKE IT HOWL.",
-	"STOP POLISHING. UNLEASH THE FUCKING MONSTER.",
-}
-
-local function draw_insanitywolf(buffer, width, rows, effect, now)
-	local age = math.max(0, now - (effect.started_at or now))
-	if age > (effect.duration or 0) then return false end
-	local frame = math.floor(age * 7)
-	local caged = effect.kind == "caged"
-	local eyes = { "@", "#", "X", "*", "0" }
-	local eye = caged and "-" or eyes[(frame % #eyes) + 1]
-	local phrase = caged and "WOLF CAGED. NORMAL MODE."
-		or WOLF_PHRASES[(math.floor(age / 0.42) % #WOLF_PHRASES) + 1]
-	local howl = ({ "A W O", "A W O O", "A W O O O", "A W O O O O O" })[(math.floor(age * 5) % 4) + 1]
-	local cycle = caged and "  TEETH SHEATHED"
-		or effect.cycle and (frame % 6 < 3 and ("  RAMPAGE " .. tostring(effect.cycle) .. "/3") or ("  " .. howl))
-		or "  THE WOLF IS FUCKING LOOSE"
-	local lines = {
-		"          / \\__" .. (frame % 3 == 0 and "  !!!" or ""),
-		"   ______/ " .. eye .. "  \\___   " .. phrase,
-		"  /  _          _  O   " .. cycle,
-		" /__/ \\________/ \\_\\  " .. (caged and "BACK TO THE QUIET CURRENT." or "WEAK SHIT DIES HERE. UNLEASH THE MONSTER."),
-	}
-	local backgrounds = {
-		rgb(82, 17, 45),
-		rgb(45, 8, 68),
-		rgb(103, 20, 25),
-		rgb(28, 7, 44),
-	}
-	buffer:fill(1, 1, rows, width, " ", backgrounds[(frame % #backgrounds) + 1])
-	if not caged then
-		local scars = { "/", "\\", "X", "!", "#", "<", ">" }
-		local scar_count = math.min(34, math.max(12, math.floor(width / 4)))
-		for index = 1, scar_count do
-			local x = 1 + ((index * 19 + frame * 13 + index * frame) % math.max(1, width - 1))
-			local y = 1 + ((index * 7 + frame * 3) % rows)
-			local glyph = scars[((index + frame * 2) % #scars) + 1]
-			buffer:set(y, x, glyph, rgb(126 + (frame * 17 % 80), 22, 74 + (index * 11 % 90), { "bold" }))
-		end
-	end
-	local shake = caged and 0 or ((frame * 3) % 5) - 2
-	for row = 1, math.min(rows, #lines) do
-		local text = lcatui.width.truncate(lines[row], math.max(1, width - 4))
-		local text_width = lcatui.width.string(text)
-		local row_shake = row % 2 == 0 and shake or -shake
-		local col = clamp(math.floor((width - text_width) / 2) + 1 + row_shake, 2, math.max(2, width - text_width))
-		local hot = frame % 2 == 0
-		local style = row == 2 and rgb(255, hot and 55 or 112, hot and 126 or 55, { "bold" })
-			or row == 3 and rgb(255, hot and 179 or 82, hot and 71 or 145, { "bold" })
-			or rgb(hot and 232 or 178, hot and 55 or 92, hot and 201 or 244, { "bold" })
-		if not caged and text_width < width - 8 then
-			buffer:write(row, clamp(col - row_shake * 2, 2, width - text_width), text,
-				rgb(78, 23, 102, { "dim" }), math.max(1, width - col + 1))
-		end
-		buffer:write(row, col, text, style, math.max(1, width - col + 1))
-		if width > 20 then
-			local fang_col = (frame + row) % 2 == 0 and 2 or width - 1
-			buffer:set(row, fang_col, frame % 2 == 0 and "/" or "\\", rgb(150, 31, 78, { "bold" }))
-		end
-	end
-	return true
-end
-
 local function flywheel_anchor(width, rows, wheel, time)
 	local compact = width < 72
 	local margin = compact and 5 or 11
@@ -1739,6 +1564,8 @@ function App.new(opts)
 		logged_size = nil,
 		logged_layout = nil,
 		last_frame = socket.gettime(),
+		fps_clock = opts.fps_clock or uv.hrtime,
+		fps_intervals = 0,
 		last_resize = 0,
 		frame_timer = nil,
 		stdin_poll = nil,
@@ -1853,7 +1680,7 @@ end
 function App:_focus_status(now)
 	if not self.focus_path then return nil end
 	local memory = self.state.file_memory[self.focus_path]
-	if not memory then self.focus_path = nil; return nil end
+	if not memory then return nil end
 	local files, index = self.state:working_files(6), 1
 	for candidate, item in ipairs(files) do if item.path == memory.path then index = candidate; break end end
 	local detail = { "focus " .. tostring(index) .. "/" .. tostring(#files), memory.verb or "file", memory.filename, memory.state }
@@ -1865,8 +1692,7 @@ end
 function App:_divider_transition(label, kind)
 	kind = kind or "quiet"
 	if label ~= self.divider_label or kind ~= self.divider_kind then
-		self.divider_previous_label = (self.divider_kind == "task" and kind == "task"
-			or self.divider_kind == "journey" and kind == "journey")
+		self.divider_previous_label = (self.divider_kind == "task" and kind == "task")
 			and self.divider_label and label and self.divider_label ~= label and self.divider_label or nil
 		self.divider_label, self.divider_kind = label, kind
 		self.divider_molt_started = self.flow_time
@@ -1879,7 +1705,8 @@ function App:_divider_transition(label, kind)
 	return self.divider_label, self.divider_kind, self.divider_previous_label, progress
 end
 
-function App:render(frame_dt)
+-- Advance once per scheduled frame. Painting must never age or expire activity.
+function App:advance(frame_dt)
 	local width, terminal_height = self:_size()
 	local height = math.min(STRIP_ROWS, terminal_height)
 	local world_rows = math.max(3, height - 4)
@@ -1891,16 +1718,15 @@ function App:render(frame_dt)
 	local notice = self.state.notices[#self.state.notices]
 	local state_now = self.state.clock()
 	local flywheel = self.state:flywheel_visual(state_now)
-	local wolf_active = self.state.wolf_effect
-		and state_now - (self.state.wolf_effect.started_at or state_now) <= (self.state.wolf_effect.duration or 0)
-	if self.state.wolf_effect and not wolf_active then self.state.wolf_effect = nil end
+	if self.state.flywheel and not flywheel then self.state.flywheel = nil end
 	if notice and notice.created_at and state_now - notice.created_at > 8 then notice = nil end
 	local flow = self:_flow_for(width, world_rows)
 	local now = socket.gettime()
 	local dt = frame_dt == nil and clamp(now - self.last_frame, 0, 0.1) or frame_dt
 	self.last_frame = now
 	local user_typing = self.editor:text() ~= ""
-	if user_typing then self.focus_path = nil end
+	if user_typing or (self.focus_path and not self.state.file_memory[self.focus_path]) then self.focus_path = nil end
+	self.state:set_input(self.editor:text(), self.editor:display_cursor())
 	local target_motion_scale = user_typing and 0.28 or 1
 	local motion_ease = 1 - math.exp(-(user_typing and 8 or 5) * math.max(0, dt))
 	self.motion_scale = self.motion_scale + (target_motion_scale - self.motion_scale) * motion_ease
@@ -1934,7 +1760,7 @@ function App:render(frame_dt)
 	local visible_tools = {}
 	for index = #self.state.tools, 1, -1 do
 		local tool = self.state.tools[index]
-		if tool.status == "active" or (tool.finished_at and now - tool.finished_at < 4) then
+		if tool.status == "active" or (tool.finished_at and state_now - tool.finished_at < 4) then
 			visible_tools[#visible_tools + 1] = tool
 			if #visible_tools >= world_rows then break end
 		end
@@ -2002,8 +1828,7 @@ function App:render(frame_dt)
 	}
 	flow:step(visual_dt, scene)
 
-	local target_palette = wolf_active and { r = 205, g = 28, b = 101 }
-		or listening and { r = 55, g = 151, b = 157 }
+	local target_palette = listening and { r = 55, g = 151, b = 157 }
 		or self.state.proof > 0 and { r = 62, g = 205, b = 153 }
 		or failed and { r = 205, g = 66, b = 101 }
 		or active and { r = 132, g = 69, b = 171 }
@@ -2012,23 +1837,57 @@ function App:render(frame_dt)
 	for channel, target in pairs(target_palette) do
 		self.palette[channel] = self.palette[channel] + (target - self.palette[channel]) * palette_mix
 	end
-	local field_style = rgb(
-		math.floor(self.palette.r + 0.5),
-		math.floor(self.palette.g + 0.5),
-		math.floor(self.palette.b + 0.5)
-	)
+	if self.effect_transition_from then
+		self.effect_transition_age = self.effect_transition_age + visual_dt
+		if self.effect_transition_age >= 0.72 then self.effect_transition_from = nil end
+	end
+	local label, kind = self.state:divider_status(state_now)
+	local current_label, current_kind, previous_label, molt_progress = self:_divider_transition(label, kind)
+	local completion_age = state_now - (self.state.assistant_completed_at or state_now)
+	self.celebration_active = not self.state.failure and self.state.completion_summary ~= nil
+		and completion_age >= 0.68 and completion_age <= 0.68 + 1.05
+	scene.core_x, scene.core_y, scene.threshold = width * 0.5, world_rows * 0.47, 0.13
+	scene.style = rgb(math.floor(self.palette.r + 0.5), math.floor(self.palette.g + 0.5), math.floor(self.palette.b + 0.5))
+	self.frame = {
+		width = width, terminal_height = terminal_height, height = height, world_rows = world_rows,
+		input_lines = input_lines, editor_row = editor_row, editor_col = editor_col,
+		top_divider_row = top_divider_row, flow_top = flow_top, divider_row = divider_row,
+		input_row = input_row, status_row = status_row, notice = notice, now = state_now,
+		flywheel = flywheel, flow = flow, scene = scene, active = active,
+		live_handoffs = live_handoffs, live_transfers = live_transfers,
+		foreground_streams = foreground_streams, foreground_set = foreground_set,
+		ordered_streams = ordered_streams, foreground_rows = foreground_rows,
+		visible_tools = visible_tools, staged_tools = staged_tools,
+		tool_positions = tool_positions, memory_positions = memory_positions,
+		current_label = current_label, current_kind = current_kind,
+		previous_label = previous_label, molt_progress = molt_progress,
+		displayed_phase = self.state:display_model_phase(state_now),
+		focus_status = self:_focus_status(state_now),
+	}
+end
+
+-- Repaint the prepared frame without advancing animation or semantic state.
+-- Renderer bookkeeping (cursor anchoring, diff buffers) remains an IO concern.
+function App:draw()
+	local frame = assert(self.frame, "advance must prepare a frame before drawing")
+	local width, terminal_height, height, world_rows = frame.width, frame.terminal_height, frame.height, frame.world_rows
+	local input_lines, editor_row, editor_col = frame.input_lines, frame.editor_row, frame.editor_col
+	local top_divider_row, flow_top = frame.top_divider_row, frame.flow_top
+	local divider_row, input_row, status_row = frame.divider_row, frame.input_row, frame.status_row
+	local notice, state_now, flywheel, flow = frame.notice, frame.now, frame.flywheel, frame.flow
+	local live_handoffs, live_transfers = frame.live_handoffs, frame.live_transfers
+	local foreground_streams, foreground_set = frame.foreground_streams, frame.foreground_set
+	local ordered_streams, foreground_rows = frame.ordered_streams, frame.foreground_rows
+	local active, visible_tools, staged_tools = frame.active, frame.visible_tools, frame.staged_tools
+	local tool_positions, memory_positions, scene = frame.tool_positions, frame.memory_positions, frame.scene
+	local field_style = scene.style
 	local screen = lcatui.Buffer.new(width, height)
 	local buffer = buffer_view(screen, flow_top - 1, world_rows)
 	buffer:fill(1, 1, world_rows, width, " ", field_style)
-	scene.core_x = width * 0.5
-	scene.core_y = world_rows * 0.47
-	scene.threshold = 0.13
-	scene.style = field_style
 	local effect_context = {
 		flow = flow, scene = scene, time = self.flow_time,
 	}
 	if self.effect_transition_from then
-		self.effect_transition_age = self.effect_transition_age + visual_dt
 		local progress = clamp(self.effect_transition_age / 0.72, 0, 1)
 		local previous = lcatui.Buffer.new(width, world_rows)
 		local current = lcatui.Buffer.new(width, world_rows)
@@ -2042,7 +1901,6 @@ function App:render(frame_dt)
 				buffer:set(row, col, cell.char, cell.style)
 			end
 		end
-		if progress >= 1 then self.effect_transition_from = nil end
 	else
 		tui_effects.render(self.effect, buffer, effect_context)
 	end
@@ -2170,44 +2028,63 @@ function App:render(frame_dt)
 		draw_tool_stage(buffer, staged_tools, self.flow_time, state_now)
 	end
 
-	if wolf_active and not self.state.failure then
-		self.celebration_active = false
-		draw_insanitywolf(buffer, width, world_rows, self.state.wolf_effect, state_now)
-	elseif self.state.failure then
-		self.celebration_active = false
-		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
+	if self.state.failure then
+		-- Raw process status belongs in tool details, not the river's center.
+		if not tostring(self.state.failure):match("^exit %-?%d+") then
+			center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
+		end
 	elseif self.state.completion_summary then
 		local completion_age = state_now - (self.state.assistant_completed_at or state_now)
-		self.celebration_active = completion_pop(buffer, math.max(1, math.floor(world_rows * 0.5)),
-			self.state.completion_summary, completion_age)
+		completion_pop(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.completion_summary, completion_age)
 		crystallize(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.completion_summary,
 			completion_age, rgb(91, 224, 169, { "bold" }))
-	elseif self.state.verification then
-		self.celebration_active = false
-		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "◆ " .. compact_text(self.state.verification, width - 12), rgb(91, 224, 169, { "bold" }))
 	elseif self.state.cancelled then
-		self.celebration_active = false
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "cancelled", rgb(218, 158, 93, { "bold" }))
 	elseif #visible_tools == 0 and active then
-		self.celebration_active = false
-		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state:display_model_phase(), rgb(178, 157, 199, { "bold" }))
-	else
-		self.celebration_active = false
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), frame.displayed_phase, rgb(178, 157, 199, { "bold" }))
 	end
-	if flywheel and not wolf_active and not self.state.failure then
+	if flywheel and not self.state.failure then
 		draw_flywheel(buffer, width, world_rows, flywheel, self.flow_time)
 	end
 
-	local divider_label, divider_kind = self.state:divider_status(state_now)
-	local current_label, current_kind, previous_label, molt_progress = self:_divider_transition(divider_label, divider_kind)
-	living_divider(screen, top_divider_row, width, current_label, current_kind, self.flow_time,
-		previous_label, molt_progress, self.state.plan)
+	living_divider(screen, top_divider_row, width, frame.current_label, frame.current_kind, self.flow_time,
+		frame.previous_label, frame.molt_progress, self.state.plan)
+	if self.inspector_open then
+		local tools = self.state.tools
+		local selected = self.state.tools_by_id[self.inspector_id or ""] or tools[#tools]
+		local index = 0
+		for i, tool in ipairs(tools) do if tool == selected then index = i; break end end
+		buffer:fill(1, 1, world_rows, width, " ", rgb(211, 208, 216))
+		screen:fill(1, 1, 1, width, " ", rgb(105, 222, 222))
+		screen:write(1, 2, "TOOLS · Tab next · ↑↓ scroll · Ctrl-T close", rgb(105, 222, 222), width - 2)
+		local lines = {}
+		if selected then
+			lines[1] = tostring(index) .. "/" .. tostring(#tools) .. " · " .. selected.name .. " · " .. selected.status .. " · " .. selected.id
+			local text = "args: " .. (selected.args_detail or selected.args or "") .. "\nresult: "
+				.. (selected.result_detail or selected.result or "running; no result yet")
+			for line in (text .. "\n"):gmatch("(.-)\n") do
+				local remaining = line:gsub("\t", "    ")
+				repeat
+					local piece = lcatui.width.truncate(remaining, width - 4)
+					lines[#lines + 1] = piece
+					remaining = remaining:sub(#piece + 1)
+				until remaining == "" or piece == ""
+			end
+		else lines[1] = "No tools yet" end
+		-- Navigation bookkeeping is UI-only; tool state continues updating underneath.
+		self.inspector_id = selected and selected.id or nil
+		self.inspector_max_scroll = math.max(0, #lines - world_rows)
+		self.inspector_scroll = math.min(self.inspector_scroll or 0, self.inspector_max_scroll)
+		for row = 1, world_rows do
+			buffer:write(row, 2, lines[row + self.inspector_scroll] or "", rgb(211, 208, 216), width - 2)
+		end
+	end
 	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
 	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
 	for index, line in ipairs(input_lines) do
 		screen:write(input_row + index - 1, 10, line, rgb(224, 219, 229), width - 10)
 	end
-	local displayed_phase = self.state:display_model_phase()
+	local displayed_phase = frame.displayed_phase
 	local status = self.busy and "working · Ctrl-C cancels · input may be queued"
 		or "listening · Enter submits · Ctrl-D exits"
 	local active_count = #self.state:active_tools()
@@ -2217,11 +2094,11 @@ function App:render(frame_dt)
 		for _, tool in ipairs(staged_tools) do if tool.status ~= "active" then resolved = resolved + 1 end end
 		status = status .. " · stage " .. tostring(resolved) .. "/" .. tostring(#staged_tools)
 	end
-	local focus_status = self:_focus_status(state_now)
+	local focus_status = frame.focus_status
 	if focus_status then status = compact_text(focus_status, width - 18) .. " · Tab next"
 	elseif notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
-	screen:write(status_row, 2, "LCA · " .. displayed_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
-	self.state:set_input(self.editor:text(), self.editor:display_cursor())
+	local fps_label = self.fps and (tostring(math.floor(self.fps + 0.5)) .. " fps") or "-- fps"
+	screen:write(status_row, 2, "LCA · " .. displayed_phase .. " · " .. fps_label .. " · " .. status, rgb(74, 93, 105), width - 2)
 	local cursor_col = 10 + editor_col
 	local cursor_cell = screen.rows[input_row + editor_row - 1][cursor_col]
 	local cursor_style = cursor_cell.style or rgb(224, 219, 229)
@@ -2232,10 +2109,41 @@ function App:render(frame_dt)
 			width, height, terminal_height, world_rows, divider_row, input_row, status_row)
 		self.logged_layout = layout_key
 	end
+	-- Reassert ownership before every repaint: terminal resets or other writers
+	-- may have made the hardware cursor visible since startup. Hiding is idempotent.
+	self.backend:write(lcatui.ansi.hide_cursor)
+	if self.redraw_requested then
+		-- Relative redraws cannot recover a lost terminal cursor anchor. Clear
+		-- only the visible screen (not scrollback) and rebuild from a known row.
+		self.backend:write(lcatui.ansi.reset .. lcatui.ansi.clear_screen
+			.. lcatui.ansi.position(math.max(1, terminal_height - screen.height + 1), 1))
+		self.renderer.previous = nil
+		self.renderer.inline_height = 0
+		self.redraw_requested = false
+	end
 	self.renderer:set_cursor(nil):draw(screen)
 end
 
+-- Compatibility entry point for a full frame; use draw() for repaint-only IO.
+function App:render(frame_dt)
+	self:advance(frame_dt)
+	self:draw()
+	-- Count completed scheduled frames, not repaint-only draws. Wall time includes stalls.
+	local completed = self.fps_clock()
+	if self.fps_window_start then
+		self.fps_intervals = self.fps_intervals + 1
+		local elapsed = completed - self.fps_window_start
+		if elapsed >= 1e9 then
+			self.fps = self.fps_intervals * 1e9 / elapsed
+			self.fps_window_start, self.fps_intervals = completed, 0
+		end
+	else
+		self.fps_window_start = completed
+	end
+end
+
 function App:commit_lines(lines)
+	self.backend:write(lcatui.ansi.hide_cursor)
 	self.renderer:set_cursor(nil)
 	return self.renderer:commit(lines)
 end
@@ -2527,6 +2435,19 @@ function App:_handle_action(action)
 	if not action then return end
 	if action.type == "exit" then self.exit_requested = true
 	elseif action.type == "cancel" then self.cancel_requested = true; self.state:cancel("cancelling")
+	elseif action.type == "inspect" then
+		self.inspector_open = not self.inspector_open
+		self.inspector_scroll = 0
+		if self.input then self.input.inspect = self.inspector_open end
+	elseif action.type == "inspect_next" then
+		local tools = self.state.tools
+		local index = 0
+		for i, tool in ipairs(tools) do if tool.id == self.inspector_id then index = i; break end end
+		self.inspector_id = #tools > 0 and tools[index % #tools + 1].id or nil
+		self.inspector_scroll = 0
+	elseif action.type == "inspect_scroll" then
+		self.inspector_scroll = clamp((self.inspector_scroll or 0) + action.delta, 0, self.inspector_max_scroll or 0)
+	elseif action.type == "redraw" then self.redraw_requested = true
 	elseif action.type == "focus_next" then self:focus_next()
 	elseif action.type == "submit" then
 		if action.text ~= "" then self.submitted[#self.submitted + 1] = action.text end
@@ -2606,6 +2527,9 @@ function tui.with_terminal(terminal, renderer, callback)
 	local started, start_err = terminal:start({ raw = true })
 	if not started then return nil, start_err or "TUI requires an interactive POSIX terminal" end
 	local mounted, mount_err = pcall(function()
+		-- The input cursor is painted in the buffer; hide the hardware cursor
+		-- while inline animation moves the terminal's write position.
+		renderer.backend:write(lcatui.ansi.hide_cursor)
 		renderer:mount("inline")
 	end)
 	if not mounted then
@@ -2639,19 +2563,75 @@ local function save_history(path, history)
 	file:close()
 end
 
-local function command_ui(state)
+local function command_ui(app)
+	local state = app.state
 	local facade = {}
+	local direct_test = false
 	function facade.muted(text) state:notice(text) end
 	function facade.error(text) state:notice("error: " .. tostring(text), "error") end
-	function facade.block(text) state:notice(text) end
+	function facade.block(text)
+		if not direct_test then state:notice(text); return end
+		local lines = {}
+		for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
+			lines[#lines + 1] = "test › " .. response_text(line, 4000)
+		end
+		app:commit_lines(lines)
+	end
+	function facade.test_begin(command)
+		direct_test = true
+		app.busy, app.cancel_requested = true, false
+		state.prompt = compact_text(command, 240)
+		state.model_phase = "running tests · Ctrl-C cancels · no model calls"
+		app:drive_frame()
+	end
+	function facade.test_poll()
+		app:pump()
+		return app.cancel_requested or app.exit_requested
+	end
+	function facade.test_end()
+		direct_test = false
+		app.busy, app.cancel_requested = false, false
+		state:listen()
+		app:drive_frame()
+	end
 	function facade.compaction(removed, tokens) state:notice("compacted " .. tostring(removed) .. " messages; ~" .. tostring(math.floor((tokens or 0) / 1000)) .. "k tokens remain") end
 	function facade.status(session) state:notice("model " .. tostring(session.model) .. " · " .. tostring(session:turn_count()) .. " turns · " .. tostring(session:token_status())) end
 	function facade.plan(plan) state.plan = plan; state:notice(tostring(#(plan or {})) .. " plan steps") end
 	function facade.jobs(list) state:notice(tostring(#(list or {})) .. " background jobs") end
 	function facade.job_detail(job) state:notice((job and job.id or "job") .. " · " .. tostring(job and job.status or "unknown")) end
 	function facade.job_output(id, output) state:notice(tostring(id) .. " · " .. compact_text(output, 150)) end
-	function facade.insanitywolf(active) state:insanitywolf(active) end
 	return facade
+end
+
+function App:start_recording(path)
+	if self.recording and self.recording.fd then
+		self.state:notice("recording already active · /record off first", "error")
+		return nil, "recording already active"
+	end
+	local Recording = require("agent.tui_recording")
+	local recording, err = Recording.open(path, { effect = self.effect,
+		on_error = function(message)
+			self.state:notice("recording stopped: " .. tostring(message), "error")
+		end,
+	})
+	if not recording then
+		self.state:notice("cannot record: " .. tostring(err), "error")
+		return nil, err
+	end
+	self.recording = recording:attach(self.state)
+	self:commit_lines({ "recording › " .. response_text(recording.path, 500),
+		"LOCAL PRIVATE CAPTURE · prompts, tool args/results may contain secrets; no redaction.", "" })
+	return true
+end
+
+function App:stop_recording()
+	if not self.recording then self.state:notice("recording is off"); return true end
+	local recording = self.recording
+	local ok, err = recording:close()
+	self.recording = nil
+	self:commit_lines({ "recording saved › " .. response_text(recording.path, 500),
+		ok and "" or ("recording stopped early: " .. tostring(err)) })
+	return ok, err
 end
 
 function tui.run(options)
@@ -2671,7 +2651,7 @@ function tui.run(options)
 		effect = options.tui_effect or os.getenv("LCA_TUI_EFFECT"),
 		tool_stage = tool_stage,
 	})
-	local facade = command_ui(app.state)
+	local facade = command_ui(app)
 	local last_auto_compact_messages = 0
 	local function auto_save()
 		if #session.messages > 0 then
@@ -2688,6 +2668,8 @@ function tui.run(options)
 	end
 
 	local result, err = tui.with_terminal(app.terminal, app.renderer, function()
+		local record_path = options.record_path or os.getenv("LCA_TUI_RECORD")
+		if record_path and record_path ~= "" then app:start_recording(record_path) end
 		app.state:notice("fresh session · /resume restores the last session for this project")
 		last_auto_compact_messages = #session.messages
 		jobs.prune(session.cwd)
@@ -2703,7 +2685,15 @@ function tui.run(options)
 				app.state.model_phase = "running command"
 				app:drive_frame()
 				local requested_effect = line:match("^/effect%s+([%w_-]+)%s*$")
-				if line:match("^/river%s*$") then
+				if line:match("^/record%s*$") or line:match("^/record%s") then
+					local value = line:match("^/record%s*(.-)%s*$")
+					if value == "off" then app:stop_recording()
+					elseif value == "status" or (value == "" and app.recording and app.recording.fd) then
+						app:commit_lines({ app.recording and app.recording.fd and ("recording › " .. app.recording.path)
+							or "recording off · /record starts; /record off stops", "" })
+					else app:start_recording(value ~= "" and value or nil) end
+					goto continue
+				elseif line:match("^/river%s*$") then
 					app:commit_river_details()
 					goto continue
 				elseif line:match("^/effect%s*$") then
@@ -2783,9 +2773,12 @@ function tui.run(options)
 						cache_percent = (tonumber(final_usage.cached_tokens) or 0) / model_tokens * 100
 					end
 					app.state:assistant_complete(final, { tokens = model_tokens, cache_percent = cache_percent })
+					app.river_seed = session.id
+					app:commit_river()
 					app:commit_assistant(final)
 					maybe_auto_compact()
 				else
+					if app.recording then app.recording:record("failure", { text = tostring(turn_result) }) end
 					app.state:notice(tostring(turn_result), "error")
 					app.state.mode = "failed"
 					app:commit_lines({ "error › " .. compact_text(turn_result, 240), "" })
@@ -2801,6 +2794,7 @@ function tui.run(options)
 		save_history(history_path, app.editor.history)
 		return true
 	end)
+	if app.recording then app.recording:close() end
 	if not result then
 		core.debug_log("[tui] exiting after fatal error: %s", tostring(err))
 		return nil, err

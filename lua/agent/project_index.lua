@@ -62,18 +62,24 @@ local function build_file_tree(cwd)
 		return nil, false
 	end
 
-	local lines = {}
-	local truncated = false
+	-- A stable root map avoids spending the startup budget on deep fixtures.
+	-- Discover deeper paths with find/grep when the task requires them.
+	local entries, seen = {}, {}
 	for line in output:gmatch("[^\n]+") do
-		if #lines < TREE_MAX_FILES then
-			lines[#lines + 1] = line
-		else
-			truncated = true
-			break
+		local relative = line:gsub("^%./", "")
+		local directory = relative:match("^([^/]+)/")
+		local entry = directory and (directory .. "/") or relative
+		if not seen[entry] then
+			seen[entry] = true
+			entries[#entries + 1] = entry
 		end
 	end
-
-	return table.concat(lines, "\n"), truncated
+	table.sort(entries)
+	local lines = {}
+	for i = 1, math.min(#entries, TREE_MAX_FILES) do
+		lines[i] = entries[i]
+	end
+	return table.concat(lines, "\n"), #entries > TREE_MAX_FILES
 end
 
 local function detect_key_files(cwd)
@@ -120,9 +126,9 @@ function project_index.build(cwd)
 		parts[#parts + 1] = "# Project Structure"
 		parts[#parts + 1] = ""
 		if truncated then
-			parts[#parts + 1] = string.format("File tree (first %d files, more exist):", TREE_MAX_FILES)
+			parts[#parts + 1] = string.format("Root map (up to %d entries; more exist). Use find/grep for deeper paths:", TREE_MAX_FILES)
 		else
-			parts[#parts + 1] = "File tree:"
+			parts[#parts + 1] = "Root map (files and directories). Use find/grep for deeper paths:"
 		end
 		parts[#parts + 1] = "```"
 		parts[#parts + 1] = tree

@@ -289,6 +289,30 @@ run_test("skips later run after failed edit", function()
 	end
 end)
 
+run_test("job waits emit progress and remain cancellable through the executor", function()
+	local jobs = require("agent.jobs")
+	local job = assert(jobs.start({ command = "sleep 30" }, { cwd = tmp_dir }))
+	local events = {}
+	local saw_progress = false
+	local results = parallel.execute_batch({ { name = "job_wait", args = { id = job.id, timeout_ms = 1200 } } }, {
+		cwd = tmp_dir,
+		cancelled = function() return saw_progress end,
+	}, function(event)
+		events[#events + 1] = event
+		if event.phase == "progress" then
+			saw_progress = true
+			assert(event.progress.elapsed_ms >= 0, "progress must include elapsed time")
+		end
+	end)
+	local status = jobs.status(tmp_dir, job.id)
+	jobs.stop(tmp_dir, job.id)
+	assert(saw_progress, "wait must emit a heartbeat even with no output")
+	assert_eq(results[1].summary, "cancelled")
+	assert(status.status == "running" or status.status == "starting", "wait cancellation stopped the job")
+	assert_eq(events[1].phase, "start")
+	assert_eq(events[#events].phase or "result", "result")
+end)
+
 run_test("defers same-batch job controls after job_start", function()
 	local events = {}
 	local calls = {

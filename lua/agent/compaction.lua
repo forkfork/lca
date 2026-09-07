@@ -99,8 +99,7 @@ local function recent_turn_ast_block(session)
 	}, "\n")
 end
 
-local function build_summary_prompt(messages_to_summarize, previous_summary, session, opts)
-	opts = opts or {}
+local function build_summary_prompt(messages_to_summarize, previous_summary, session)
 	local conversation_text = serialize_messages(messages_to_summarize)
 
 	local prompt_text = "<conversation>\n" .. conversation_text .. "\n</conversation>\n\n"
@@ -113,21 +112,6 @@ local function build_summary_prompt(messages_to_summarize, previous_summary, ses
 		prompt_text = prompt_text .. UPDATE_SUMMARIZATION_PROMPT
 	else
 		prompt_text = prompt_text .. SUMMARIZATION_PROMPT
-	end
-	if opts.preserve_next_improvements then
-		prompt_text = prompt_text .. [[
-
-Additional insanitywolf checkpoint rules:
-- Compact prior execution details aggressively.
-- Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
-- In "Next Steps", preserve a ranked backlog of only strong product bets. Each bet must name its user-visible payoff, why it coheres with the product direction, the complete vertical slice, and the exact files/commands/resources involved.
-- Rank bets by new user power, removal of central workflow friction, compounding leverage, product coherence, and ability to ship completely inside another cycle.
-- Do not promote tests, hardening, cleanup, refactoring, documentation, inventory work, or conventionalization into their own product bet. Include them only when they directly support or protect a user-visible capability.
-- Do not list cosmetic changes, speculative optimization, framework churn, generic enterprise features, or abstractions without demonstrated product leverage.
-- Do not list inventory checks, rereads, final tree listings, optional lint probes, or already-passed verification as next-cycle work. Put those in Critical Context only if they matter.
-- If a strong reversible product bet remains, do not say no further autonomous cycle is warranted merely because it requires taste; insanitywolf is allowed to make coherent local product decisions.
-- If the remaining work lacks a concrete user-visible payoff, is destructive or difficult to reverse, requires external services, secrets, paid resources, or an incompatible architecture migration, state that no further autonomous cycle is warranted and name the blocker.
-- When no further autonomous cycle is warranted, preserve the strongest remaining bets as explicit offers rather than starting them.]]
 	end
 
 	return prompt_text
@@ -542,9 +526,8 @@ function serialize_messages(messages)
 	return table.concat(parts, "\n\n")
 end
 
-function compaction.generate_summary(messages_to_summarize, previous_summary, session, opts)
-	opts = opts or {}
-	local prompt_text = build_summary_prompt(messages_to_summarize, previous_summary, session, opts)
+function compaction.generate_summary(messages_to_summarize, previous_summary, session)
+	local prompt_text = build_summary_prompt(messages_to_summarize, previous_summary, session)
 
 	local provider = providers.load(session.credentials_path)
 	local response = require("agent.core").complete_logged(provider, {
@@ -563,17 +546,6 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 end
 
 compaction._build_summary_prompt = build_summary_prompt
-
-local function append_current_plan(text, session)
-	if type(session) ~= "table" or type(session.plan) ~= "table" or #session.plan == 0 then
-		return text
-	end
-	local lines = { tostring(text or ""), "", "## Current Plan" }
-	for i, item in ipairs(session.plan) do
-		lines[#lines + 1] = tostring(i) .. ". [" .. tostring(item.status or "pending") .. "] " .. tostring(item.step or "")
-	end
-	return table.concat(lines, "\n")
-end
 
 function compaction.compact(session, opts)
 	opts = opts or {}
@@ -617,12 +589,8 @@ function compaction.compact(session, opts)
 	local summary = compaction.generate_summary(
 		messages_to_summarize,
 		session.compaction_summary,
-		session,
-		opts
+		session
 	)
-	if opts.preserve_current_plan then
-		summary = append_current_plan(summary, session)
-	end
 	summary = append_file_operations(summary, file_details)
 
 	-- Store summary for iterative updates

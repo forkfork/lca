@@ -57,7 +57,7 @@ local function emit_start(on_tool, tc, index)
 end
 
 local function execute_tool(tc, index, context, on_tool)
-	if tc.name ~= "run" or not on_tool then
+	if (tc.name ~= "run" and tc.name ~= "job_wait") or not on_tool then
 		return registry.execute(tc.name, tc.args, context)
 	end
 	local tool_context = setmetatable({

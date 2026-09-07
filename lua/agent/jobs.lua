@@ -738,18 +738,31 @@ function jobs.prune(cwd, opts)
 	}
 end
 
-function jobs.wait(cwd, id, args)
+function jobs.wait(cwd, id, args, context)
 	args = args or {}
+	context = context or {}
 	local timeout_ms = math.max(0, math.floor(tonumber(args.timeout) or tonumber(args.timeout_ms) or 1000))
-	local deadline = (uv.hrtime() / 1000000) + timeout_ms
+	local started_ms = uv.hrtime() / 1000000
+	local deadline = started_ms + timeout_ms
+	local next_progress_ms = started_ms
 	local job, err
 	while true do
+		-- Tool waits run on the UI thread. Service input and rendering before
+		-- polling again, including cancellation set by this pump.
+		if context.on_wait then context.on_wait() end
+		if context.cancelled and context.cancelled() then
+			return nil, "cancelled waiting for job " .. tostring(id), "cancelled"
+		end
 		job, err = jobs.status(cwd, id)
 		if not job then return nil, err end
 		if job.status ~= "starting" and job.status ~= "running" then
 			return job
 		end
 		local now_ms = uv.hrtime() / 1000000
+		if context.progress and now_ms >= next_progress_ms then
+			context.progress({ elapsed_ms = math.floor(now_ms - started_ms) })
+			next_progress_ms = now_ms + 2000
+		end
 		if now_ms >= deadline then
 			return job
 		end

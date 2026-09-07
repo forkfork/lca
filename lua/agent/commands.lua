@@ -2,17 +2,11 @@ local commands = {}
 local context_limits = require("agent.context_limits")
 local jobs = require("agent.jobs")
 
-local INSANITYWOLF_PROMPT = table.concat({
-	"Improve this product in insanitywolf mode.",
-	"Understand what it is trying to become, form at least three strong coherent product bets, and choose the one with the greatest user-visible power and compounding leverage.",
-	"Implement the smallest complete vertical slice that proves the capability, verify it, then continue through bounded product-bet cycles while strong reversible bets remain.",
-	"Do not spend a cycle merely on tests, hardening, cleanup, refactoring, documentation, or conventionalization; those may support a product bet but are not the product bet.",
-}, "\n")
-
 local HELP = [[
 /help                 show commands
 /status               show cwd, model, credentials, and turn count
 /context [n]          show context/token breakdown and largest messages
+/test [command]       run tests without a model; remember command for this session
 /jobs [--all]         list background jobs
 /job <id>             show durable job status
 /job-output <id> [n]  show last n stdout lines for a durable job
@@ -21,7 +15,6 @@ local HELP = [[
 /job-prune [days]     prune old finished jobs
 /reasoning <effort>   low, medium, high, xhigh; max on Astra; none maps to low on Astra
 /service-tier <tier>  set service tier: auto, default, flex, priority
-/insanitywolf [on|off] launch bounded autonomous product-bet cycles
 /river               inspect the last turn’s tool activity
 /tools [on|off]       spotlight every tool in the current batch
 /credentials <path>   change credentials file
@@ -341,6 +334,47 @@ local function dispatch_job_command(name, rest, session, ui)
 	return true
 end
 
+local function dispatch_test(rest, session, ui)
+	local command = rest ~= "" and rest or session.test_command
+	if not command then
+		ui.error("no test command selected; use /test <shell command> (for example /test make test)")
+		return
+	end
+	session.test_command = command
+	local job, err = jobs.start({ command = command }, { cwd = session.cwd })
+	if not job then ui.error(err); return end
+	local ok, failure = xpcall(function()
+		if ui.test_begin then ui.test_begin(command) end
+		ui.block("test · " .. job.id .. " · " .. command .. " · no model calls")
+		while job.status == "starting" or job.status == "running" do
+			if ui.test_poll and ui.test_poll() then
+				job, err = jobs.stop(session.cwd, job.id)
+				if not job then error(err) end
+				break
+			end
+			local current
+			current, err = jobs.wait(session.cwd, job.id, { timeout = 50 })
+			if not current then error(err) end
+			job = current
+		end
+		for _, stream in ipairs({ "stdout", "stderr" }) do
+			local output, output_err = jobs.output(session.cwd, job.id, { stream = stream, tail = 30 })
+			if not output then error(output_err) end
+			if output ~= "" then
+				ui.block(stream .. " (tail, at most 4000 bytes):\n" .. output:sub(-4000))
+			end
+		end
+		local summary = job.status == "exited" and ("exit " .. tostring(job.exit_code)) or job.status
+		ui.block("test · " .. summary .. " · " .. job.id .. " · no model calls\n"
+			.. "stdout: " .. job.stdout .. "\nstderr: " .. job.stderr)
+	end, debug.traceback)
+	if not ok then
+		jobs.stop(session.cwd, job.id)
+	end
+	if ui.test_end then ui.test_end() end
+	if not ok then ui.error(failure) end
+end
+
 function commands.dispatch(line, session, ui)
 	local name, rest = line:match("^/([^%s]+)%s*(.*)$")
 	if not name then
@@ -350,6 +384,8 @@ function commands.dispatch(line, session, ui)
 
 	if name == "help" then
 		ui.block(HELP)
+	elseif name == "test" then
+		dispatch_test(rest, session, ui)
 	elseif name == "status" then
 		ui.status(session)
 	elseif name == "context" then
@@ -385,35 +421,6 @@ function commands.dispatch(line, session, ui)
 				session.service_tier = value
 				ui.muted("service tier: " .. session.service_tier)
 			end
-		end
-	elseif name == "insanitywolf" then
-		local value
-		if rest == "" then
-			value = session.flow == "insanitywolf" and "off" or "insanitywolf"
-		elseif rest == "on" then
-			value = "insanitywolf"
-		elseif rest == "off" then
-			value = "off"
-		else
-			ui.error("usage: /insanitywolf [on|off]")
-			return
-		end
-		session.flow = value
-		session.insanitywolf_cycle = session.flow == "insanitywolf" and 1 or nil
-		session.wolf_status = nil
-		session.wolf_ledger = session.flow == "insanitywolf" and {} or nil
-		session.system_prompt = nil
-		session.system_prompt_version = nil
-		if session.flow == "insanitywolf" then
-			if ui.insanitywolf then
-				ui.insanitywolf(true)
-			else
-				ui.muted("insanitywolf: loose · bite through the fucking wall")
-			end
-			session:add_user(INSANITYWOLF_PROMPT)
-			return "run"
-		else
-			if ui.insanitywolf then ui.insanitywolf(false) else ui.muted("insanitywolf: caged") end
 		end
 	elseif name == "credentials" then
 		if rest == "" then

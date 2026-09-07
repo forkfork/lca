@@ -102,14 +102,53 @@ test("concurrent tools coexist and resolve by stable identity", function()
 	assert_eq(state.tools_by_id.c.status, "active")
 end)
 
+test("active tools survive history pressure and all receive cancellation", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	local active = {}
+	for index = 1, 24 do
+		active[index] = state:tool_event(start("active-" .. index, "read", { path = "README.md" }))
+	end
+	for index = 1, 30 do
+		state:tool_event(finish("done-" .. index, "ls", {}, { summary = "done" }))
+	end
+	assert_eq(#state:active_tools(), 24)
+	assert_eq(state:active_tools()[1], active[1])
+	assert_eq(#state.tools, 42, "retain all active tools and 18 completed tools")
+	assert_eq(state.tools_by_id["done-1"], nil)
+	state:tool_event({ phase = "progress", call_id = "active-1", name = "read", progress = { elapsed_ms = 2000 } })
+	assert_eq(active[1].elapsed_ms, 2000)
+	state:tool_event(finish("active-1", "read", { path = "README.md" }, { summary = "done" }))
+	assert_eq(active[1].status, "ok")
+	assert_eq(#state:active_tools(), 23)
+	state:cancel("cancelled")
+	assert_eq(#state:active_tools(), 0)
+	for index = 2, 24 do assert_eq(active[index].status, "cancelled") end
+	assert_eq(#state.tools, 18)
+	assert_eq(next(state.tool_queues), nil)
+end)
+
+test("tool identity wins over argument fallback and queues release completed tools", function()
+	local state = tui.State.new({ clock = function() return 10 end })
+	local args = { path = "README.md" }
+	local first = state:tool_event(start("first", "read", args))
+	local second = state:tool_event(start("second", "read", args))
+	state:tool_event(finish("unknown", "read", args, { summary = "done" }))
+	assert_eq(first.status, "active", "unknown IDs must not resolve another call")
+	state:tool_event(finish("first", "read", {}, { summary = "done" }))
+	assert_eq(first.status, "ok")
+	state:tool_event(finish(nil, "read", args, { summary = "done" }))
+	assert_eq(second.status, "ok", "fallback must skip the completed call even when its result omitted args")
+	assert_eq(next(state.tool_queues), nil)
+end)
+
 test("realistic failure recovery settles into listening state", function()
 	local tick = 0
 	local state = tui.State.new({ clock = function() tick = tick + 1; return tick end })
 	replay_supabase_sequence(state)
 	assert_eq(state.mode, "listening")
 	assert_eq(state.failure, nil)
-	assert_eq(state.verification, "exit 0")
-	assert_eq(state.proof, 1)
+	assert_eq(state.verification, nil)
+	assert_eq(state.proof, 0)
 	assert_eq(state.disturbance, 0)
 	assert_contains(state.assistant, "Build passes")
 	assert_eq(#state.tools, 16)
@@ -226,6 +265,273 @@ local function fake_backend(opts)
 	return backend
 end
 
+test("private recording round-trips real state events and detaches on stop", function()
+	local Recording = require("agent.tui_recording")
+	local Replay = require("agent.tui_replay")
+	local uv = require("luv")
+	local path = os.tmpname(); os.remove(path)
+	local now = 20
+	local state = tui.State.new({ clock = function() return now end })
+	local original = state.tool_event
+	local recorder = assert(Recording.open(path, { clock = function() return now end, effect = "drift" })):attach(state)
+	assert_eq(uv.fs_stat(path).mode & 511, 384, "capture must be owner-only")
+	assert_eq(Recording.open(path), nil, "existing capture must not be overwritten")
+	state:submit("capture this")
+	now = 20.5; state:model_waiting("waiting for model")
+	state:model_activity({ status = "thinking" })
+	state:tool_event(start("a", "read", { path = "README.md" }))
+	state:tool_event(start("b", "run", { command = "never execute this" }))
+	now = 21
+	state:tool_event(finish("b", "run", {}, { summary = "failed", is_error = true, content = "diagnostic" }))
+	state:tool_event(finish("a", "read", {}, { summary = "read", content = "source" }))
+	state:reviewing({ status = "reviewing results" })
+	state:model_stream("answer")
+	state:assistant_complete("done", { tokens = 123 })
+	now = 22; state:submit("cancel this"); state:cancel("cancelled")
+	assert(recorder:close())
+	assert(recorder:close())
+	assert_eq(state.tool_event, original)
+	local fixture = Replay.load(path)
+	assert_eq(fixture.effect, "drift")
+	assert_eq(fixture.events[1].at, 0)
+	assert_eq(fixture.events[2].at, .5)
+	local player = Replay.new(fixture, { backend = fake_backend() })
+	while not player.finished do player:step() end
+	assert_eq(player.app.state.mode, state.mode)
+	assert_eq(player.app.state.tools_by_id.b.result_detail, state.tools_by_id.b.result_detail)
+	assert_eq(player.app.state.tools_by_id.a.status, "ok")
+	assert_eq(#player.app.submitted, 0)
+	os.remove(path)
+	local app = tui.App.new({ backend = fake_backend(), effect = "drift" })
+	assert(app:start_recording(path))
+	app.state:submit("through app")
+	assert(app:stop_recording())
+	assert_eq(Replay.load(path).events[1].text, "through app")
+	os.remove(path)
+end)
+
+test("recording auto-names private captures without overwriting", function()
+	local uv = require("luv")
+	local Recording = require("agent.tui_recording")
+	local Replay = require("agent.tui_replay")
+	local root = os.tmpname(); os.remove(root)
+	assert(uv.fs_mkdir(root, 448))
+	local directory = root .. "/replays"
+	local paths = {}
+	local ok, err = xpcall(function()
+		for index = 1, 2 do
+			local recording = assert(Recording.open(nil, { directory = directory }))
+			local path = recording.path
+			paths[#paths + 1] = path
+			assert_eq(path:sub(1, #directory + 1), directory .. "/")
+			assert(path:sub(#directory + 2):match("^[%w%-]+%.jsonl$"))
+			assert_eq(uv.fs_stat(path).mode & 511, 384)
+			recording:record("submit", { text = "capture " .. index })
+			assert(recording:close())
+		end
+		assert(paths[1] ~= paths[2])
+		assert_eq(Replay.load(paths[1]).events[1].text, "capture 1")
+		assert_eq(Replay.load(paths[2]).events[1].text, "capture 2")
+		assert_eq(uv.fs_stat(directory).mode & 511, 448)
+		for _, path in ipairs(paths) do assert(os.remove(path)) end
+		assert(uv.fs_rmdir(directory))
+		local file = assert(io.open(directory, "w")); file:close()
+		assert_eq(Recording.open(nil, { directory = directory }), nil)
+		assert(os.remove(directory))
+	end, debug.traceback)
+	uv.fs_rmdir(root)
+	assert(ok, err)
+end)
+
+test("recording limits and interrupted files stay replayable without breaking state", function()
+	local Recording = require("agent.tui_recording")
+	local Replay = require("agent.tui_replay")
+	local path = os.tmpname(); os.remove(path)
+	local warned
+	local recorder = assert(Recording.open(path, { limit = 600, on_error = function(err) warned = err end }))
+	local state = tui.State.new()
+	recorder:attach(state)
+	state:submit("small")
+	state:model_stream(string.rep("x", 800))
+	assert_contains(warned, "size limit")
+	assert_eq(recorder.fd, nil)
+	assert_eq(#state.assistant_stream, 800, "recording failure must not interrupt live state")
+	local fixture = Replay.load(path)
+	assert_eq(#fixture.events, 1)
+	assert_contains(fixture.recording_error, "size limit")
+	local file = assert(io.open(path, "r")); local saved = file:read("*a"); file:close()
+	-- Remove footer and simulate death during the next append.
+	saved = saved:match("^(.*\n)[^\n]+\n$")
+	file = assert(io.open(path, "w")); file:write(saved, '{"at":'); file:close()
+	assert_eq(#Replay.load(path).events, 1)
+	file = assert(io.open(path, "a")); file:write("\n"); file:close()
+	assert_eq(pcall(Replay.load, path), false, "malformed committed lines must be rejected")
+	os.remove(path)
+	assert_eq(Recording.open(path .. "/missing"), nil)
+end)
+test("tool inspector preserves drafts, follows identity and exposes bounded results", function()
+	local backend = fake_backend({ width = 80 })
+	local app = tui.App.new({ backend = backend, effect = "drift" })
+	app.input = tui.Input.new(app.editor)
+	app.editor:set("keep my draft")
+	app.editor.cursor = 4
+	app.state:tool_event(start("a", "read", { path = "README.md" }))
+	app.busy = true
+	app:feed_input("\20")
+	app:render(0)
+	assert_contains(app.renderer.previous:plain_line(1), "TOOLS")
+	assert_eq(app.inspector_id, "a")
+	app.state:tool_event(start("b", "run", { command = "make test" }))
+	app.state:tool_event(finish("a", "read", {}, { is_error = true, summary = "failed", content = "diagnostic\n" .. string.rep("detail\n", 4000) }))
+	app:render(0)
+	assert_eq(app.inspector_id, "a")
+	assert_contains(app.state.tools_by_id.a.args_detail, "README.md")
+	assert(#app.state.tools_by_id.a.result_detail < 16010)
+	app:feed_input("\27[B\27[B\r")
+	app:render(0)
+	assert(app.inspector_scroll > 0)
+	assert_eq(app.editor:text(), "keep my draft")
+	assert_eq(app.editor.cursor, 4)
+	assert_eq(#app.submitted, 0)
+	app:feed_input("\9")
+	app:render(0)
+	assert_eq(app.inspector_id, "b")
+	assert_eq(app.inspector_scroll, 0)
+	app:feed_input("\20")
+	assert_eq(app.inspector_open, false)
+	assert_eq(app.editor:text(), "keep my draft")
+	app:feed_input("\27[200~\20\27[201~")
+	assert_eq(app.inspector_open, false, "pasted controls must not open inspector")
+end)
+
+test("replay transport is deterministic and never submits typed work", function()
+	local Replay = require("agent.tui_replay")
+	local fixture = Replay.load(project_dir .. "/tests/fixtures/tui-replay.json")
+	local function player() return Replay.new(fixture, { backend = fake_backend({ width = 80 }) }) end
+	local a, b = player(), player()
+	for _ = 1, 50 do a:update(0.04) end
+	for _ = 1, 10 do b:update(0.2) end
+	a:draw(); b:draw()
+	assert_eq(a.now, b.now)
+	for row = 1, a.app.renderer.previous.height do
+		assert_eq(a.app.renderer.previous:plain_line(row), b.app.renderer.previous:plain_line(row))
+	end
+	assert_eq(a.app.state.tools_by_id["read-a"].status, "ok")
+	a:feed_input("draft\r\16")
+	local now = a.now
+	a:update(0.2); a:draw()
+	assert_eq(a.now, now)
+	assert_eq(a.app.editor:text(), "draft")
+	assert_eq(#a.app.submitted, 0)
+	a:feed_input("\14")
+	assert(a.now > now)
+	a:feed_input("\6\18")
+	assert_eq(a.now, 0)
+	assert_eq(a.app.editor:text(), "draft")
+	assert_eq(#a.app.state.tools, 0)
+	a:feed_input("\16")
+	while not a.finished do a:update(0.2) end
+	assert_eq(a.app.state.mode, "cancelled")
+	assert_eq(#a.app.state:active_tools(), 0)
+	assert_eq(a.app.state.tools_by_id["cancel-g"].status, "cancelled")
+	a:feed_input("\3")
+	assert_eq(a.app.exit_requested, true)
+	assert_eq(pcall(Replay.new, { events = { { at = 2, kind = "submit" }, { at = 1, kind = "cancel" } } }), false)
+	assert_eq(pcall(Replay.new, { events = { { at = 0, kind = "execute" } } }), false)
+end)
+test("repainting does not advance or expire animation and semantic state", function()
+	local now = 10
+	local state = tui.State.new({ clock = function() return now end })
+	local app = tui.App.new({ backend = fake_backend(), state = state, effect = "filament" })
+	state:submit("change a file")
+	state:tool_event(start("edit", "edit", { path = "README.md" }))
+	state:tool_event(finish("edit", "edit", { path = "README.md" }, { summary = "changed" }))
+	state:tool_event(start("run", "run", { command = "pwd" }))
+	state:assistant_complete("done", { elapsed = 1, tokens = 100 })
+	app:advance(0.1)
+	app:set_effect("ink")
+	app:advance(0.1)
+	local stream, handoff, transfer = state.streams[1], state.handoffs[1], state.transfers[1]
+	local stream_age, handoff_age, transfer_age = stream.age, handoff.age, transfer.age
+	local wheel, flow_time, flow_mode = state.flywheel, app.flow.time, app.flow.mode
+	local transition_age, motion_scale = app.effect_transition_age, app.motion_scale
+	app:draw()
+	local function screen_text()
+		local lines = {}
+		for row = 1, app.renderer.previous.height do lines[row] = app.renderer.previous:plain_line(row) end
+		return table.concat(lines, "\n")
+	end
+	local painted = screen_text()
+	now = 30
+	assert_eq(state:flywheel_visual(now), nil)
+	assert_eq(state.flywheel, wheel, "visual queries must not expire state")
+	app.focus_path = "missing"
+	app.editor:set("draft")
+	for _ = 1, 3 do app:draw() end
+	assert_eq(screen_text(), painted, "repaint must use the prepared clock and input")
+	assert_eq(stream.age, stream_age)
+	assert_eq(handoff.age, handoff_age)
+	assert_eq(transfer.age, transfer_age)
+	assert_eq(state.flywheel, wheel)
+	assert_eq(app.flow.time, flow_time)
+	assert_eq(app.flow.mode, flow_mode, "painting a dissolve must not switch simulation mode")
+	assert_eq(app.effect_transition_age, transition_age)
+	assert_eq(app.motion_scale, motion_scale)
+	assert_eq(app.focus_path, "missing")
+	assert_eq(state.input, "")
+	app:advance(10)
+	assert_eq(state.flywheel, nil)
+	assert_eq(#state.handoffs, 0)
+	assert_eq(#state.transfers, 0)
+	assert_eq(app.effect_transition_from, nil)
+	assert_eq(app.focus_path, nil)
+	assert_eq(state.input, "draft")
+end)
+
+test("successful commands do not overlay the river with raw results", function()
+	local now = 10
+	local state = tui.State.new({ clock = function() return now end })
+	state:submit("run the checks")
+	state:tool_event(start("check", "run", { command = "make test" }))
+	state:tool_event(finish("check", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
+	assert_eq(state.verification, nil)
+	assert_eq(state.verification_label, nil)
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+	for _, elapsed in ipairs({ 0.1, 1, 10 }) do
+		now = now + elapsed
+		app:render(elapsed)
+		for row = 2, 5 do
+			if app.renderer.previous:plain_line(row):find("◆ exit 0", 1, true) then
+				error("successful command result overlaid the river")
+			end
+		end
+	end
+end)
+
+test("failed commands keep diagnostics without raw exit overlays", function()
+	for _, summary in ipairs({ "exit 1", "exit 128", "exit 1, truncated" }) do
+		local now = 10
+		local state = tui.State.new({ clock = function() return now end })
+		state:submit("run the checks")
+		state:tool_event(start("check", "run", { command = "make test" }))
+		state:tool_event(finish("check", "run", { command = "make test" }, {
+			is_error = true, summary = summary, content = "command diagnostics",
+		}))
+		assert_eq(state.failure, summary)
+		assert_eq(state.tools_by_id.check.result, summary)
+		local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
+		for _, elapsed in ipairs({ 0.1, 1, 10 }) do
+			now = now + elapsed
+			app:render(elapsed)
+			assert_eq(app.celebration_active, false)
+			for row = 2, 5 do
+				if app.renderer.previous:plain_line(row):find("× exit", 1, true) then
+					error("failed command result overlaid the river")
+				end
+			end
+		end
+	end
+end)
 test("completed turn rests on elapsed time and one context token number", function()
 	local now = 100
 	local state = tui.State.new({ clock = function() return now end })
@@ -391,76 +697,38 @@ test("living divider ignores the mechanical plan and carries a destination", fun
 		plan = { { step = "Build recovery", status = "in_progress" } },
 	}))
 	app:render(0.1)
-	assert_contains(app.renderer.previous:plain_line(1), "failures that visibly heal")
+	assert_eq(state:divider_status(10), nil)
+	assert_eq(app.renderer.previous:plain_line(1):find("failures that visibly heal", 1, true), nil)
 end)
 
-test("journey evidence molts instead of snapping between labels", function()
+test("divider does not infer a journey from planning, edits, or verification", function()
 	local state = tui.State.new({ clock = function() return 10 end })
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state })
-	state:submit("make the interface feel alive")
-	local journey = {
-		destination = "a living current that explains the work",
-		approach = "real tool evidence bends toward a destination",
-		proof = "mutation and verification produce distinct movement",
+	state:submit("make a change")
+	local events = {
+		start("plan", "update_plan", { journey = {
+			destination = "a reliable change", approach = "inspect and edit", proof = "tests pass",
+		}, plan = { { step = "Implement change", status = "in_progress" } } }),
+		finish("read", "read", { path = "example.lua" }, { is_error = false, summary = "source" }),
+		finish("write", "write", { path = "example.lua" }, { is_error = false, summary = "written" }),
+		start("test", "run", { command = "make test" }),
+		finish("test", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }),
+		finish("reread", "read", { path = "example.lua" }, { is_error = false, summary = "source" }),
 	}
-	state:tool_event(start("plan-one", "update_plan", { journey = journey, plan = {
-		{ step = "Shape the living current", status = "in_progress" },
-	} }))
-	app:render(0.2)
-	assert_contains(app.renderer.previous:plain_line(1), "shape appears")
-	state:tool_event(finish("read-trajectory", "read", { path = "lua/agent/tui.lua" }, {
-		is_error = false, summary = "source",
-	}))
-	app:render(0.1)
-	assert_contains(app.divider_previous_label, "shape appears")
-	if app.divider_molt_started <= 0 then error("task transition did not start a molt") end
-	local molting = app.renderer.previous:plain_line(1)
-	if not molting:find("·", 1, true) and not molting:find("˙", 1, true) then
-		error("task molt emitted no shed particles")
+	for _, event in ipairs(events) do
+		state:tool_event(event)
+		app:render(0.2)
+		local label, kind = state:divider_status(10)
+		assert_eq(label, nil)
+		assert_eq(kind, "quiet")
+		local divider = app.renderer.previous:plain_line(1)
+		assert_eq(divider:find("◉", 1, true), nil)
+		assert_eq(divider:find("a reliable change", 1, true), nil)
 	end
-	app:render(1.0)
-	assert_eq(app.divider_previous_label, nil)
-	assert_contains(app.renderer.previous:plain_line(1), "reading tui.lua")
-end)
-
-test("a specific destination moves closer through real work evidence", function()
-	local now = 10
-	local state = tui.State.new({ clock = function() return now end })
-	local journey = {
-		destination = "a tiny database that makes Linux I/O legible",
-		approach = "fixed pages · sync · threads · raw io_uring",
-		proof = "build · tests · three comparable benchmarks",
-	}
-	state:submit("build an io_uring database benchmark")
-	state:tool_event(start("plan", "update_plan", {
-		journey = journey,
-		plan = {
-			{ step = "Build three read paths", status = "in_progress" },
-			{ step = "Prove comparable behavior", status = "pending" },
-		},
-	}))
-	local label, kind = state:divider_status(now)
-	assert_eq(kind, "journey")
-	assert_contains(label, "the shape appears")
-	assert_contains(label, "tiny database")
-	assert_eq(label:find("Build three read paths", 1, true), nil)
-
-	state:tool_event(finish("write", "write", { path = "tinydb.c" }, { is_error = false, summary = "wrote 604 lines" }))
-	assert_eq(state.journey_phase, "forming")
-	assert_contains(state:journey_label(), "forming tinydb.c")
-	state:tool_event(finish("make", "run", { command = "make && make test" }, { is_error = false, summary = "exit 0" }))
-	assert_eq(state.journey_phase, "proven")
-	assert_contains(state:journey_label(), "tests passed")
-	state:tool_event(finish("reread", "read", { path = "tinydb.c" }, { is_error = false, summary = "604 lines" }))
-	assert_eq(state.journey_phase, "reconsidering")
-	assert_contains(state:journey_label(), "following the evidence into tinydb.c")
-	state:tool_event(finish("edit", "edit", { path = "tinydb.c" }, { is_error = false, summary = "hardened submission" }))
-	assert_eq(state.journey_phase, "forming")
+	assert_eq(state.verification_label, nil)
+	assert_eq(state.plan[1].step, "Implement change")
 	state:assistant_complete("Done.", { tokens = 1200 })
-	assert_eq(state.journey_phase, "landed")
-	state:submit("a different task")
-	assert_eq(state.journey, nil)
-	assert_eq(state.plan, nil)
+	assert_eq(state:divider_status(10), nil)
 end)
 
 test("typing lowers visual metabolism without slowing event time", function()
@@ -549,12 +817,12 @@ test("working set remembers file state and real causal direction across a turn",
 	assert_eq(memory.state, "changed")
 	state:tool_event(start("test-a", "run", { command = "make test" }))
 	state:tool_event(finish("test-a", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
-	assert_eq(memory.state, "verified")
-	assert_eq(state.verification_label, "tests passed")
-	local proof = state.transfers[#state.transfers]
-	assert_eq(proof.kind, "proof")
-	assert_eq(proof.from.kind, "tool")
-	assert_eq(proof.to.path, "lua/agent/core.lua")
+	assert_eq(memory.state, "changed")
+	assert_eq(state.verification_label, nil)
+	assert_eq(state.proof, 0)
+	for _, transfer in ipairs(state.transfers) do
+		if transfer.kind == "proof" then error("command success certified a file") end
+	end
 	state:listen()
 	assert_eq(state:working_files()[1], memory)
 	now = 20
@@ -582,27 +850,37 @@ test("working-set scar survives refresh and heals only after mutation retry", fu
 	assert_eq(memory.scar, false)
 end)
 
-test("turn harvest reports changed files verification time tokens and cache", function()
-	local now = 100
-	local state = tui.State.new({ clock = function() return now end })
+test("turn harvest reports files time and usage without inferred verification", function()
+	local state = tui.State.new({ clock = function() return 100 end })
 	state:submit("change two files")
 	state:tool_event(finish("edit-a", "edit", { path = "lua/a.lua" }, { is_error = false, summary = "replaced 2 lines" }))
 	state:tool_event(finish("write-b", "write", { path = "lua/b.lua" }, { is_error = false, summary = "wrote 20 lines" }))
 	state:tool_event(finish("build", "run", { command = "make check" }, { is_error = false, summary = "exit 0" }))
 	state:assistant_complete("done", { elapsed = 12, tokens = 20000, cache_percent = 50 })
-	assert_eq(state.completion_summary, "✓ 2 files · checks passed · 12s · 20k tokens · 50% cached")
+	assert_eq(state.completion_summary, "✓ 2 files · 12s · 20k tokens · 50% cached")
 end)
 
-test("later mutation invalidates an earlier verification harvest", function()
-	local state = tui.State.new({ clock = function() return 100 end })
-	state:submit("verify then change")
-	state:tool_event(finish("test", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
-	assert_eq(state.verification_label, "tests passed")
-	state:tool_event(finish("edit", "edit", { path = "lua/a.lua" }, { is_error = false, summary = "replaced 2 lines" }))
-	assert_eq(state.verification_label, nil)
-	assert_eq(state.proof, 0)
-	state:assistant_complete("done", { elapsed = 8, tokens = 10000 })
-	assert_eq(state.completion_summary, "✓ 1 file · 8s · 10k tokens")
+test("commands never certify changes based on their name or exit status", function()
+	for _, name in ipairs({ "run", "shell" }) do
+		for _, command in ipairs({ "pwd", "echo tests passed", "cat build.log", "make test", "make check" }) do
+			local state = tui.State.new({ clock = function() return 100 end })
+			state:submit("change then inspect")
+			state:tool_event(finish("edit", "edit", { path = "lua/a.lua" }, { is_error = false }))
+			state:tool_event(finish("failed", name, { command = command }, { is_error = true, summary = "exit 1" }))
+			state:tool_event(finish("deferred", name, { command = command }, { ui_state = "deferred" }))
+			assert_eq(state.failure, "exit 1", "deferred work must not clear failure")
+			state:tool_event(finish("success", name, { command = command }, { is_error = false, summary = "exit 0" }))
+			assert_eq(state.tools_by_id.success.status, "ok")
+			assert_eq(state.failure, nil)
+			assert_eq(state.verification, nil)
+			assert_eq(state.verification_label, nil)
+			assert_eq(state.proof, 0)
+			assert_eq(state.file_memory["lua/a.lua"].state, "changed")
+			assert_eq(state.file_memory["lua/a.lua"].verified_at, nil)
+			state:assistant_complete("done", { elapsed = 8, tokens = 10000 })
+			assert_eq(state.completion_summary, "✓ 1 file · 8s · 10k tokens")
+		end
+	end
 end)
 
 test("empty-dock Tab focuses recent files and typing dismisses the lens", function()
@@ -944,71 +1222,10 @@ test("drift eases through model tool failure and verification states", function(
 	if app.palette.r <= 132 or app.palette.r >= 205 then error("failure palette did not ease") end
 	state:tool_event(finish("build-b", "run", { command = "make test" }, { is_error = false, summary = "exit 0" }))
 	app:render(0.2)
-	if app.flow.morph.resolution <= 0 then error("verification did not begin resolving the drift") end
-	if app.flow.morph.failure <= 0 then error("failure disturbance vanished instead of easing out") end
-end)
-
-test("insanitywolf checkpoint takes over the strip with feral product energy", function()
-	local now = 40
-	local state = tui.State.new({ clock = function() return now end })
-	state:reviewing({ status = "checkpointed insanitywolf cycle  2/3", checkpoint_cycle = 2 })
-	local app = tui.App.new({ backend = fake_backend({ width = 120, height = 24 }), state = state })
-	app:render(0.1)
-	local frame = {}
-	for row = 2, 5 do frame[#frame + 1] = app.renderer.previous:plain_line(row) end
-	local text = table.concat(frame, "\n")
-	assert_contains(text, "BITE THROUGH THE FUCKING WALL.")
-	assert_contains(text, "RAMPAGE 2/3")
-	assert_contains(text, "WEAK SHIT DIES HERE. UNLEASH THE MONSTER.")
-	local first_frame = text
-	now = 40.5
-	app:render(0.1)
-	frame = {}
-	for row = 2, 5 do frame[#frame + 1] = app.renderer.previous:plain_line(row) end
-	text = table.concat(frame, "\n")
-	assert_contains(text, "NO TINY SAFE SHIT. MUTATE THE PRODUCT.")
-	if text == first_frame then error("wolf takeover did not mutate between animation frames") end
-
-	now = 46
-	state:listen()
-	app:render(0.1)
-	frame = {}
-	for row = 2, 5 do frame[#frame + 1] = app.renderer.previous:plain_line(row) end
-	text = table.concat(frame, "\n")
-	if text:find("BITE THROUGH", 1, true) then error("expired wolf takeover remained visible") end
-end)
-
-test("insanitywolf keeps the chosen capability and payoff on the divider", function()
-	local state = tui.State.new({ clock = function() return 10 end })
-	state:insanitywolf(true)
-	state:tool_event(finish("wolf-plan", "update_plan", {}, {
-		is_error = false,
-		plan = { { step = "Build recovery", status = "in_progress" } },
-		wolf_status = {
-			phase = "hunt", cycle = 1,
-			title = "Automatic session recovery",
-			payoff = "reopen LCA and continue without thinking",
-		},
-	}))
-	local label, kind = state:divider_status(16)
-	assert_eq(kind, "wolf")
-	assert_contains(label, "HUNT 1/3")
-	assert_contains(label, "Automatic session recovery")
-	assert_contains(label, "payoff: reopen LCA and continue without thinking")
-
-	state:tool_event(finish("wolf-done", "update_plan", {}, {
-		is_error = false,
-		plan = { { step = "Build recovery", status = "completed" } },
-		wolf_status = {
-			phase = "shipped", cycle = 1,
-			title = "Automatic session recovery",
-			payoff = "reopen LCA and continue without thinking",
-			proof = "restart and recover the unfinished turn",
-		},
-	}))
-	label = state:divider_status(16)
-	assert_contains(label, "SHIPPED 1/3")
-	assert_contains(label, "proof: restart and recover the unfinished turn")
+	assert_eq(state.proof, 0, "command success is not verification")
+	if app.flow.morph.failure <= 0 or app.flow.morph.failure >= disturbed then
+		error("failure disturbance did not ease out after command success")
+	end
 end)
 
 test("edit filenames are pulled from the edge toward assembly", function()
@@ -1084,6 +1301,31 @@ test("tool streams receive distinct motion personalities", function()
 	assert_eq(personalities.edit, "inward")
 	assert_eq(personalities.grep, "scatter")
 	assert_eq(personalities.run, "pulse")
+end)
+
+test("inline animation hides hardware cursor until terminal cleanup", function()
+	local backend = fake_backend()
+	local app = tui.App.new({ backend = backend, effect = "drift" })
+	local ok, err = tui.with_terminal(app.terminal, app.renderer, function()
+		assert_contains(table.concat(backend.output), lcatui.ansi.hide_cursor)
+		for _ = 1, 3 do
+			-- Another writer or terminal reset can restore cursor visibility.
+			backend:write(lcatui.ansi.show_cursor)
+			backend.output = {}
+			app:render(0.05)
+			local output = table.concat(backend.output)
+			assert_eq(output:sub(1, #lcatui.ansi.hide_cursor), lcatui.ansi.hide_cursor)
+			assert_contains(output, lcatui.ansi.begin_synchronized_update)
+			assert_eq(output:find(lcatui.ansi.show_cursor, 1, true), nil)
+		end
+		backend.output = {}
+		app:commit_lines({ "transcript" })
+		assert_eq(table.concat(backend.output):sub(1, #lcatui.ansi.hide_cursor), lcatui.ansi.hide_cursor)
+		return true
+	end)
+	assert_eq(ok, true, err)
+	assert_contains(table.concat(backend.output), lcatui.ansi.show_cursor)
+	assert_eq(backend.raw, false)
 end)
 
 test("terminal lifecycle restores after injected failure", function()
@@ -1245,6 +1487,40 @@ test("input wrapping respects wide characters and exact row boundaries", functio
 	assert_eq(lines[2], "")
 	assert_eq(row, 2)
 	assert_eq(col, 0)
+end)
+
+test("Ctrl+L reanchors the viewport without changing the draft or task", function()
+	for _, busy in ipairs({ false, true }) do
+		local backend = fake_backend({ width = 80, height = 24 })
+		local app = tui.App.new({ backend = backend })
+		app.input = tui.Input.new(app.editor)
+		app.busy = busy
+		app.editor:set("keep my draft")
+		app.editor.cursor = 4
+		app.state.plan = { { step = "Keep working", status = "in_progress" } }
+		local plan = app.state.plan
+		app:render(0)
+		backend.output = {}
+		app:feed_input("\12")
+		app:render(0)
+		local output = table.concat(backend.output)
+		assert_contains(output, lcatui.ansi.clear_screen)
+		assert_contains(output, lcatui.ansi.position(24 - app.renderer.previous.height + 1, 1))
+		assert_contains(output, "keep")
+		assert_eq(output:find("\27[3J", 1, true), nil, "must not erase scrollback")
+		assert_eq(app.editor:text(), "keep my draft")
+		assert_eq(app.editor.cursor, 4)
+		assert_eq(app.state.plan, plan)
+		assert_eq(#app.submitted, 0)
+		assert_eq(app.redraw_requested, false)
+		backend.output = {}
+		app:render(0)
+		assert_eq(table.concat(backend.output):find(lcatui.ansi.clear_screen, 1, true), nil)
+	end
+	local editor = tui.Editor.new()
+	local input = tui.Input.new(editor)
+	local actions = input:feed_chunk("\27[200~draft\12\27[201~", false)
+	assert_eq(#actions, 0, "pasted Ctrl+L must not trigger redraw")
 end)
 
 test("completed assistant response becomes a colored riverbank transcript", function()
@@ -1470,6 +1746,37 @@ test("narrow rivers keep a compact eddy without phase labels", function()
 	if not text:find("◇", 1, true) and not text:find("·", 1, true) then error("compact eddy emitted no organism") end
 end)
 
+
+test("status FPS is always visible and counts completed frames including stalls", function()
+	local now = 0
+	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }),
+		fps_clock = function() return now end })
+	local function status()
+		local screen = app.renderer.previous
+		return screen:plain_line(screen.height)
+	end
+	app:render(0)
+	assert_contains(status(), "-- fps")
+	for _ = 1, 25 do
+		now = now + 40000000
+		app:render(0.04)
+	end
+	app:draw()
+	assert_contains(status(), "25 fps")
+	assert_eq(app.fps_intervals, 0)
+	for _ = 1, 10 do app:draw() end
+	assert_eq(app.fps_intervals, 0)
+	now = now + 2000000000
+	app:render(0.04)
+	app:draw()
+	assert_contains(status(), "1 fps")
+	assert_eq(app.fps, 0.5)
+	app.draw = function() error("test draw failure") end
+	local ok = pcall(function() app:render(0.04) end)
+	assert_eq(ok, false)
+	assert_eq(app.fps_intervals, 0)
+	app:stop_io()
+end)
 
 io.write("\n" .. tostring(passed) .. " passed, " .. tostring(failed) .. " failed\n")
 if failed > 0 then os.exit(1) end

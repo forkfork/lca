@@ -22,6 +22,8 @@ for _,name in ipairs({'job_status','job_output','job_wait','job_stop'}) do
 end
 local core=require('agent.core')
 local sessions=require('agent.session')
+local log_path=os.tmpname()
+core.set_transcript(log_path)
 for _,name in ipairs({'job_status','job_output','job_wait','job_stop'}) do
  active,calls=name,0
  local session=sessions.create({})
@@ -30,4 +32,14 @@ for _,name in ipairs({'job_status','job_output','job_wait','job_stop'}) do
  assert(calls==2,name..' terminated the review')
  assert(result.text:find('Review findings:',1,true),name..' returned job metadata as the answer')
 end
+core.set_transcript(nil)
+local log_file=assert(io.open(log_path))
+local log_text=log_file:read('*a')
+log_file:close()
+os.remove(log_path)
+os.remove(log_path..'.jsonl')
+for _,name in ipairs({'job_status','job_output','job_wait','job_stop'}) do
+ assert(log_text:find('--- TOOL RESULT: '..name..' ---',1,true),'missing readable result for '..name)
+end
+assert(log_text:find('exit_code: 0',1,true),'missing job exit status in readable log')
 print('Job tools return results to the model instead of ending the task: PASS')

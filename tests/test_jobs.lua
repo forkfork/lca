@@ -133,6 +133,40 @@ test("job_wait returns completed job output", function()
 	end
 end)
 
+test("job_wait pumps UI and cancels waiting without stopping the job", function()
+	local started = job_start.execute({ command = "sleep 30" }, { cwd = tmp_dir })
+	assert(not started.is_error, started.content)
+	local id = assert(extract_id(started))
+	wait_for(tmp_dir, id, "running", 5)
+	local pumps = 0
+	local uv = require("luv")
+	local before = uv.hrtime()
+	local waited = job_wait.execute({ id = id, timeout_ms = 1200 }, {
+		cwd = tmp_dir,
+		on_wait = function() pumps = pumps + 1 end,
+		cancelled = function() return pumps >= 3 end,
+	})
+	local elapsed_ms = (uv.hrtime() - before) / 1000000
+	local status = jobs.status(tmp_dir, id)
+	job_stop.execute({ id = id }, { cwd = tmp_dir })
+	assert(pumps >= 3, "wait must service the UI while polling")
+	assert(waited.is_error and waited.summary == "cancelled", "wait must report cancellation")
+	assert(elapsed_ms < 1000, "cancellation must interrupt the wait deadline")
+	assert(status.status == "running", "cancelling the wait must preserve the durable job")
+end)
+
+test("job_wait tails include stderr unless a stream is selected", function()
+	local started = job_start.execute({ command = "printf 'normal-output'; printf 'error-detail' >&2; exit 7" }, { cwd = tmp_dir })
+	assert(not started.is_error, started.content)
+	local id = assert(extract_id(started))
+	local waited = job_wait.execute({ id = id, timeout_ms = 3000, tail = 5 }, { cwd = tmp_dir })
+	assert(waited.content:find("exit_code: 7", 1, true), "missing exit code")
+	assert(waited.content:find("stdout:\nnormal-output", 1, true), "missing labeled stdout")
+	assert(waited.content:find("stderr:\nerror-detail", 1, true), "missing labeled stderr")
+	local selected = job_wait.execute({ id = id, tail = 5, stream = "stdout" }, { cwd = tmp_dir })
+	assert(not selected.content:find("stderr:\nerror-detail", 1, true), "explicit stdout must exclude stderr")
+end)
+
 test("job tools resolve jobs started in another cwd", function()
 	local caller_dir = tmp_dir .. "/caller"
 	local app_dir = tmp_dir .. "/app"
@@ -632,6 +666,55 @@ test("job activity reports a simple linux running state", function()
 		error("display activity did not match activity helper")
 	end
 	job_stop.execute({ id = id }, { cwd = tmp_dir })
+end)
+
+test("direct test command preserves results without invoking a model", function()
+	local core = require("agent.core")
+	local original = core.run_session
+	local calls = 0
+	core.run_session = function() calls = calls + 1; error("unexpected model call") end
+	local ok, err = pcall(function()
+		local session = { cwd = tmp_dir, messages = {} }
+		local blocks, errors, polls = {}, {}, 0
+		local ui = {
+			block = function(text) blocks[#blocks + 1] = text end,
+			error = function(text) errors[#errors + 1] = text end,
+			test_poll = function() polls = polls + 1; return false end,
+		}
+		assert(commands.dispatch("/test", session, ui) == false)
+		assert(#errors == 1 and errors[1]:find("no test command", 1, true))
+		assert(#blocks == 0 and #session.messages == 0)
+		commands.dispatch("/test pwd; printf 'PASS shortcut\\n'", session, ui)
+		local output = table.concat(blocks, "\n")
+		assert(output:find(tmp_dir, 1, true) and output:find("PASS shortcut", 1, true))
+		assert(output:find("exit 0", 1, true))
+		blocks = {}
+		commands.dispatch("/test", session, ui)
+		assert(table.concat(blocks, "\n"):find("PASS shortcut", 1, true))
+		blocks = {}
+		commands.dispatch("/test printf 'FAIL diagnostic\\n' >&2; exit 7", session, ui)
+		output = table.concat(blocks, "\n")
+		assert(output:find("FAIL diagnostic", 1, true) and output:find("exit 7", 1, true))
+		blocks = {}
+		commands.dispatch("/test head -c 100000 /dev/zero | tr '\\0' x; printf 'END_MARKER'", session, ui)
+		output = table.concat(blocks, "\n")
+		assert(#output < 6000 and output:find("END_MARKER", 1, true))
+		local path = output:match("stdout: ([^\n]+)")
+		local file = assert(io.open(path, "rb"))
+		assert(file:seek("end") >= 100000); file:close()
+		blocks = {}
+		ui.test_poll = function()
+			local running = jobs.running(tmp_dir)
+			return #running > 0
+		end
+		commands.dispatch("/test sleep 30", session, ui)
+		assert(table.concat(blocks, "\n"):find("stopped", 1, true))
+		assert(#jobs.running(tmp_dir) == 0)
+		assert(#errors == 1 and #session.messages == 0 and polls > 0)
+	end)
+	core.run_session = original
+	assert(ok, err)
+	assert(calls == 0)
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))
