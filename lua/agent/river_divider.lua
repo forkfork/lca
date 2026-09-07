@@ -76,7 +76,7 @@ function river.render(options)
 	local label = "turn " .. turn
 	if options.status then label = label .. " / " .. options.status end
 	if #label + 4 > width then label = options.status or ("t" .. turn) end
-	if options.ascii or width < 32 then
+	if options.ascii or width < 32 or (design.name == "cat" and #label + 4 + 15 > width) then
 		local text = (#label + 4 <= width) and ("-- " .. label .. " " .. string.rep("-", width - #label - 4))
 			or label:sub(1, width)
 		local lines = { paint(text, design.palette[3], options.color) }
@@ -127,9 +127,10 @@ function river.render(options)
 	local marks = {}
 	if options.trace then
 		local events = options.trace.events
-		local first = math.min(width - 1, #label + 6)
+		local last = width - (design.name == "cat" and 16 or 1)
+		local first = math.min(last, #label + 6)
 		for index, event in ipairs(events) do
-			local col = first + math.floor((index - 1) * (width - first - 1) / math.max(1, #events - 1))
+			local col = first + math.floor((index - 1) * (last - first) / math.max(1, #events - 1))
 			local kind = event.status == "failed" and "!" or event.status == "unfinished" and "?"
 				or event.repeated and "≈" or (event.overlap or 1) > 1 and ":" or "·"
 			local priority = kind == "!" and 5 or kind == "?" and 4 or kind == "≈" and 3 or kind == ":" and 2 or 1

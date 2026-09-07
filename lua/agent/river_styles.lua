@@ -13,6 +13,22 @@ styles.designs = {
  {name='cartographer', palette={{31,71,79},{76,151,143},{214,211,170}}},
  {name='glass', palette={{45,65,147},{149,69,154},{233,163,189}}},
  {name='horizon', palette={{37,35,76},{115,101,183},{189,231,249}}},
+ {name='cat', palette={{64,54,79},{177,132,158},{250,211,167}}},
+}
+-- Original 28 x 12 dot sprite: pointed ears, sleepy eyes, paws, curled tail.
+local cat = {
+ '    #       #               ',
+ '    ##     ##               ',
+ '    # #   # #               ',
+ '    #  ###  #               ',
+ '   #         #       ####   ',
+ '###  ##   ##  ###   #    #  ',
+ '   #    #    #     #     #  ',
+ '###   # # #   ###  #    #   ',
+ '    ##   ###       #  #     ',
+ '    #       ######## #      ',
+ '    #  #  #          #      ',
+ '     ################       ',
 }
 local glyph_cache = {}
 local function pick(text, index)
@@ -37,7 +53,15 @@ end
 function styles.cell(name, col, row, width, phase)
  local x = col / math.max(1,width-1)
  local shift = math.floor(phase*3)
- if name=='velvet' then
+ if name=='cat' then
+  return stipple(col,row,function(px,py)
+   local sx = px - (width * 2 - 30)
+   if sx >= 0 and sx < 28 then
+    return cat[py+1]:sub(sx+1,sx+1)=='#',py<4 and 0.95 or 0.75
+   end
+   return py==11 and px%6<2,0.25
+  end)
+ elseif name=='velvet' then
   local p=(col+shift)%12
   local patterns={'╭──╮╭──╮╭──╮','│╭─╯╰─╮││╭─╯','╰╯╭───╯╰╯╰──'}
   return pick(patterns[row+1],p),0.36+0.5*math.sin(col*0.12+row+phase)^2

@@ -34,4 +34,32 @@ end
 local hostile = river.render({ seed = '\27[2J\n', width = 72 })
 assert(not table.concat(hostile):find('\27', 1, true), 'seed leaked into output')
 assert(not pcall(river.render, { status = 'invented success' }))
+-- The cat is a static dot drawing, not phase-shifted or dependent on ANSI color.
+local styles = require('agent.river_styles')
+assert(seen.cat, 'cat missing from the turn divider rotation')
+local cat_lines = river.render({width = 80, design = 'cat', turn = 12})
+local dots = 0
+for row = 0, 2 do
+ for col = 0, 79 do
+  local char = styles.cell('cat', col, row, 80, 0)
+  assert(char == styles.cell('cat', col, row, 80, 5), 'cat moved with phase')
+  local code = utf8.codepoint(char)
+  assert(char == ' ' or (code >= 0x2800 and code <= 0x28ff))
+  if code >= 0x2800 then dots = dots + 1 end
+ end
+ assert(utf8.len(cat_lines[row + 1]) == 80)
+end
+assert(dots > 20, 'cat sprite missing')
+local traced = river.render({width = 80, design = 'cat', turn = 12,
+ trace = {calls = 2, peak = 1, failed = 1, repeated = 0, unfinished = 0,
+ deferred = 0, seconds = 1, events = {{status = 'failed'}, {status = 'done'}}}})
+for row = 1, 3 do
+ assert(traced[row]:sub(utf8.offset(traced[row], 66)) ==
+  cat_lines[row]:sub(utf8.offset(cat_lines[row], 66)), 'trace obscured cat')
+end
+assert(#river.render({width = 32, design = 'cat', status = 'interrupted'}) == 1,
+ 'long status should fall back rather than obscure cat')
+for _, line in ipairs(river.render({width = 80, design = 'cat', ascii = true})) do
+ assert(not line:find('[^ -~]'), 'cat ASCII fallback contains Unicode')
+end
 print('River divider geometry, deterministic variation, labels, and color checks passed')
