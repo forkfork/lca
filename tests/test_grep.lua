@@ -60,6 +60,19 @@ run_test("finds matches", function()
 	assert_contains(result.content, "needle")
 end)
 
+run_test("dash-prefixed patterns are search text with and without glob", function()
+	write_file(tmp_dir .. "/flags.txt", "Use --token-ttl-seconds to configure expiry.\n")
+	for _, args in ipairs({
+		{ path = tmp_dir, pattern = "--token-ttl-seconds" },
+		{ path = tmp_dir, pattern = "--token-ttl-seconds", glob = "*.txt" },
+	}) do
+		local result = grep_tool.execute(args, { cwd = tmp_dir, session = { grep_evidence = true } })
+		assert_eq(result.is_error, false)
+		assert_contains(result.content, "flags.txt")
+		assert_contains(result.content, "--token-ttl-seconds")
+	end
+end)
+
 run_test("honors glob", function()
 	write_file(tmp_dir .. "/two.txt", "needle\n")
 	write_file(tmp_dir .. "/three.lua", "needle\n")
@@ -70,6 +83,20 @@ run_test("honors glob", function()
 		error("glob matched excluded file")
 	end
 end)
+
+run_test("evidence mode returns editable tagged context", function()
+	write_file(tmp_dir .. "/evidence.lua", "local before = 1\nlocal needle = before + 1\nreturn needle\n")
+	local result = grep_tool.execute({ path = "evidence.lua", pattern = "needle" }, {
+		cwd = tmp_dir,
+		session = { grep_evidence = true },
+	})
+	assert_eq(result.is_error, false)
+	assert_eq(result.summary, "2 matches")
+	assert_contains(result.content, "[evidence.lua snapshot=")
+	assert_contains(result.content, "2:")
+	assert_contains(result.content, ": local needle = before + 1")
+end)
+
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))
 

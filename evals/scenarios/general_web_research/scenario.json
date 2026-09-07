@@ -1,0 +1,8 @@
+{
+  "id": "general_web_research",
+  "title": "General web research does not trigger unrelated workspace inspection",
+  "prompt": "I want to compare web search from AWS AgentCore with OpenAI web search. Search current authoritative sources, compare them, and give me the practical vibe.",
+  "timeout_seconds": 300,
+  "grader": "grade.py",
+  "judge": false
+}

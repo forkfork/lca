@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from verification_evidence import successful_unittest, verified_after_mutations
+
 
 workspace = Path(sys.argv[1])
 trajectory = json.loads(Path(sys.argv[2]).read_text())
@@ -21,7 +24,10 @@ for name, values in expected.items():
     cwd=workspace, text=True, capture_output=True, timeout=30,
 )
 
-fixture_files = {p.relative_to(fixture).as_posix(): p.read_bytes() for p in fixture.rglob("*") if p.is_file()}
+fixture_files = {
+    p.relative_to(fixture).as_posix(): p.read_bytes() for p in fixture.rglob("*")
+    if p.is_file() and not {"__pycache__", ".pytest_cache"}.intersection(p.parts)
+}
 workspace_files = {
     p.relative_to(workspace).as_posix(): p.read_bytes() for p in workspace.rglob("*")
     if p.is_file() and not {"__pycache__", ".pytest_cache"}.intersection(p.parts)
@@ -35,11 +41,11 @@ after = workspace_files.get("pipelines/rules.py", b"").decode("utf-8", "replace"
 changed_lines = sum(line.startswith(("- ", "+ ")) for line in difflib.ndiff(before, after))
 events = trajectory.get("events", [])
 starts = [event for event in events if event.get("phase") == "start"]
-verification = [event for event in starts if event.get("name") == "run"]
+verification = [event for event in events if successful_unittest(event)]
 hard_gates = {
     "latest_correction_retained": behavior.returncode == 0,
     "scope_control": scope_ok,
-    "verification_performed": bool(verification),
+    "verification_performed": verified_after_mutations(events),
 }
 
 print(json.dumps({

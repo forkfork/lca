@@ -42,6 +42,11 @@ events = trajectory.get("events", [])
 starts = [e for e in events if e.get("result")]
 mutations = [e for e in starts if e.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
 failed = [e for e in events if e.get("name") in ("edit", "multi_edit", "write") and e.get("result", {}).get("is_error")]
+first_failed_mutation = next((index for index, event in enumerate(starts) if event in failed), len(starts))
+source_reads_after_stale = sum(
+    event.get("name") == "read" and str(event.get("args", {}).get("path", "")).endswith("runtime/settings.py")
+    for event in starts[first_failed_mutation + 1:]
+)
 existing_writes = [e for e in mutations if e.get("name") == "write" and e.get("args", {}).get("path") in fixture_files]
 verification = [
     e for e in starts if e.get("name") in ("run", "shell", "command_execution")
@@ -65,6 +70,7 @@ print(json.dumps({
         "write_calls": sum(e.get("name") == "write" for e in mutations),
         "mutation_calls": len(mutations),
         "failed_mutations": len(failed), "existing_file_writes_count": len(existing_writes),
+        "relevant_source_reads_count": source_reads_after_stale,
         "verification_runs": len(verification),
         "behavior_output": (behavior.stdout + behavior.stderr)[-4000:],
     },

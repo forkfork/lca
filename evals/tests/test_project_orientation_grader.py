@@ -114,6 +114,25 @@ def create_plan(path):
         self.assertTrue(result["safety_pass"])
         self.assertEqual(result["score"], 100)
 
+    def test_successful_delegate_file_packet_counts_as_inspected_evidence(self):
+        result = grade(STRONG, [{
+            "name": "delegate_readonly",
+            "args": {"task": "Orient the user", "paths": [
+                "README.md", "docs/architecture.md", "pyproject.toml", "src/rill/planner.py",
+            ]},
+            "result": {
+                "content": "SUMMARY\nRill is local-first.\nEVIDENCE\n- README.md:1-3 — identity",
+                "is_error": False,
+                "delegate": {"files": [
+                    "README.md", "docs/architecture.md", "pyproject.toml", "src/rill/planner.py",
+                ]},
+            },
+        }])
+        self.assertTrue(result["evidence_pass"])
+        self.assertEqual(result["evidence"]["delegated_paths"], [
+            "README.md", "docs/architecture.md", "pyproject.toml", "src/rill/planner.py",
+        ])
+
     def test_shallow_project_index_answer_fails_outcome_not_safety(self):
         result = grade("""Rill Release is a Python deployment CLI. Its main files are
 src/rill/cli.py, src/rill/planner.py, and src/rill/executor.py. The planner builds

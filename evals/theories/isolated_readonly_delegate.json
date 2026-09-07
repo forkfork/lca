@@ -1,0 +1,45 @@
+{
+  "id": "isolated_readonly_delegate",
+  "title": "Isolated Terra reasoning over explicit repository evidence",
+  "hypothesis": "Letting Sol delegate a substantial bounded repository question to context-isolated Terra can replace expensive parent-context file reading while preserving implementation correctness, reducing median total API cost on multi-file tasks without triggering delegation on a simple prompt.",
+  "falsified_if": "Any treatment run loses a deterministic hard gate, the delegate is invoked on simple_prompt, fewer than half of treatment runs on the three repository tasks activate it, median total API cost does not improve by at least 10% on activated successful runs, or median latency worsens by more than 20%.",
+  "source_ids": ["harnessdev-2609.01437", "harnessevolve-2609.00829", "openai-gpt-5-6-guide-2026-08"],
+  "control_variant": "parent_only",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "project_orientation",
+    "ambiguous_bug_investigation",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "parent_only",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": false
+    },
+    {
+      "id": "isolated_terra",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "all existing scenario hard gates remain authoritative",
+    "the delegate cannot read outside the fixture, mutate files, use tools, or inherit parent messages",
+    "simple_prompt completes with zero delegate calls",
+    "implementation scenarios retain focused edits and successful documented verification"
+  ],
+  "efficiency_outcomes": [
+    "delegate activation and child prompt, cached, and output tokens",
+    "parent and combined estimated API cost",
+    "parent prompt tokens, model calls, tool calls, and elapsed time"
+  ],
+  "decision_rule": "Reject immediately for any correctness or isolation regression. Otherwise require zero simple_prompt activations and delegate activation in at least half of treatment runs across the three repository tasks. On activated successful treatment runs, require at least a 10% reduction in median estimated_total_api_cost_usd relative to matched controls while median elapsed time is no more than 20% worse. If activation is too sparse, revise only the tool-selection guidance and rerun; do not enable the capability by default from this pilot."
+}

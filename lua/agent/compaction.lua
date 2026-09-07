@@ -120,14 +120,14 @@ local function build_summary_prompt(messages_to_summarize, previous_summary, ses
 Additional insanitywolf checkpoint rules:
 - Compact prior execution details aggressively.
 - Preserve full detail for "Next Steps" and "Critical Context"; do not make those sections terse.
-- In "Next Steps", put only high-impact implementation improvements that justify another cycle. Include expected impact, exact files/commands/resources involved, and why each next step is worth doing.
-- Treat local hardening, including security hardening, as valid next-cycle work when it is evidence-backed and preserves the user's requested shape.
-- For authentication, authorization, admin portal, or session/cookie apps, classify local security hardening as autonomous next-cycle work when it avoids new external services and preserves the app shape. Examples: CSRF tokens, stronger session/token entropy, secure/HttpOnly/SameSite cookie flags, request/body size caps, basic login throttling, constant-time token comparison, and safer defaults. Do not put these in user-directed offers.
-- For those auth/admin apps, user-directed offers are only larger product or packaging choices such as SQLite persistence, Docker/systemd packaging, dependency swaps, routing/framework restructures, or new external services.
+- In "Next Steps", preserve a ranked backlog of only strong product bets. Each bet must name its user-visible payoff, why it coheres with the product direction, the complete vertical slice, and the exact files/commands/resources involved.
+- Rank bets by new user power, removal of central workflow friction, compounding leverage, product coherence, and ability to ship completely inside another cycle.
+- Do not promote tests, hardening, cleanup, refactoring, documentation, inventory work, or conventionalization into their own product bet. Include them only when they directly support or protect a user-visible capability.
+- Do not list cosmetic changes, speculative optimization, framework churn, generic enterprise features, or abstractions without demonstrated product leverage.
 - Do not list inventory checks, rereads, final tree listings, optional lint probes, or already-passed verification as next-cycle work. Put those in Critical Context only if they matter.
-- If any valid next-cycle work exists, do not say no further autonomous cycle is warranted; reserve that phrase for checkpoints with no valid autonomous work.
-- If the remaining work is only final verification, optional polish, external dependencies, scope expansion, or anything needing user/product judgment, state that no further autonomous cycle is warranted and name the blocker.
-- When no further autonomous cycle is warranted, still include 2-4 concrete user-directed options the user could explicitly ask for next. Mark them as offers, not autonomous next-cycle work.]]
+- If a strong reversible product bet remains, do not say no further autonomous cycle is warranted merely because it requires taste; insanitywolf is allowed to make coherent local product decisions.
+- If the remaining work lacks a concrete user-visible payoff, is destructive or difficult to reverse, requires external services, secrets, paid resources, or an incompatible architecture migration, state that no further autonomous cycle is warranted and name the blocker.
+- When no further autonomous cycle is warranted, preserve the strongest remaining bets as explicit offers rather than starting them.]]
 	end
 
 	return prompt_text
@@ -312,6 +312,15 @@ local function summarize_tool_result(message)
 	return table.concat({ header, detail, "</tool_result>" }, "\n")
 end
 
+local function carries_native_protocol(message)
+	if type(message) ~= "table" then return false end
+	if message.native_call_id then return true end
+	for _, item in ipairs(type(message.provider_items) == "table" and message.provider_items or {}) do
+		if item.type == "function_call" or item.type == "function_call_output" then return true end
+	end
+	return false
+end
+
 function compaction.slim_history(session, opts)
 	opts = opts or {}
 	local messages = session.messages or {}
@@ -455,7 +464,10 @@ function compaction.coalesce_slimmed_history(session, opts)
 	local bytes_removed = 0
 
 	for i, message in ipairs(messages) do
+		-- Native call/output messages are an API transaction. Text may be slimmed,
+		-- but coalescing must not discard either half of that transaction.
 		local can_coalesce = i < recent_start and (message.slimmed or message.coalesced)
+			and not carries_native_protocol(message)
 		if can_coalesce then
 			if #bucket > 0 and bucket[1].role ~= message.role then
 				flush_coalesced(out, bucket)
@@ -535,8 +547,9 @@ function compaction.generate_summary(messages_to_summarize, previous_summary, se
 	local prompt_text = build_summary_prompt(messages_to_summarize, previous_summary, session, opts)
 
 	local provider = providers.load(session.credentials_path)
-	local response = provider.complete({
+	local response = require("agent.core").complete_logged(provider, {
 		credentials_path = session.credentials_path,
+		session_id = session.id,
 		model = session.model,
 		reasoning_effort = session.reasoning_effort,
 		service_tier = session.service_tier,

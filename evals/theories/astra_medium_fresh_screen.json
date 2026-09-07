@@ -1,0 +1,48 @@
+{
+  "id": "astra_medium_fresh_screen",
+  "study_kind": "screen",
+  "title": "Fresh medium versus high reasoning screen",
+  "hypothesis": "Medium reasoning reduces coding latency on task families excluded from its original screen while retaining correction context, environmental recovery and verified correctness.",
+  "falsified_if": "Medium loses correctness or request activation, or fails the preregistered latency/cost gates.",
+  "source_ids": [],
+  "local_evidence": "Historical medium reasoning was 21.89% faster in the initial screen but was never validated on reserved task families. Low reasoning failed held-out speed validation. This independent current-engine medium screen follows the prompt screen chronologically but uses the unchanged current prompt in BOTH arms regardless of its result.",
+  "control_variant": "high",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "context_boundary_edit",
+    "environment_recovery"
+  ],
+  "variants": [
+    {
+      "id": "high",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "all"
+    },
+    {
+      "id": "medium",
+      "model": "gpt-6-astra",
+      "reasoning": "medium",
+      "system_prompt_profile": "current",
+      "tool_scope": "all"
+    }
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "context_boundary_edit": "\n\nFile scope: change only pipelines/rules.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "environment_recovery": "\n\nFile scope: change only ledger/summary.py. Do not add files. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": [
+    "independently graded artifacts, protected scope and completed verification",
+    "context correction and environmental recovery",
+    "actual request model, effort, prompt and tool activation"
+  ],
+  "efficiency_outcomes": [
+    "paired coding latency",
+    "model and tool calls",
+    "all-attempt estimated cost"
+  ],
+  "decision_rule": "Seed 922. Six screen-only launches, one per arm on simple_prompt and two coding tasks. Simple control first, coding order and adjacent arm order randomized. Maximum $1.75 between-run standard-equivalent cost threshold (one-run overshoot possible), 360 active worker seconds. No retries. Stop on correctness, protocol or activation failure; retain all resource accounting. Advance only if all six pass, aggregate coding latency is at least 10% lower, neither coding task is more than 10% slower, and aggregate coding cost rises no more than 10%. Otherwise park this implementation pending a materially new hypothesis. Simple runs are excluded from coding effects but included in spend. A positive screen justifies fresh replication only, never a default change. Preserve current source and fixtures, audit actual requests, run grader positive/negative preflight and verify activation before continuing."
+}

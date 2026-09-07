@@ -6,52 +6,7 @@ local read_tool = require("agent.tools.read")
 local edit = {}
 local MAX_MULTI_EDITS = 20
 local MAX_TAG_RELOCATION_LINES = 200
-
-local function count_occurrences(text, needle)
-	if needle == "" then
-		return 0
-	end
-	local count = 0
-	local index = 1
-	while true do
-		local start_at, end_at = text:find(needle, index, true)
-		if not start_at then
-			break
-		end
-		count = count + 1
-		index = end_at + 1
-	end
-	return count
-end
-
-local function replace_once(text, old_text, new_text)
-	local start_at, end_at = text:find(old_text, 1, true)
-	if not start_at then
-		return nil
-	end
-	return text:sub(1, start_at - 1) .. new_text .. text:sub(end_at + 1)
-end
-
-local function line_number_for_offset(text, offset)
-	local line = 1
-	for index = 1, offset - 1 do
-		if text:sub(index, index) == "\n" then
-			line = line + 1
-		end
-	end
-	return line
-end
-
-local function affected_lines(text)
-	if text == "" then
-		return 0
-	end
-	local _, newline_count = text:gsub("\n", "\n")
-	if text:sub(-1) == "\n" then
-		return math.max(1, newline_count)
-	end
-	return newline_count + 1
-end
+local STALE_EVIDENCE_RADIUS = 3
 
 local function lint_line_number(lint_output)
 	if not lint_output then return nil end
@@ -132,6 +87,17 @@ local function replace_line_range(lines, start_line, end_line, new_lines)
 	return result
 end
 
+local function join_edited_lines(lines, original)
+	-- split_lines retains the empty segment after a terminal newline. Joining
+	-- already restores that newline; adding another changes untouched bytes.
+	local joined = table.concat(lines, "\n")
+	-- An edit of the displayed EOF segment may replace that empty segment.
+	if original:sub(-1) == "\n" and #lines > 0 and lines[#lines] ~= "" then
+		joined = joined .. "\n"
+	end
+	return joined
+end
+
 local function tagged_range(args, lines, label)
 	local start_line = math.floor(tonumber(args.start_line) or 0)
 	local end_line = math.floor(tonumber(args.end_line) or start_line)
@@ -189,6 +155,22 @@ local function tagged_range(args, lines, label)
 	return nil, prefix .. "end_tag mismatch at line " .. end_line .. ": expected " .. args.end_tag .. " but file has " .. actual_end .. " — re-read the file", "stale tag"
 end
 
+local function stale_evidence(error_text, args, lines)
+	local requested_start = math.floor(tonumber(args.start_line) or 1)
+	local requested_end = math.floor(tonumber(args.end_line) or requested_start)
+	local first = math.max(1, requested_start - STALE_EVIDENCE_RADIUS)
+	local last = math.min(#lines, requested_end + STALE_EVIDENCE_RADIUS)
+	local output = {
+		error_text,
+		"",
+		"[current tagged source: the file changed; preserve concurrent changes and retry edit directly with these fresh tags]",
+	}
+	for line_number = first, last do
+		output[#output + 1] = string.format("%d:%s: %s", line_number, read_tool.line_tag(line_number, lines[line_number]), lines[line_number])
+	end
+	return table.concat(output, "\n")
+end
+
 -- Tag-based edit: replace lines identified by line number + tag
 local function execute_tagged(args, context)
 	local target = path.resolve(args.path, context.cwd)
@@ -201,6 +183,9 @@ local function execute_tagged(args, context)
 
 	local range, range_error, range_summary = tagged_range(args, lines)
 	if not range then
+		if range_summary == "stale tag" and context.session and context.session.stale_edit_evidence then
+			range_error = stale_evidence(range_error, args, lines)
+		end
 		return { is_error = true, content = range_error, summary = range_summary }
 	end
 	local start_line, end_line = range.start_line, range.end_line
@@ -210,11 +195,7 @@ local function execute_tagged(args, context)
 	local new_lines = replacement_lines(new_content)
 	local result_lines = replace_line_range(lines, start_line, end_line, new_lines)
 
-	local final = table.concat(result_lines, "\n")
-	-- Preserve trailing newline if original had one
-	if content:sub(-1) == "\n" then
-		final = final .. "\n"
-	end
+	local final = join_edited_lines(result_lines, content)
 
 	-- Pre-write syntax check — reject edits that introduce syntax errors.
 	local lint_output = introduced_lint_error(target, content, final)
@@ -271,6 +252,9 @@ local function execute_multi(args, context)
 		end
 		local range, range_error, range_summary = tagged_range(hunk, original_lines, "hunk #" .. index)
 		if not range then
+			if range_summary == "stale tag" and context.session and context.session.stale_edit_evidence then
+				range_error = stale_evidence(range_error, hunk, original_lines)
+			end
 			return { is_error = true, content = range_error .. "; no edits were applied", summary = range_summary }
 		end
 		range.content = hunk.content
@@ -302,8 +286,7 @@ local function execute_multi(args, context)
 		result_lines = replace_line_range(result_lines, hunk.start_line, hunk.end_line, new_lines)
 	end
 
-	local final = table.concat(result_lines, "\n")
-	if content:sub(-1) == "\n" then final = final .. "\n" end
+	local final = join_edited_lines(result_lines, content)
 	local lint_output = introduced_lint_error(target, content, final)
 	if lint_output then
 		return {
@@ -340,89 +323,13 @@ function edit.execute(args, context)
 		return execute_multi(args, context)
 	end
 
-	-- Tag-based edit (preferred): uses line numbers + tags
 	if args.start_line then
 		return execute_tagged(args, context)
 	end
-
-	-- Legacy: oldText/newText match-and-replace
-	if type(args.oldText) ~= "string" or args.oldText == "" then
-		return {
-			is_error = true,
-			content = "Either start_line (tag-based) or oldText (legacy) is required",
-			summary = "missing args",
-		}
-	end
-	if type(args.newText) ~= "string" then
-		return {
-			is_error = true,
-			content = "newText is required",
-			summary = "missing newText",
-		}
-	end
-
-	local target = path.resolve(args.path, context.cwd)
-	local ok, original = pcall(fs.read_file, target)
-	if not ok then
-		return {
-			is_error = true,
-			content = tostring(original),
-			summary = "failed",
-		}
-	end
-
-	local matches = count_occurrences(original, args.oldText)
-	if matches == 0 then
-		return {
-			is_error = true,
-			content = "oldText did not match file contents",
-			summary = "no match",
-		}
-	end
-	if matches > 1 then
-		return {
-			is_error = true,
-			content = "oldText matched " .. matches .. " times; make it unique before editing",
-			summary = "ambiguous match",
-		}
-	end
-
-	local start_at = original:find(args.oldText, 1, true)
-	local next_content = replace_once(original, args.oldText, args.newText)
-
-	-- Pre-write syntax check
-	local lint_output = introduced_lint_error(target, original, next_content)
-	if lint_output then
-		local next_lines = read_tool.split_lines(next_content)
-		local fallback_line = line_number_for_offset(original, start_at)
-		return {
-			is_error = true,
-			content = blocked_edit_content(lint_output, {
-				path = args.path,
-				start_line = fallback_line,
-				end_line = fallback_line + affected_lines(args.oldText) - 1,
-			}, next_lines, fallback_line),
-			summary = "syntax error — not written",
-		}
-	end
-
-	local write_ok, write_error = pcall(fs.write_file, target, next_content)
-	if not write_ok then
-		return {
-			is_error = true,
-			content = tostring(write_error),
-			summary = "write failed",
-		}
-	end
-
-	local old_lines = affected_lines(args.oldText)
-	local new_lines = affected_lines(args.newText)
-	local result_msg = "Edited " .. args.path .. " at line " .. line_number_for_offset(original, start_at)
-
 	return {
-		is_error = false,
-		content = result_msg,
-		summary = "replaced " .. old_lines .. " lines with " .. new_lines .. " lines",
+		is_error = true,
+		content = "start_line is required for a tagged edit; use read or grep to obtain line numbers and tags",
+		summary = "missing start_line",
 	}
 end
 

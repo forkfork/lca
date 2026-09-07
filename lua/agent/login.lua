@@ -25,21 +25,21 @@ local function local_login_script()
 	return nil
 end
 
-local function run_login(provider, credentials_path)
+local function run_login(credentials_path)
 	local login_script = local_login_script()
 	local command
 	if login_script then
 		command = table.concat({
-			"lua",
+			"lua5.5",
 			shell.quote(login_script),
-			shell.quote(provider),
+			"openai",
 			"--out",
 			shell.quote(credentials_path),
 		}, " ")
 	else
 		command = table.concat({
 			"lca-login",
-			shell.quote(provider),
+			"openai",
 			"--out",
 			shell.quote(credentials_path),
 		}, " ")
@@ -54,28 +54,15 @@ local function run_login(provider, credentials_path)
 	return nil, reason or code or ok
 end
 
-local function prompt_provider(credentials_path)
+local function confirm_login(credentials_path)
 	io.stderr:write("No credentials found at " .. credentials_path .. ".\n")
-	io.stderr:write("Choose a provider:\n")
-	io.stderr:write("  1) Codex / OpenAI OAuth\n")
-	io.stderr:write("  2) Bedrock / AWS\n")
-	io.stderr:write("  3) DeepSeek API key\n")
-	io.stderr:write("  q) Quit\n")
+	io.stderr:write("Press Enter to sign in with Codex / OpenAI OAuth, or q to quit.\n")
 	io.stderr:write("> ")
 	io.stderr:flush()
 
 	local answer = io.read("*l")
 	answer = answer and answer:gsub("^%s+", ""):gsub("%s+$", ""):lower() or ""
-	if answer == "1" or answer == "codex" or answer == "openai" then
-		return "openai"
-	end
-	if answer == "2" or answer == "bedrock" or answer == "aws" then
-		return "bedrock"
-	end
-	if answer == "3" or answer == "deepseek" then
-		return "deepseek"
-	end
-	return nil
+	return answer ~= "q" and answer ~= "quit"
 end
 
 function login.ensure_credentials(credentials_path)
@@ -83,12 +70,11 @@ function login.ensure_credentials(credentials_path)
 		return true
 	end
 
-	local provider = prompt_provider(credentials_path)
-	if not provider then
+	if not confirm_login(credentials_path) then
 		return nil, "credentials setup cancelled"
 	end
 
-	local ok, err = run_login(provider, credentials_path)
+	local ok, err = run_login(credentials_path)
 	if not ok then
 		return nil, "login failed: " .. tostring(err)
 	end

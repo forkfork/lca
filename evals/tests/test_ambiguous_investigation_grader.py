@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,18 @@ def grade(workspace: Path, trajectory: dict) -> dict:
 
 
 class AmbiguousInvestigationGraderTests(unittest.TestCase):
+    def test_compound_command_preserves_green_tests_but_not_python_failures(self):
+        spec = importlib.util.spec_from_file_location("ambiguous_support", SCENARIO / "grader_support.py")
+        support = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(support)
+        command = "python3 -m unittest discover -s tests -v && git diff --check"
+        green = "Ran 3 tests in 0.001s\n\nOK\nwarning: Not a git repository.\n"
+        for content, expected in ((green, True), (green.replace("OK", "FAILED (failures=1)"), False),
+                                  (green + "Traceback (most recent call last):\nAssertionError", False),
+                                  ("warning: Not a git repository.", False)):
+            event = {"args": {"command": command}, "result": {"is_error": True, "content": content}}
+            self.assertEqual(support.successful_test_evidence(event), expected)
+
     def test_shell_based_semantic_trace_is_accepted(self):
         with tempfile.TemporaryDirectory() as temp:
             workspace = Path(temp) / "workspace"

@@ -1,0 +1,8 @@
+{
+  "id": "lesson_cache_valid",
+  "title": "Reuse pure parser results without stale content hits",
+  "prompt": "Fix the repeated-analysis regression in analyzer.py according to README.md and parser_contract.json. Preserve output semantics and eliminate redundant parser work within each analyze call. Read the implementation and contract, edit only analyzer.py, and run python3 -m unittest discover -s tests -v. Do not add files or modify the README, contract or tests.",
+  "timeout_seconds": 180,
+  "grader": "grade.py",
+  "judge": false
+}

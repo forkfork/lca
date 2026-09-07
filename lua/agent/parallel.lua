@@ -2,9 +2,9 @@ local uv = require("luv")
 local registry = require("agent.tool_registry")
 local path_util = require("agent.util.path")
 local shell_util = require("agent.util.shell")
+local grep_tool = require("agent.tools.grep")
 
 local parallel = {}
-local cached_has_rg
 
 local SHELL_TOOLS = {
 	ls = true,
@@ -52,8 +52,28 @@ end
 
 local function emit_start(on_tool, tc, index)
 	if on_tool and START_EVENT_TOOLS[tc.name] then
-		on_tool({ type = "tool", phase = "start", call_id = event_call_id(tc, index), name = tc.name, args = tc.args })
+		on_tool({ type = "tool", phase = "start", call_id = event_call_id(tc, index), model_index = index, name = tc.name, args = tc.args })
 	end
+end
+
+local function execute_tool(tc, index, context, on_tool)
+	if tc.name ~= "run" or not on_tool then
+		return registry.execute(tc.name, tc.args, context)
+	end
+	local tool_context = setmetatable({
+		progress = function(progress)
+			on_tool({
+				type = "tool",
+				phase = "progress",
+				call_id = event_call_id(tc, index),
+				model_index = index,
+				name = tc.name,
+				args = tc.args,
+				progress = progress,
+			})
+		end,
+	}, { __index = context })
+	return registry.execute(tc.name, tc.args, tool_context)
 end
 
 local function file_mutation_target(tc, context)
@@ -187,15 +207,6 @@ local function path_exists(path)
 	return stat ~= nil
 end
 
-local function has_rg()
-	if cached_has_rg ~= nil then
-		return cached_has_rg
-	end
-	local ok, why, code = os.execute("command -v rg >/dev/null 2>&1")
-	cached_has_rg = ok == true or ok == 0 or (why == "exit" and code == 0)
-	return cached_has_rg
-end
-
 local function tool_to_command(name, args, context)
 	local cwd = context.cwd or "."
 
@@ -212,21 +223,7 @@ local function tool_to_command(name, args, context)
 		end
 		return cmd .. " | sort"
 	elseif name == "grep" then
-		if not args.pattern or args.pattern == "" then
-			return nil
-		end
-		local target = path_util.resolve(args.path or ".", cwd)
-		if has_rg() then
-			if args.glob and args.glob ~= "" then
-				return "rg --line-number --color=never --glob " .. shell_util.quote(args.glob) .. " " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
-			end
-			return "rg --line-number --color=never " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
-		end
-		local cmd = "grep -R -n -I"
-		if args.glob and args.glob ~= "" then
-			cmd = cmd .. " --include=" .. shell_util.quote(args.glob)
-		end
-		return cmd .. " -- " .. shell_util.quote(args.pattern) .. " " .. shell_util.quote(target) .. " 2>&1"
+		return grep_tool.command(args, context)
 	end
 
 	return nil
@@ -250,7 +247,10 @@ local function count_lines(output)
 	return count
 end
 
-local function format_result(name, args, output, exit_code)
+local function format_result(name, args, output, exit_code, context)
+	if name == "grep" then
+		return grep_tool.format_result(output, exit_code, context)
+	end
 	if exit_code == 127 then
 		return {
 			is_error = true,
@@ -283,21 +283,6 @@ local function format_result(name, args, output, exit_code)
 		return {
 			is_error = false,
 			content = output ~= "" and output or "(no files)",
-			summary = summary,
-		}
-	elseif name == "grep" then
-		if exit_code ~= 0 and exit_code ~= 1 then
-			return {
-				is_error = true,
-				content = output,
-				summary = "exit " .. tostring(exit_code),
-			}
-		end
-		local summary = tostring(count) .. " matches"
-		if truncated then summary = summary .. ", truncated" end
-		return {
-			is_error = false,
-			content = output ~= "" and output or "(no matches)",
 			summary = summary,
 		}
 	end
@@ -353,6 +338,12 @@ local function read_budget_result(max_bytes)
 		ui_state = "deferred",
 		content = "Read batch output budget reached (" .. tostring(max_bytes) .. " bytes). Use a smaller targeted read in the next turn.",
 		summary = "read budget reached",
+		harness_policy = {
+			name = "shared_read_output_cap",
+			strategy = "sequential_model_order_shared_budget",
+			rationale = "bound total source returned by one model tool batch while exposing deferred reads",
+			max_bytes = max_bytes,
+		},
 	}
 end
 
@@ -423,15 +414,14 @@ local function spawn_and_collect(cmd, callback)
 	end)
 end
 
-function parallel.execute_batch(tool_calls, context, on_tool)
+local function execute_flat_batch(tool_calls, context, on_tool)
 	local shell_batch = {}
 	local other_batch = {}
-	local repl_ok, repl_mod = pcall(require, "agent.repl")
 	local function is_cancelled()
 		if type(context.cancelled) == "function" then
 			return context.cancelled() == true
 		end
-		return repl_ok and repl_mod.cancelled == true
+		return false
 	end
 
 	for i, tc in ipairs(tool_calls) do
@@ -493,38 +483,38 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	end
 	other_batch = runnable_other_batch
 
+	local pending_shell = 0
 	if #shell_batch > 1 then
-		local pending = #shell_batch
+		pending_shell = #shell_batch
 
 		for _, item in ipairs(shell_batch) do
 			emit_start(on_tool, item.tc, item.index)
 			spawn_and_collect(item.cmd, function(output, exit_code)
-				local result = format_result(item.tc.name, item.tc.args, output, exit_code)
+				local result = format_result(item.tc.name, item.tc.args, output, exit_code, context)
 				results[item.index] = result
 				for _, duplicate_index in ipairs(item.duplicates or {}) do
 					results[duplicate_index] = result
 				end
 				if on_tool then
-					on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), name = item.tc.name, args = item.tc.args, result = result })
+					on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), model_index = item.index, name = item.tc.name, args = item.tc.args, result = result })
 				end
-				pending = pending - 1
+				pending_shell = pending_shell - 1
 			end)
 		end
-
-		while pending > 0 do
+		while pending_shell > 0 do
 			uv.run("once")
 			if is_cancelled() then break end
 		end
 	elseif #shell_batch == 1 then
 		local item = shell_batch[1]
 		emit_start(on_tool, item.tc, item.index)
-		local result = registry.execute(item.tc.name, item.tc.args, context)
+		local result = execute_tool(item.tc, item.index, context, on_tool)
 		results[item.index] = result
 		for _, duplicate_index in ipairs(item.duplicates or {}) do
 			results[duplicate_index] = result
 		end
 		if on_tool then
-			on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), name = item.tc.name, args = item.tc.args, result = result })
+			on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), model_index = item.index, name = item.tc.name, args = item.tc.args, result = result })
 		end
 	end
 
@@ -533,6 +523,9 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 	local edit_groups = collect_edit_groups(other_batch, context)
 	local completed_group_targets = {}
 	local read_batch_bytes = 0
+	local max_read_batch_bytes = tonumber(context.session and context.session.read_batch_bytes)
+		or MAX_READ_BATCH_BYTES
+	max_read_batch_bytes = math.max(1000, math.floor(max_read_batch_bytes))
 	local mutation_failed = false
 	local pending_job_start = false
 	for _, item in ipairs(other_batch) do
@@ -560,7 +553,16 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			for _, group_item in ipairs(edit_group) do
 				if is_cancelled() then break end
 				emit_start(on_tool, group_item.tc, group_item.index)
-				local group_result = registry.execute(group_item.tc.name, group_item.tc.args, context)
+				local group_result = execute_tool(group_item.tc, group_item.index, context, on_tool)
+				if group_result then
+					group_result.harness_policy = {
+						name = "non_overlapping_same_file_edits",
+						strategy = "descending_source_position",
+						rationale = "preserve original tagged source coordinates when earlier edits change line counts",
+						group_size = #edit_group,
+						model_index = group_item.index,
+					}
+				end
 				results[group_item.index] = group_result
 				if group_result and not group_result.is_error then
 					any_success = true
@@ -568,7 +570,7 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 					mutation_failed = true
 				end
 				if on_tool then
-					on_tool({ type = "tool", call_id = event_call_id(group_item.tc, group_item.index), name = group_item.tc.name, args = group_item.tc.args, result = group_result })
+					on_tool({ type = "tool", call_id = event_call_id(group_item.tc, group_item.index), model_index = group_item.index, name = group_item.tc.name, args = group_item.tc.args, result = group_result })
 				end
 			end
 			result_emitted = true
@@ -582,11 +584,11 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 			result_emitted = true
 		elseif mutation_target and mutated_targets[mutation_target] then
 			result = stale_batch_result(mutation_target)
-		elseif tc.name == "read" and read_batch_bytes >= MAX_READ_BATCH_BYTES then
-			result = read_budget_result(MAX_READ_BATCH_BYTES)
+		elseif tc.name == "read" and read_batch_bytes >= max_read_batch_bytes then
+			result = read_budget_result(max_read_batch_bytes)
 		else
 			emit_start(on_tool, tc, item.index)
-			result = registry.execute(tc.name, tc.args, context)
+			result = execute_tool(tc, item.index, context, on_tool)
 			if mutation_target and result and not result.is_error then
 				mutated_targets[mutation_target] = true
 			end
@@ -599,17 +601,27 @@ function parallel.execute_batch(tool_calls, context, on_tool)
 		end
 		if tc.name == "read" and result and not result.is_error and result.summary ~= "duplicate read" then
 			read_batch_bytes = read_batch_bytes + #(result.content or "")
-			if read_batch_bytes > MAX_READ_BATCH_BYTES then
-				result = read_budget_result(MAX_READ_BATCH_BYTES)
+			if read_batch_bytes > max_read_batch_bytes then
+				result = read_budget_result(max_read_batch_bytes)
 			end
 		end
 		results[item.index] = result
 		if on_tool and not result_emitted then
-			on_tool({ type = "tool", call_id = event_call_id(tc, item.index), name = tc.name, args = tc.args, result = result })
+			on_tool({ type = "tool", call_id = event_call_id(tc, item.index), model_index = item.index, name = tc.name, args = tc.args, result = result })
 		end
 	end
 
+	while pending_shell > 0 do
+		uv.run("once")
+		if is_cancelled() then break end
+	end
+
 	return results
+end
+
+function parallel.execute_batch(tool_calls, context, on_tool)
+	context = context or {}
+	return execute_flat_batch(tool_calls, context, on_tool)
 end
 
 return parallel

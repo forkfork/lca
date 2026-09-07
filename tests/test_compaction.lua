@@ -143,6 +143,30 @@ run_test("slimming preserves recent read working set per path", function()
 	end
 end)
 
+run_test("coalescing never discards native call or output transactions", function()
+	local session = {
+		messages = {
+			{ role = "user", text = "start" },
+			{ role = "assistant", text = "[slimmed]", slimmed = true, provider_items = {
+				{ type = "function_call", call_id = "call_pair", name = "read", arguments = "{}" },
+			} },
+			{ role = "user", text = "[slimmed result]", tool_name = "read", native_call_id = "call_pair", slimmed = true },
+			{ role = "user", text = "old plain", slimmed = true },
+			{ role = "assistant", text = "recent" },
+		},
+	}
+	compaction.coalesce_slimmed_history(session, { target_messages = 3, keep_recent_messages = 1 })
+	local found_call, found_output = false, false
+	for _, message in ipairs(session.messages) do
+		if message.native_call_id == "call_pair" then found_output = true end
+		for _, item in ipairs(message.provider_items or {}) do
+			if item.type == "function_call" and item.call_id == "call_pair" then found_call = true end
+		end
+	end
+	assert_eq(found_call, true)
+	assert_eq(found_output, true)
+end)
+
 run_test("summary prompt includes recent turn ast evidence", function()
 	local prompt = compaction._build_summary_prompt(
 		{

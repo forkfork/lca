@@ -1,0 +1,47 @@
+{
+  "id": "read_only_tool_dependency_dag",
+  "title": "Concurrent read-only tool dependency DAG",
+  "hypothesis": "Allowing Sol to declare read-only tool dependencies and running every ready node concurrently can overlap isolated Terra analysis with independent repository discovery, reduce parent model rounds and latency, and preserve the delegate's selective routing and correctness.",
+  "falsified_if": "Any DAG treatment loses a deterministic hard gate, executes a mutation or command inside the graph, invokes the delegate on simple_prompt, fails to produce DAG nodes in at least half of repository runs, fails to reduce median repository latency by 15%, or increases median combined API cost by more than 5%.",
+  "source_ids": ["harnessdev-2609.01437", "harnessevolve-2609.00829", "openai-responses-function-calling-2026-08-22"],
+  "control_variant": "serial_delegate",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "project_orientation",
+    "ambiguous_bug_investigation",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "serial_delegate",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true,
+      "tool_dag_enabled": false
+    },
+    {
+      "id": "readonly_dag",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true,
+      "tool_dag_enabled": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "all existing scenario hard gates remain authoritative",
+    "cycles, unknown dependencies, and non-read-only nodes are rejected before any graph node executes",
+    "failed dependencies skip their descendants",
+    "simple_prompt completes without tools or delegation"
+  ],
+  "efficiency_outcomes": [
+    "DAG nodes, waves, skipped descendants, and delegate activation",
+    "model calls, tool calls, and elapsed time",
+    "parent cost, child cost, and combined estimated API cost"
+  ],
+  "decision_rule": "Reject for any correctness or graph-safety regression. Otherwise require zero simple_prompt tool calls, DAG activation in at least half of repository treatment runs, and at least a 15% reduction in median elapsed_ms pooled across successful repository runs versus serial_delegate. Median estimated_total_api_cost_usd must not increase by more than 5%. Keep both DAG and delegate disabled by default unless all conditions pass."
+}

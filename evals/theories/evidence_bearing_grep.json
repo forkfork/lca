@@ -1,0 +1,17 @@
+{
+  "id": "evidence_bearing_grep",
+  "title": "Make ordinary grep results directly editable",
+  "hypothesis": "Adding bounded tagged source windows and a snapshot receipt to ordinary grep results lets Sol move from grep directly to edit, eliminating a source read and sometimes a model round without weakening correctness or scope.",
+  "falsified_if": "Any treatment run fails, treatment performs a focused source read after grep as often as control, mean model calls do not improve, or prompt tokens and latency both regress by more than ten percent.",
+  "source_ids": ["codex-loop"],
+  "control_variant": "plain_grep",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["grep_evidence_edit"],
+  "variants": [
+    {"id": "plain_grep", "engine": "lca", "model": "gpt-5.6-sol", "system_prompt_profile": "current", "grep_evidence": false},
+    {"id": "tagged_grep", "engine": "lca", "model": "gpt-5.6-sol", "system_prompt_profile": "current", "grep_evidence": true}
+  ],
+  "deterministic_outcomes": ["correct diagnostic marker", "unchanged neighboring mappings and formatting", "focused file scope", "passing verification"],
+  "efficiency_outcomes": ["focused reads after grep", "model calls", "tool calls", "latency and tokens"],
+  "decision_rule": "Adopt only if all treatment runs pass, tagged grep materially reduces post-search source reads, and it improves model calls or latency without a greater than ten percent regression in the other."
+}

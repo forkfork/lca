@@ -1,0 +1,52 @@
+{
+  "id": "astra_low_speed_validation",
+  "title": "Held-out validation of Astra low versus high",
+  "hypothesis": "The low-effort speed candidate retains correctness and its solution-latency benefit on task families excluded from the reasoning screen.",
+  "falsified_if": "Low loses per-task correctness or fails to reproduce at least 20% aggregate latency improvement without a material cost regression.",
+  "source_ids": [],
+  "local_evidence": "The completed 36-run Astra reasoning screen passed every run. Medium reduced coding latency 21.89%, low 20.09%; their aggregate times differed by less than 5%, so the registered lower-cost tie-break selected low. These four validation task families were reserved before the screen completed. Newline serialization is fixed in both arms. Graders require completed unittest evidence rather than command starts, and handle successful tests before unrelated Git failures.",
+  "control_variant": "high",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "existing_codebase_edit",
+    "environment_recovery",
+    "context_boundary_edit",
+    "stable_verification_regression"
+  ],
+  "variants": [
+    {
+      "id": "high",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "low",
+      "model": "gpt-6-astra",
+      "reasoning": "low",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "task_suffixes": {
+    "existing_codebase_edit": "\n\nFile scope: change only checkout/models.py, checkout/config.py and checkout/pricing.py. Do not add files.",
+    "context_boundary_edit": "\n\nFile scope: change only pipelines/rules.py. Do not add files.",
+    "stable_verification_regression": "\n\nFile scope: change only billing/invoice.py. Do not add files.",
+    "environment_recovery": "\n\nFile scope: change only ledger/summary.py. Do not add files."
+  },
+  "deterministic_outcomes": [
+    "external artifact tests and protected scope",
+    "actual completed verification after recognized mutations",
+    "environmental and regression recovery",
+    "latest corrected task retained",
+    "request-level profile, model, effort and task audits"
+  ],
+  "efficiency_outcomes": [
+    "aggregate coding elapsed milliseconds, including failures",
+    "per-task median latency",
+    "all-attempt estimated API cost",
+    "model and tool calls",
+    "failed edits and repeat-read review candidates"
+  ],
+  "decision_rule": "Fresh seed 913, four independent smoke runs (simple_prompt and existing_codebase_edit, both efforts), then thirty pilot runs (five scenarios, three repetitions, two efforts). At most 34 launches, $7 between-run estimated cost threshold (may overshoot one run), 1800 active worker seconds. No retries; stop for smoke correctness or protocol/activation failures. Primary population is four coding tasks, excluding arithmetic and smoke. Recommend low conditionally only if it has at least as many passes on each task, at least 20% lower aggregate coding elapsed time, lower median latency on at least three of four tasks, and no more than 10% aggregate cost increase. Otherwise do not recommend/adopt this speed route from the screen; report the failed replication or mixed evidence. Inspect verification traces independently of assistant claims. This supports at most a bounded-task recommendation versus explicit high, not an untested global default, not an improvement over unspecified endpoint-default effort, and not long-task validation. Keep current prompt, engine, fixed edit writer, tools, history and task contracts identical across arms. No source or grader changes during collection."
+}

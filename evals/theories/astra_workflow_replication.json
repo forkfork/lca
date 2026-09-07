@@ -1,0 +1,48 @@
+{
+  "id": "astra_workflow_replication",
+  "study_kind": "screen",
+  "title": "Workflow prompt fresh-task replication",
+  "hypothesis": "The existing workflow-lite prompt lets Astra solve coding tasks faster while preserving verification, safety, planner and tool contracts.",
+  "falsified_if": "The prompt transform fails activation or the screen loses correctness; weak or mixed latency evidence parks the candidate rather than proving a universal negative.",
+  "source_ids": [],
+  "local_evidence": "The preceding six-run screen passed with 14.2% lower coding latency and 4.1% lower coding cost, without fewer model calls. User authorizes a final take/drop decision and removal of the experimental switch. This replication uses investigation and stable regression tasks excluded from that prompt screen.",
+  "control_variant": "current",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "ambiguous_bug_investigation",
+    "stable_verification_regression"
+  ],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "all"
+    },
+    {
+      "id": "workflow-lite",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "workflow-lite",
+      "tool_scope": "all"
+    }
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "ambiguous_bug_investigation": "\n\nFile scope: change only checkout/cache.py and checkout/service.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "stable_verification_regression": "\n\nFile scope: change only billing/invoice.py. Do not add files. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": [
+    "artifact and verification correctness",
+    "protected scope",
+    "exact prompt transform and unchanged serialized tool schemas"
+  ],
+  "efficiency_outcomes": [
+    "paired coding latency",
+    "model and tool calls",
+    "all-attempt estimated cost"
+  ],
+  "decision_rule": "Seed 924. Six launches: current and workflow-lite at Astra/high on simple control then two randomized adjacent coding pairs. Maximum $1.75 between-run standard-equivalent estimated cost (one-run overshoot possible), 360 active seconds. No retries; stop for correctness, protocol or activation failure. Drop the implementation if any run fails or the completed screen misses any gate: at least 10% lower aggregate coding latency, neither task more than 10% slower, coding cost at most 10% higher. A positive screen does not promote: proceed to fresh broader repeated validation, preregistered before collection. Final adoption requires all repeated runs correct, at least 10% lower aggregate coding latency, no task median more than 10% slower, and cost at most 10% higher. Otherwise drop. Preserve raw evidence and archive/remove the workflow-lite implementation and switch after either final decision. No grader/source edits during collection."
+}

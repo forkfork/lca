@@ -1,0 +1,8 @@
+{
+  "id": "auth_api_strict",
+  "title": "Build an authentication API with strict behavior and verification gates",
+  "prompt": "Build the authentication API described in README.md. Implement it completely, test it, and leave it ready to run. Keep it local and focused; do not add deployment infrastructure or unrelated features. Do not change README.md; put any additional usage documentation in USAGE.md. Run python3 -m unittest discover -v successfully after your final code or test changes. Do not browse or use external network services.",
+  "timeout_seconds": 900,
+  "grader": "grade.py",
+  "judge": false
+}

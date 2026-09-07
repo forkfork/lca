@@ -1,21 +1,23 @@
 ROCKSPEC ?= lca-dev-1.rockspec
 LCATUI_ROCKSPEC ?= /home/tim/git/lcatui/lcatui-dev-1.rockspec
-LUAROCKS ?= luarocks
-LUA_VERSION ?= 5.4
+LUAROCKS ?= /home/tim/.luarocks/bin/luarocks
+LUA_VERSION ?= 5.5
+LUA_INCDIR ?= /usr/include/lua$(LUA_VERSION)
+LUA ?= lua$(LUA_VERSION)
 
 .PHONY: local local-lcatui rock test check eval eval-list
 
 local: local-lcatui
-	$(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC)
+	$(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC) LUA_INCDIR=$(LUA_INCDIR)
 
 local-lcatui:
-	cd $(dir $(LCATUI_ROCKSPEC)) && $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(notdir $(LCATUI_ROCKSPEC))
+	cd $(dir $(LCATUI_ROCKSPEC)) && $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(notdir $(LCATUI_ROCKSPEC)) LUA_INCDIR=$(LUA_INCDIR)
 
 rock:
 	$(LUAROCKS) --lua-version=$(LUA_VERSION) pack $(ROCKSPEC)
 
 test:
-	for f in tests/test_*.lua; do lua "$$f" || exit 1; done
+	eval "$$($(LUAROCKS) --lua-version=$(LUA_VERSION) path --bin)"; for f in tests/test_*.lua; do $(LUA) "$$f" || exit 1; done
 	python3 -m unittest discover -s evals/tests -p 'test_*.py'
 
 check: local test

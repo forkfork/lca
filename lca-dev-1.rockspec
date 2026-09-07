@@ -8,7 +8,7 @@ description = {
 	summary = "A Lua coding absurdity using OpenAI Codex OAuth credentials",
 	detailed = [[
 	lca is a from-scratch Lua coding absurdity with
-OpenAI Codex OAuth login, AWS Bedrock support, DeepSeek support, an interactive REPL, local tools,
+	OpenAI Codex OAuth login, a terminal UI, local tools,
 streaming responses, context compaction, and MCP server support.
 
 The tag-based read/edit tool design is inspired by Salvatore Sanfilippo
@@ -18,13 +18,11 @@ The tag-based read/edit tool design is inspired by Salvatore Sanfilippo
 	license = "BSD-2-Clause",
 }
 dependencies = {
-	"lua >= 5.4, < 5.6",
+	"lua >= 5.5, < 5.6",
 	"luasocket",
 	"luasec",
 	"lua-cjson",
 	"luv",
-	"linenoise-luv >= 0.1.3",
-	"luaposix",
 	"lcatui",
 }
 build = {
@@ -34,7 +32,9 @@ build = {
 		["agent.commands"] = "lua/agent/commands.lua",
 		["agent.compaction"] = "lua/agent/compaction.lua",
 		["agent.config"] = "lua/agent/config.lua",
+		["agent.codex_oauth"] = "lua/agent/codex_oauth.lua",
 		["agent.core"] = "lua/agent/core.lua",
+		["agent.context_limits"] = "lua/agent/context_limits.lua",
 		["agent.jobs"] = "lua/agent/jobs.lua",
 		["agent.job_supervisor"] = "lua/agent/job_supervisor.lua",
 		["agent.lint"] = "lua/agent/lint.lua",
@@ -45,24 +45,23 @@ build = {
 		["agent.parallel"] = "lua/agent/parallel.lua",
 		["agent.project_context"] = "lua/agent/project_context.lua",
 		["agent.project_index"] = "lua/agent/project_index.lua",
-		["agent.repl"] = "lua/agent/repl.lua",
 		["agent.runtime_inventory"] = "lua/agent/runtime_inventory.lua",
 		["agent.session"] = "lua/agent/session.lua",
 		["agent.system_prompt"] = "lua/agent/system_prompt.lua",
 		["agent.tui"] = "lua/agent/tui.lua",
 		["agent.tui_effects"] = "lua/agent/tui_effects.lua",
+		["agent.river_styles"] = "lua/agent/river_styles.lua",
+		["agent.river_divider"] = "lua/agent/river_divider.lua",
+		["agent.river_trace"] = "lua/agent/river_trace.lua",
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",
 		["agent.tool_registry"] = "lua/agent/tool_registry.lua",
-		["agent.turn_state"] = "lua/agent/turn_state.lua",
-		["agent.ui"] = "lua/agent/ui.lua",
 		["agent.providers"] = "lua/agent/providers/init.lua",
-		["agent.providers.bedrock"] = "lua/agent/providers/bedrock.lua",
 		["agent.providers.codex"] = "lua/agent/providers/codex.lua",
-		["agent.providers.deepseek"] = "lua/agent/providers/deepseek.lua",
 		["agent.tools.job_args"] = "lua/agent/tools/job_args.lua",
 		["agent.tools.edit"] = "lua/agent/tools/edit.lua",
 		["agent.tools.find"] = "lua/agent/tools/find.lua",
 		["agent.tools.grep"] = "lua/agent/tools/grep.lua",
+		["agent.tools.source_evidence"] = "lua/agent/tools/source_evidence.lua",
 		["agent.tools.job_output"] = "lua/agent/tools/job_output.lua",
 		["agent.tools.job_start"] = "lua/agent/tools/job_start.lua",
 		["agent.tools.job_status"] = "lua/agent/tools/job_status.lua",
@@ -71,7 +70,7 @@ build = {
 		["agent.tools.ls"] = "lua/agent/tools/ls.lua",
 		["agent.tools.read"] = "lua/agent/tools/read.lua",
 		["agent.tools.run"] = "lua/agent/tools/run.lua",
-		["agent.tools.shell"] = "lua/agent/tools/shell.lua",
+		["agent.tools.update_plan"] = "lua/agent/tools/update_plan.lua",
 		["agent.tools.write"] = "lua/agent/tools/write.lua",
 		["agent.util.fs"] = "lua/agent/util/fs.lua",
 		["agent.util.json"] = "lua/agent/util/json.lua",

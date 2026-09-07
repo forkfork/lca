@@ -1,0 +1,50 @@
+{
+  "id": "astra_cache_options_screen_v2",
+  "study_kind": "screen",
+  "title": "Read-only cache-options compatibility and repeated-prefix screen",
+  "hypothesis": "The Codex endpoint accepts and acknowledges documented implicit cache options, enabling later diagnostics or breakpoint experiments.",
+  "falsified_if": "The field is rejected or unacknowledged; stop before larger context cells. No speed or cache-improvement claim is permitted from mere acceptance.",
+  "source_ids": [],
+  "control_variant": "current",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "existing_codebase_edit"
+  ],
+  "variants": [
+    {
+      "id": "current",
+      "engine": "wire_probe",
+      "model": "gpt-6-astra",
+      "reasoning": "high"
+    },
+    {
+      "id": "cache-options",
+      "engine": "wire_probe",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "prompt_cache_options": {
+        "mode": "implicit",
+        "ttl": "30m"
+      }
+    }
+  ],
+  "frozen_requests": {
+    "simple_prompt": "evals/results/20260905-astra-planning-clarity-screen/cell-0000/provider-request-0001.json",
+    "existing_codebase_edit": "evals/results/20260905-astra-planning-clarity-screen/cell-0002/provider-request-0004.json"
+  },
+  "deterministic_outcomes": [
+    "391 on arithmetic",
+    "nonempty completed final on frozen verified coding tail",
+    "no executed tools",
+    "raw cache-option acknowledgement",
+    "complete raw usage"
+  ],
+  "efficiency_outcomes": [
+    "cache hits on identical repeat within one connection",
+    "all-attempt reported usage and estimated cost",
+    "elapsed time"
+  ],
+  "decision_rule": "Custom evals/cache_probe.py and .lua, not campaign.py. Four read-only replay cells, two identical requests per cell (at most eight requests). Simple baseline then treatment is a capability gate; seed 921 randomizes coding pair order. These are frozen final-request replays, NOT fresh coding runs or artifact comparisons. Only added prompt_cache_options differs; distinct stable session keys balance isolation. Pin gpt-6-astra/high and priority from captured requests. Preserve source/request hashes and raw frames outside workspaces. $1 estimated-cost between-cell threshold, 240 active seconds, finite per-request deadlines. Stop immediately on rejected/unacknowledged options, protocol failure, unexpected function calls, unknown usage, cache-write costs, or answer failure. No automatic retries. Compatibility only permits a separately registered diagnostic/explicit-boundary probe; it never promotes defaults. Original cache miss cannot be assigned a backend cause without diagnostic evidence.",
+  "local_evidence": "v1 baseline answered 391 twice but the new probe grader incorrectly expected output in response.completed rather than output_item.done events. v1 is halted and preserved. v2 fixes only stream-output grading; replay tests use both captured responses. Same request treatment and budget; fresh control, no reusing v1 as a scored arm."
+}

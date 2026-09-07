@@ -14,11 +14,8 @@ local INITIAL_BACKOFF_SEC = 1
 local FIRST_BYTE_TIMEOUT_SEC = 180
 local IDLE_TIMEOUT_SEC = 60
 local TOTAL_TIMEOUT_SEC = 600
-local POST_TOOL_THRESHOLD = 800
 local MAX_OUTPUT_TEXT_CHARS = 200000
 local MAX_SSE_LINE_BYTES = 262144
-local DEFAULT_STREAM_TOOL_CALL_CAP = 10
-local DEFAULT_STREAM_DUPLICATE_CALL_CAP = 3
 local PROMPT_CACHE_KEY_OVERRIDE = nil
 local DEFAULT_SERVICE_TIER = "priority"
 local DUMP_REQUEST_DIR = nil
@@ -29,13 +26,8 @@ local WEBSOCKET_HTTP_FALLBACK_FIRST_BYTE_SEC = 8
 local WEBSOCKET_RESPONSE_TIMEOUT_SEC = 180
 local WEBSOCKET_CONNECT_ATTEMPTS = 3
 local WEBSOCKET_REUSE = true
+local http_request = transport.request
 
-local CLOSE_TOOL_CALL = "</tool_call>"
-local CLOSE_TOOL_CALL_LEN = #CLOSE_TOOL_CALL
-local RAW_CONTENT_TOOLS = {
-	edit = true,
-	write = true,
-}
 local last_prefix_hashes_by_key = {}
 local websocket_connections_by_key = {}
 local dump_counter = 0
@@ -48,8 +40,7 @@ local function debug_log(fmt, ...)
 end
 
 local function cancel_requested()
-	local ok, repl = pcall(require, "agent.repl")
-	return ok and repl.cancelled
+	return false
 end
 
 local function cancellable_sleep(seconds)
@@ -156,50 +147,184 @@ local function invalidate_credentials_cache()
 	end
 end
 
-local function input_json(messages, native_tool_calling)
-	if native_tool_calling then
-		local items = {}
-		for _, message in ipairs(messages) do
-			if type(message.provider_items) == "table" and #message.provider_items > 0 then
-				for _, item in ipairs(message.provider_items) do items[#items + 1] = item end
-			elseif message.native_call_id then
-				items[#items + 1] = { type = "function_call_output", call_id = message.native_call_id, output = message.text or "" }
-			else
-				if message.role ~= "user" and message.role ~= "assistant" then
-					error("unsupported message role: " .. tostring(message.role))
+local function normalize_array_field(container, field, normalize_entry)
+	if type(container) ~= "table" or type(container[field]) ~= "table" then
+		return
+	end
+	local values = container[field]
+	if next(values) == nil then
+		container[field] = cjson.empty_array
+		return
+	end
+	if normalize_entry then
+		for _, value in ipairs(values) do
+			normalize_entry(value)
+		end
+	end
+end
+
+local function normalize_logprob(logprob)
+	normalize_array_field(logprob, "bytes")
+	normalize_array_field(logprob, "top_logprobs", function(candidate)
+		normalize_array_field(candidate, "bytes")
+	end)
+end
+
+local function normalize_output_item(item)
+	-- lua-cjson decodes an empty JSON array as an empty Lua table and would
+	-- otherwise encode it back as {}. Restore the array fields in Responses
+	-- output items before replay, including after a saved session is reloaded.
+	if type(item) == "table" and item.type == "reasoning" then
+		normalize_array_field(item, "summary")
+		normalize_array_field(item, "content")
+	elseif type(item) == "table" and item.type == "message" then
+		normalize_array_field(item, "content", function(part)
+			if type(part) == "table" and part.type == "output_text" then
+				normalize_array_field(part, "annotations")
+				normalize_array_field(part, "logprobs", normalize_logprob)
+			end
+		end)
+	end
+	return item
+end
+
+local function citation_label(annotation)
+	local label = tostring(annotation.title or ""):gsub("[%c\r\n]+", " "):gsub("%s+", " ")
+	label = label:gsub("^%s+", ""):gsub("%s+$", ""):gsub("%]", "\\]")
+	if label == "" then
+		label = tostring(annotation.url or "source"):match("^https?://([^/]+)") or "source"
+	end
+	if #label > 72 then label = label:sub(1, 69) .. "..." end
+	return label
+end
+
+local function citation_groups(output_items)
+	local groups, by_key, order = {}, {}, 0
+	for item_index, item in ipairs(output_items or {}) do
+		if type(item) == "table" and item.type == "message" then
+			local content = type(item.content) == "table" and item.content or {}
+			for part_index, part in ipairs(content) do
+				if type(part) == "table" and part.type == "output_text" then
+					local annotations = type(part.annotations) == "table" and part.annotations or {}
+					for annotation_index, annotation in ipairs(annotations) do
+						local url = type(annotation) == "table" and tostring(annotation.url or "") or ""
+						if annotation.type == "url_citation" and url:match("^https?://") then
+							local key = table.concat({ item_index, part_index, annotation.start_index or annotation_index, annotation.end_index or annotation_index }, ":")
+							local group = by_key[key]
+							if not group then
+								order = order + 1
+								group = { order = order, annotations = {}, urls = {} }
+								by_key[key], groups[#groups + 1] = group, group
+							end
+							if not group.urls[url] then
+								group.urls[url] = true
+								group.annotations[#group.annotations + 1] = annotation
+							end
+						end
+					end
 				end
-				items[#items + 1] = {
-					role = message.role,
-					content = { { type = message.role == "assistant" and "output_text" or "input_text", text = message.text or "" } },
-				}
 			end
 		end
-		return json.encode(items)
 	end
-	local merged = {}
-	for _, message in ipairs(messages) do
-		if message.role ~= "user" and message.role ~= "assistant" then
-			error("unsupported message role: " .. tostring(message.role))
-		end
-		local prev = merged[#merged]
-		if prev and prev.role == message.role then
-			prev.text = prev.text .. "\n\n" .. (message.text or "")
-		else
-			merged[#merged + 1] = { role = message.role, text = message.text or "" }
-		end
-	end
+	table.sort(groups, function(a, b) return a.order < b.order end)
+	return groups
+end
 
-	local parts = {}
-	for index, message in ipairs(merged) do
-		local content_type = message.role == "assistant" and "output_text" or "input_text"
-		parts[index] = table.concat({
-			"{",
-			'"role":' .. json.string(message.role) .. ",",
-			'"content":[{"type":"' .. content_type .. '","text":' .. json.string(message.text) .. "}]",
-			"}",
-		})
+local function format_citation_group(group)
+	if type(group) ~= "table" then return "" end
+	local links = {}
+	for _, annotation in ipairs(group.annotations or {}) do
+		links[#links + 1] = "[" .. citation_label(annotation) .. "](<" .. tostring(annotation.url) .. ">)"
 	end
-	return "[" .. table.concat(parts, ",") .. "]"
+	return #links > 0 and ("(" .. table.concat(links, ", ") .. ")") or ""
+end
+
+local function materialize_citations(text, output_items)
+	text = tostring(text or "")
+	local groups = citation_groups(output_items)
+	if #groups == 0 then
+		return text:gsub("cite.-", "")
+	end
+	local index = 0
+	local replaced
+	text, replaced = text:gsub("cite.-", function()
+		index = index + 1
+		return format_citation_group(groups[index])
+	end)
+	if replaced == 0 then
+		local links = {}
+		for _, group in ipairs(groups) do
+			for _, annotation in ipairs(group.annotations) do
+				if not text:find(annotation.url, 1, true) then
+					links[#links + 1] = "[" .. citation_label(annotation) .. "](<" .. tostring(annotation.url) .. ">)"
+				end
+			end
+		end
+		if #links > 0 then text = text .. "\n\nSources: " .. table.concat(links, ", ") end
+	end
+	return text
+end
+
+local function input_json(messages, pair_closure)
+	local items = {}
+	local calls, outputs = {}, {}
+	for message_index, message in ipairs(messages) do
+		if message.native_call_id then
+			local id = tostring(message.native_call_id)
+			outputs[id] = outputs[id] or { count = 0, first = message_index }
+			outputs[id].count = outputs[id].count + 1
+		end
+		for _, item in ipairs(type(message.provider_items) == "table" and message.provider_items or {}) do
+			if item.type == "function_call" and item.call_id then
+				local id = tostring(item.call_id)
+				calls[id] = calls[id] or { count = 0, first = message_index }
+				calls[id].count = calls[id].count + 1
+			elseif item.type == "function_call_output" and item.call_id then
+				local id = tostring(item.call_id)
+				outputs[id] = outputs[id] or { count = 0, first = message_index }
+				outputs[id].count = outputs[id].count + 1
+			end
+		end
+	end
+	local paired = {}
+	for id, call in pairs(calls) do
+		local output = outputs[id]
+		if output and call.count == 1 and output.count == 1 and call.first <= output.first then paired[id] = true end
+	end
+	local dropped_calls, dropped_outputs = 0, 0
+	for _, message in ipairs(messages) do
+		if type(message.provider_items) == "table" and #message.provider_items > 0 then
+			for _, item in ipairs(message.provider_items) do
+				local is_call = item.type == "function_call" and item.call_id
+				local is_output = item.type == "function_call_output" and item.call_id
+				if not pair_closure or (not is_call and not is_output) or paired[tostring(item.call_id)] then
+					items[#items + 1] = normalize_output_item(item)
+				elseif is_call then
+					dropped_calls = dropped_calls + 1
+				else
+					dropped_outputs = dropped_outputs + 1
+				end
+			end
+		elseif message.native_call_id then
+			if not pair_closure or paired[tostring(message.native_call_id)] then
+				items[#items + 1] = { type = "function_call_output", call_id = message.native_call_id, output = message.text or "" }
+			else
+				dropped_outputs = dropped_outputs + 1
+			end
+		else
+			if message.role ~= "user" and message.role ~= "assistant" then
+				error("unsupported message role: " .. tostring(message.role))
+			end
+			items[#items + 1] = {
+				role = message.role,
+				content = { { type = message.role == "assistant" and "output_text" or "input_text", text = message.text or "" } },
+			}
+		end
+	end
+	if pair_closure and (dropped_calls > 0 or dropped_outputs > 0) then
+		debug_log("[codex] repaired native history pair closure dropped_calls=%d dropped_outputs=%d", dropped_calls, dropped_outputs)
+	end
+	return json.encode(items)
 end
 
 local function request_body(request)
@@ -207,17 +332,24 @@ local function request_body(request)
 	local request_service_tier = service_tier(request)
 	local parts = {
 		"{",
-		'"model":' .. json.string(request.model or "gpt-5.5") .. ",",
+		'"model":' .. json.string(request.model or config.default_model()) .. ",",
 		'"store":false,',
 		'"stream":true,',
 		'"instructions":' .. json.string(request.system_prompt or "You are a helpful assistant.") .. ",",
-		'"input":' .. input_json(request.messages or {}, request.native_tool_calling) .. ",",
+		'"input":' .. input_json(request.messages or {}, request.native_tool_pair_closure ~= false) .. ",",
 		'"text":{"verbosity":"low"},',
 	}
-	if request.native_tool_calling then
+	local tools
+	if request.tool_scope == "web_only" then
+		tools = { { type = "web_search" } }
+	elseif request.tool_scope ~= "none" then
 		local registry = require("agent.tool_registry")
-		local tools = registry.native_tools()
-		tools[#tools + 1] = { type = "web_search" }
+		tools = registry.native_tools()
+		if request.tool_scope ~= "local_only" then
+			tools[#tools + 1] = { type = "web_search" }
+		end
+	end
+	if tools then
 		parts[#parts + 1] = '"tools":' .. json.encode(tools) .. ","
 		parts[#parts + 1] = '"tool_choice":"auto",'
 		parts[#parts + 1] = '"parallel_tool_calls":true,'
@@ -264,24 +396,21 @@ local function dump_request_body(body, summary)
 	return name
 end
 
-local function fnv1a32(text)
-	local hash = 2166136261
-	for i = 1, #text do
-		hash = hash ~ text:byte(i)
-		hash = (hash * 16777619) % 4294967296
-	end
-	return string.format("%08x", hash)
-end
-
+-- Hash disjoint spans once, retaining the existing diagnostic checkpoints.
 local function prefix_fingerprints(body)
-	local sizes = { 4096, 16384, 32768, 65536 }
 	local parts = {}
-	for _, size in ipairs(sizes) do
-		if #body >= size then
-			parts[#parts + 1] = tostring(size) .. "=" .. fnv1a32(body:sub(1, size))
+	local hash = 2166136261
+	local first = 1
+	for _, size in ipairs({ 4096, 16384, 32768, 65536, #body }) do
+		if size <= #body then
+			for i = first, size do
+				hash = ((hash ~ body:byte(i)) * 16777619) % 4294967296
+			end
+			parts[#parts + 1] = tostring(size) .. "=" .. string.format("%08x", hash)
+			first = size + 1
 		end
 	end
-	parts[#parts + 1] = "full=" .. fnv1a32(body)
+	parts[#parts] = "full=" .. string.format("%08x", hash)
 	return table.concat(parts, " ")
 end
 
@@ -315,7 +444,7 @@ local function request_summary(request, body)
 	table.sort(roles)
 
 	return {
-		model = request.model or "gpt-5.5",
+		model = request.model or config.default_model(),
 		reasoning_effort = request.reasoning_effort or "(default)",
 		service_tier = service_tier(request) or "(default)",
 		prompt_cache_key = prompt_cache_key(request) or "",
@@ -383,6 +512,26 @@ local function is_auth_error(text)
 		or text:find("unauthorized") ~= nil
 		or text:find("Unauthorized") ~= nil
 		or text:find('"status"%s*:%s*401') ~= nil
+end
+
+-- Keep diagnostic headers bounded and allowlisted: never log cookies or credentials.
+local function response_diagnostics(result)
+	local fields = {}
+	for _, name in ipairs({ "x-request-id", "request-id", "cf-ray", "retry-after", "content-type" }) do
+		local value = (result.headers or {})[name]
+		if value then fields[#fields + 1] = name .. "=" .. tostring(value):sub(1, 256):gsub("[%c]", " ") end
+	end
+	return table.concat(fields, " ")
+end
+
+local function http_error_message(result, body)
+	local message = "Codex HTTP error " .. tostring(result.status) .. ": " .. body:sub(1, 500)
+	local diagnostics = response_diagnostics(result)
+	if diagnostics ~= "" then message = message .. " [" .. diagnostics .. "]" end
+	if result.websocket_fallback_error then
+		message = message .. " (HTTP fallback after WebSocket failure: " .. result.websocket_fallback_error .. ")"
+	end
+	return message
 end
 
 local function is_retryable_http(status, body)
@@ -476,20 +625,6 @@ local function compact_sample(text, max_len)
 	return text
 end
 
-local function normalize_output_item(item)
-	-- lua-cjson decodes an empty JSON array as an empty Lua table and would
-	-- otherwise encode it back as {}. Responses reasoning items require summary
-	-- to remain an array when replayed.
-	if type(item) == "table" and item.type == "reasoning" then
-		for _, field in ipairs({ "summary", "content" }) do
-			if type(item[field]) == "table" and next(item[field]) == nil then
-				item[field] = cjson.empty_array
-			end
-		end
-	end
-	return item
-end
-
 local function new_sse_stats()
 	return {
 		body_chunks = 0,
@@ -545,7 +680,7 @@ local function format_event_type_counts(stats)
 	return #parts > 0 and table.concat(parts, ",") or "(none)"
 end
 
-local function process_event_payload(payload, on_delta, on_usage, stats, on_output_item)
+local function process_event_payload(payload, on_delta, on_usage, stats, on_output_item, on_activity)
 	stats.last_payload_sample = compact_sample(payload, 500)
 	local event_type = json.field(payload, "type")
 	if event_type then
@@ -581,13 +716,25 @@ local function process_event_payload(payload, on_delta, on_usage, stats, on_outp
 			on_output_item(normalize_output_item(event.item))
 		end
 	end
+	if on_activity and (event_type == "response.web_search_call.searching" or event_type == "response.web_search_call.completed") then
+		local ok, event = pcall(json.decode, payload)
+		if ok and type(event) == "table" then
+			pcall(on_activity, {
+				type = "web_search",
+				phase = event_type:match("([^.]+)$"),
+				id = event.item_id or event.id,
+				output_index = event.output_index,
+			})
+		end
+	end
 	return event_type
 end
 
-local function sse_parser(on_delta, on_usage, on_abort, stats, on_output_item)
+local function sse_parser(on_delta, on_usage, on_abort, stats, on_output_item, on_activity, on_raw_chunk)
 	local line_buffer = ""
 	stats = stats or new_sse_stats()
 	return function(chunk)
+		if on_raw_chunk then on_raw_chunk(chunk) end
 		stats.body_chunks = stats.body_chunks + 1
 		stats.body_bytes = stats.body_bytes + #chunk
 		line_buffer = line_buffer .. chunk
@@ -611,7 +758,7 @@ local function sse_parser(on_delta, on_usage, on_abort, stats, on_output_item)
 				local payload = line:match("^data:%s*(.+)$")
 				if payload then
 					stats.data_lines = stats.data_lines + 1
-					local processed = process_event_payload(payload, on_delta, on_usage, stats, on_output_item)
+					local processed = process_event_payload(payload, on_delta, on_usage, stats, on_output_item, on_activity)
 					if processed == false then
 						return false
 					end
@@ -661,231 +808,6 @@ local function transport_diagnostics_summary(diag)
 		tostring(diag.transfer_encoding or "unknown"),
 		tostring(diag.content_length_remaining or "unknown")
 	)
-end
-
-local function post_tool_tail_kind(text)
-	text = tostring(text or "")
-	local pos = 1
-	while true do
-		local non_ws = text:find("%S", pos)
-		if not non_ws then
-			return pos == 1 and "whitespace" or "extra_close"
-		end
-		local tail = text:sub(non_ws)
-		if CLOSE_TOOL_CALL:sub(1, #tail) == tail then
-			return "partial_extra_close"
-		end
-		if tail:sub(1, CLOSE_TOOL_CALL_LEN) == CLOSE_TOOL_CALL then
-			pos = non_ws + CLOSE_TOOL_CALL_LEN
-		else
-			if ("<tool_call"):sub(1, #tail) == tail then
-				return "partial_next_tool"
-			end
-			if tail:find("^<tool_call%s") then
-				return "next_tool"
-			end
-			return pos == 1 and "prose" or "extra_close_then_prose"
-		end
-	end
-end
-
-local function should_cut_after_tool(tail_kind, post_tool_chars)
-	if tail_kind == "next_tool" or tail_kind == "partial_next_tool" then
-		return false
-	end
-	return (tonumber(post_tool_chars) or 0) > POST_TOOL_THRESHOLD
-end
-
-local function canonical_tool_text(text)
-	local ok, protocol = pcall(require, "agent.tool_protocol")
-	if not ok or not protocol.extract_only_tool_calls_text then
-		return text
-	end
-	local only_tools = protocol.extract_only_tool_calls_text(text or "")
-	if only_tools ~= "" then
-		return only_tools
-	end
-	return text
-end
-
-local function complete_valid_tool_call_stats(text)
-	local ok_protocol, protocol = pcall(require, "agent.tool_protocol")
-	local ok_registry, registry = pcall(require, "agent.tool_registry")
-	if not ok_protocol or not ok_registry or not protocol.extract_all_tool_calls then
-		return { total = 0, unique = 0, duplicates = 0 }
-	end
-	local seen = {}
-	local total = 0
-	local unique = 0
-	for _, call in ipairs(protocol.extract_all_tool_calls(text or "")) do
-		if registry.is_valid(call.name) then
-			total = total + 1
-			local args = {}
-			for key, value in pairs(call.args or {}) do
-				if key ~= "_raw_content" then args[key] = value end
-			end
-			local ok, encoded = pcall(json.encode, args)
-			local key = table.concat({
-				tostring(call.name),
-				ok and tostring(encoded) or tostring(call.raw or ""),
-				tostring(call.args and call.args._raw_content or ""),
-			}, "\0")
-			if not seen[key] then
-				seen[key] = true
-				unique = unique + 1
-			end
-		end
-	end
-	return { total = total, unique = unique, duplicates = total - unique }
-end
-
-local function unique_complete_valid_tool_call_count(text)
-	return complete_valid_tool_call_stats(text).unique
-end
-
-local function log_sample(text, limit)
-	text = tostring(text or "")
-	limit = tonumber(limit) or 900
-	text = text:gsub("\\", "\\\\"):gsub("\r", "\\r"):gsub("\n", "\\n")
-	if #text > limit then
-		return text:sub(1, limit) .. "...(+" .. tostring(#text - limit) .. " chars)"
-	end
-	return text
-end
-
-local function tool_call_signature(call)
-	local args = call and call.args or {}
-	local target = args.path or args.command or args.id or args.url
-	if target and tostring(target) ~= "" then
-		return tostring(call.name or "?") .. "(" .. tostring(target):gsub("%s+", " ") .. ")"
-	end
-	return tostring(call and call.name or "?")
-end
-
-local function tool_call_signatures(text)
-	local ok, protocol = pcall(require, "agent.tool_protocol")
-	if not ok or not protocol.extract_all_tool_calls then
-		return "unavailable"
-	end
-	local calls = protocol.extract_all_tool_calls(text or "")
-	local parts = {}
-	local limit = math.min(#calls, 12)
-	for i = 1, limit do
-		parts[#parts + 1] = tool_call_signature(calls[i])
-	end
-	if #calls > limit then
-		parts[#parts + 1] = "+" .. tostring(#calls - limit) .. " more"
-	end
-	return tostring(#calls) .. " call" .. (#calls == 1 and "" or "s") .. ": " .. table.concat(parts, ", ")
-end
-
-local function canonical_tool_debug_summary(raw, canonical)
-	return string.format(
-		"raw_chars=%d canonical_chars=%d raw_calls=\"%s\" canonical_calls=\"%s\" raw_sample=\"%s\" canonical_sample=\"%s\"",
-		#tostring(raw or ""),
-		#tostring(canonical or ""),
-		tool_call_signatures(raw),
-		tool_call_signatures(canonical),
-		log_sample(raw, 900),
-		log_sample(canonical, 900)
-	)
-end
-
-local function log_canonical_tool_change(prefix, raw, canonical)
-	debug_log("%s %s", prefix, canonical_tool_debug_summary(raw, canonical))
-end
-
-local function complete_tool_calls_prefix(text)
-	text = tostring(text or "")
-	local parts = {}
-	local search_from = 1
-
-	while true do
-		local tag_start, tag_end, name = text:find('<tool_call%s+name="([^"]+)"%s*>', search_from)
-		if not tag_start then
-			break
-		end
-		local close = nil
-		if RAW_CONTENT_TOOLS[name] then
-			local next_open = text:find("<tool_call%s+name", tag_end + 1)
-			local boundary = next_open or (#text + 1)
-			local close_search_from = tag_end + 1
-			while true do
-				local candidate = text:find(CLOSE_TOOL_CALL, close_search_from, true)
-				if not candidate or candidate >= boundary then
-					break
-				end
-				local suffix = text:sub(candidate + CLOSE_TOOL_CALL_LEN, boundary - 1)
-				if suffix:gsub(CLOSE_TOOL_CALL, ""):match("^%s*$") then
-					close = candidate
-					break
-				end
-				close_search_from = candidate + CLOSE_TOOL_CALL_LEN
-			end
-		else
-			close = text:find(CLOSE_TOOL_CALL, tag_end + 1, true)
-		end
-		if not close then
-			break
-		end
-		parts[#parts + 1] = text:sub(tag_start, close + CLOSE_TOOL_CALL_LEN - 1)
-		search_from = close + CLOSE_TOOL_CALL_LEN
-	end
-
-	return table.concat(parts, "\n")
-end
-
-local function valid_complete_tool_calls_text(text)
-	local ok, protocol = pcall(require, "agent.tool_protocol")
-	if not ok or not protocol.extract_all_tool_calls or not protocol.validate_tool_calls then
-		return nil, 0, "tool protocol unavailable"
-	end
-
-	local calls = protocol.extract_all_tool_calls(text or "")
-	if #calls == 0 then
-		return nil, 0, "no complete tool calls"
-	end
-	local valid, validation_err = protocol.validate_tool_calls(calls)
-	if not valid then
-		return nil, #calls, validation_err or "invalid tool calls"
-	end
-	return text, #calls, nil
-end
-
-local function salvage_partial_tool_response(chunks, transport_err)
-	local partial = table.concat(chunks or {})
-	if partial == "" then
-		return nil
-	end
-
-	local complete = complete_tool_calls_prefix(partial)
-	local valid_text, call_count, validation_err = valid_complete_tool_calls_text(complete)
-	if not valid_text then
-		if complete ~= "" then
-			debug_log("[codex] partial tool salvage rejected calls=%d reason=%s chars=%d",
-				tonumber(call_count) or 0,
-				tostring(validation_err),
-				#complete
-			)
-		end
-		return nil
-	end
-
-	local trailing_chars = math.max(0, #partial - #valid_text)
-	debug_log("[codex] salvaged partial tool response chars=%d->%d calls=%d trailing_chars=%d after %s/%s",
-		#partial,
-		#valid_text,
-		call_count,
-		trailing_chars,
-		tostring(transport_err and transport_err.kind or "unknown"),
-		tostring(transport_err and transport_err.phase or "unknown")
-	)
-	if transport_err and transport_err.diagnostics then
-		debug_log("[codex] partial salvage transport diagnostics %s",
-			transport_diagnostics_summary(transport_err.diagnostics)
-		)
-	end
-	return valid_text, call_count
 end
 
 local function log_sse_stats(prefix, stats, body_tail)
@@ -956,85 +878,44 @@ local function close_websocket_connection(key)
 	end
 end
 
+local function refresh_after_auth_error(credentials_path, credentials, request)
+	close_websocket_connection(websocket_connection_key(request))
+	invalidate_credentials_cache()
+	local providers = require("agent.providers")
+	providers.refresh_credentials(credentials_path, credentials.access)
+	return load_credentials(credentials_path)
+end
+
+local function trace_transport_chunk(request, transport, bytes)
+	if not request.on_protocol then return end
+	-- HTTP chunks may split a UTF-8 code point; hex preserves arbitrary bytes in valid JSON.
+	request.on_protocol("transport_chunk", { transport = transport,
+		bytes_hex = bytes:gsub(".", function(byte) return string.format("%02x", byte:byte()) end) })
+end
+
 local function do_complete_websocket(request, credentials, body, on_token)
 	local chunks = {}
 	local output_items = {}
 	local sse_stats = new_sse_stats()
-	local full_stream = ""
-	local tool_call_seen = false
-	local tool_call_closed = false
-	local last_tool_call_end = 0
-	local cutoff = false
+	local streamed_bytes = 0
 	local abort_reason = nil
 	local usage = nil
 	local completed = false
-	local stream_tool_cap = tonumber(request.stream_tool_call_cap)
-	if stream_tool_cap == nil then stream_tool_cap = DEFAULT_STREAM_TOOL_CALL_CAP end
-	stream_tool_cap = math.max(0, math.floor(stream_tool_cap))
-	local stream_tool_cap_reached = false
-	local stream_duplicate_cap = tonumber(request.stream_duplicate_call_cap)
-	if stream_duplicate_cap == nil then stream_duplicate_cap = DEFAULT_STREAM_DUPLICATE_CALL_CAP end
-	stream_duplicate_cap = math.max(0, math.floor(stream_duplicate_cap))
-	local stream_duplicate_cap_reached = false
 
 	local function on_delta(delta)
 		chunks[#chunks + 1] = delta
-		full_stream = full_stream .. delta
-		if #full_stream > MAX_OUTPUT_TEXT_CHARS then
+		streamed_bytes = streamed_bytes + #delta
+		if streamed_bytes > MAX_OUTPUT_TEXT_CHARS then
 			abort_reason = "output_text_too_large"
 			debug_log("[codex] websocket stream cutoff reason=%s response_chars=%d threshold=%d",
 				abort_reason,
-				#full_stream,
+				streamed_bytes,
 				MAX_OUTPUT_TEXT_CHARS
 			)
 			return false
 		end
 		if on_token then
 			on_token(delta)
-		end
-		if not tool_call_seen and full_stream:find("<tool_call") then
-			tool_call_seen = true
-		end
-		local closed_advanced = false
-		if tool_call_seen then
-			local close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
-			while close_pos do
-				last_tool_call_end = close_pos + CLOSE_TOOL_CALL_LEN - 1
-				tool_call_closed = true
-				closed_advanced = true
-				close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
-			end
-		end
-		if closed_advanced and (stream_tool_cap > 0 or stream_duplicate_cap > 0) then
-			local call_stats = complete_valid_tool_call_stats(full_stream)
-			if stream_tool_cap > 0 and call_stats.unique >= stream_tool_cap then
-				cutoff = true
-				stream_tool_cap_reached = true
-				debug_log("[codex] websocket stream tool-call cap reached unique_calls=%d cap=%d response_chars=%d",
-					call_stats.unique, stream_tool_cap, #full_stream)
-				return false
-			end
-			if stream_duplicate_cap > 0 and call_stats.duplicates >= stream_duplicate_cap then
-				cutoff = true
-				stream_duplicate_cap_reached = true
-				debug_log("[codex] websocket stream duplicate-call cap reached total_calls=%d unique_calls=%d duplicates=%d cap=%d response_chars=%d",
-					call_stats.total, call_stats.unique, call_stats.duplicates, stream_duplicate_cap, #full_stream)
-				return false
-			end
-		end
-		if tool_call_closed then
-			local after = full_stream:sub(last_tool_call_end + 1)
-			local tail_kind = post_tool_tail_kind(after)
-			if should_cut_after_tool(tail_kind, #after) then
-				cutoff = true
-				debug_log("[codex] websocket early tool-call cutoff reason=%s post_tool_chars=%d response_chars=%d threshold=%d",
-					tail_kind,
-					#after,
-					#full_stream,
-					POST_TOOL_THRESHOLD
-				)
-				return false
-			end
 		end
 	end
 
@@ -1055,6 +936,7 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	end
 
 	local function on_websocket_text(payload)
+				trace_transport_chunk(request, "websocket", payload)
 				sse_stats.body_chunks = sse_stats.body_chunks + 1
 				sse_stats.body_bytes = sse_stats.body_bytes + #payload
 				sse_stats.lines = sse_stats.lines + 1
@@ -1064,18 +946,19 @@ local function do_complete_websocket(request, credentials, body, on_token)
 					usage = next_usage
 				end, sse_stats, function(item)
 					output_items[#output_items + 1] = item
-				end)
+				end, request.on_activity)
 				if event_type == "response.completed" then
 					completed = true
 					return false
 				end
-				if abort_reason or cutoff then
+				if abort_reason then
 					return false
 				end
 	end
 
 	local function websocket_request(use_reuse)
 		local opts = websocket_options()
+		if request.on_protocol then request.on_protocol("transport_request", { transport = "websocket", body = opts.body }) end
 		opts.on_text = on_websocket_text
 		if not use_reuse then
 			return websocket_transport.request(opts)
@@ -1100,7 +983,7 @@ local function do_complete_websocket(request, credentials, body, on_token)
 			if reused then
 				result.websocket_reused = true
 			end
-			if cutoff or abort_reason then
+			if abort_reason then
 				close_websocket_connection(key)
 				result.websocket_closed_after_early_return = true
 			end
@@ -1118,6 +1001,10 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	local connect_attempts = math.max(1, WEBSOCKET_CONNECT_ATTEMPTS)
 	for ws_attempt = 1, connect_attempts do
 		result, err = websocket_request(WEBSOCKET_REUSE)
+		if request.on_protocol then request.on_protocol("transport_result", {
+			transport = "websocket", attempt = ws_attempt, error = err,
+			status = result and result.status, timings = result and result.timings,
+		}) end
 		if result then
 			err = nil
 			break
@@ -1144,22 +1031,6 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	end
 
 	if err then
-		local salvaged_text, salvaged_calls = salvage_partial_tool_response(chunks, err)
-		if salvaged_text then
-			return {
-				status = err.status or 101,
-				text = salvaged_text,
-				response_bytes = err.response_bytes or 0,
-				body_tail = err.body_tail or "",
-				timings = err.timings,
-				usage = usage,
-				early_cutoff = true,
-				partial_salvage = true,
-				partial_salvaged_calls = salvaged_calls,
-				sse_stats = sse_stats,
-				transport = "websocket",
-			}
-		end
 		err.text_chunks = chunks
 		err.sse_stats = sse_stats
 		return nil, err
@@ -1167,20 +1038,10 @@ local function do_complete_websocket(request, credentials, body, on_token)
 	result.sse_stats = sse_stats
 	result.text = table.concat(chunks)
 	result.output_items = output_items
-	if cutoff or tool_call_seen then
-		local canonical = canonical_tool_text(result.text)
-		if canonical ~= result.text then
-			log_canonical_tool_change("[codex] websocket canonicalized tool response", result.text, canonical)
-			result.text = canonical
-		end
-	end
 	result.usage = usage
-	result.early_cutoff = cutoff
-	result.stream_tool_cap_reached = stream_tool_cap_reached
-	result.stream_duplicate_cap_reached = stream_duplicate_cap_reached
 	result.abort_reason = abort_reason
 	result.transport = "websocket"
-	if not completed and not cutoff and not abort_reason then
+	if not completed and not abort_reason then
 		result.abort_reason = "websocket_closed_before_completed"
 	end
 	if result.websocket_reused then
@@ -1193,22 +1054,11 @@ local function do_complete(request, credentials, body, on_token)
 	local chunks = {}
 	local output_items = {}
 	local sse_stats = new_sse_stats()
-	local full_stream = ""
-	local tool_call_seen = false
-	local tool_call_closed = false
-	local last_tool_call_end = 0
-	local cutoff = false
+	local streamed_bytes = 0
 	local abort_reason = nil
 	local usage = nil
-	local stream_tool_cap = tonumber(request.stream_tool_call_cap)
-	if stream_tool_cap == nil then stream_tool_cap = DEFAULT_STREAM_TOOL_CALL_CAP end
-	stream_tool_cap = math.max(0, math.floor(stream_tool_cap))
-	local stream_tool_cap_reached = false
-	local stream_duplicate_cap = tonumber(request.stream_duplicate_call_cap)
-	if stream_duplicate_cap == nil then stream_duplicate_cap = DEFAULT_STREAM_DUPLICATE_CALL_CAP end
-	stream_duplicate_cap = math.max(0, math.floor(stream_duplicate_cap))
-	local stream_duplicate_cap_reached = false
-	local result, err = transport.request({
+	if request.on_protocol then request.on_protocol("transport_request", { transport = "http", body = body }) end
+	local result, err = http_request({
 		host = request.host or CODEX_HOST,
 		port = request.port or 443,
 		path = request.path or CODEX_PATH,
@@ -1221,12 +1071,12 @@ local function do_complete(request, credentials, body, on_token)
 		headers = codex_headers(credentials, request),
 		on_body_chunk = sse_parser(function(delta)
 			chunks[#chunks + 1] = delta
-			full_stream = full_stream .. delta
-			if #full_stream > MAX_OUTPUT_TEXT_CHARS then
+			streamed_bytes = streamed_bytes + #delta
+			if streamed_bytes > MAX_OUTPUT_TEXT_CHARS then
 				abort_reason = "output_text_too_large"
 				debug_log("[codex] stream cutoff reason=%s response_chars=%d threshold=%d",
 					abort_reason,
-					#full_stream,
+					streamed_bytes,
 					MAX_OUTPUT_TEXT_CHARS
 				)
 				return false
@@ -1234,50 +1084,6 @@ local function do_complete(request, credentials, body, on_token)
 			if on_token then
 				on_token(delta)
 			end
-			if not tool_call_seen and full_stream:find("<tool_call") then
-				tool_call_seen = true
-			end
-			local closed_advanced = false
-			if tool_call_seen then
-				local close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
-				while close_pos do
-					last_tool_call_end = close_pos + CLOSE_TOOL_CALL_LEN - 1
-					tool_call_closed = true
-					closed_advanced = true
-					close_pos = full_stream:find(CLOSE_TOOL_CALL, last_tool_call_end + 1, true)
-				end
-			end
-			if closed_advanced and (stream_tool_cap > 0 or stream_duplicate_cap > 0) then
-				local call_stats = complete_valid_tool_call_stats(full_stream)
-				if stream_tool_cap > 0 and call_stats.unique >= stream_tool_cap then
-					cutoff = true
-					stream_tool_cap_reached = true
-					debug_log("[codex] stream tool-call cap reached unique_calls=%d cap=%d response_chars=%d",
-						call_stats.unique, stream_tool_cap, #full_stream)
-					return false
-				end
-				if stream_duplicate_cap > 0 and call_stats.duplicates >= stream_duplicate_cap then
-					cutoff = true
-					stream_duplicate_cap_reached = true
-					debug_log("[codex] stream duplicate-call cap reached total_calls=%d unique_calls=%d duplicates=%d cap=%d response_chars=%d",
-						call_stats.total, call_stats.unique, call_stats.duplicates, stream_duplicate_cap, #full_stream)
-					return false
-				end
-			end
-				if tool_call_closed then
-					local after = full_stream:sub(last_tool_call_end + 1)
-					local tail_kind = post_tool_tail_kind(after)
-					if should_cut_after_tool(tail_kind, #after) then
-						cutoff = true
-						debug_log("[codex] early tool-call cutoff reason=%s post_tool_chars=%d response_chars=%d threshold=%d",
-							tail_kind,
-							#after,
-							#full_stream,
-							POST_TOOL_THRESHOLD
-						)
-						return false
-					end
-				end
 		end, function(next_usage)
 			usage = next_usage
 		end, function(reason, size)
@@ -1289,25 +1095,16 @@ local function do_complete(request, credentials, body, on_token)
 			)
 		end, sse_stats, function(item)
 			output_items[#output_items + 1] = item
+		end, request.on_activity, function(chunk)
+			trace_transport_chunk(request, "http", chunk)
 		end),
 	})
+	if request.on_protocol then request.on_protocol("transport_result", {
+		transport = "http", error = err, status = result and result.status, timings = result and result.timings,
+		diagnostics = result and response_diagnostics(result),
+	}) end
 
 	if err then
-		local salvaged_text, salvaged_calls = salvage_partial_tool_response(chunks, err)
-		if salvaged_text then
-			return {
-				status = err.status or 200,
-				text = salvaged_text,
-				response_bytes = err.response_bytes or 0,
-				body_tail = err.body_tail or "",
-				timings = err.timings,
-				usage = usage,
-				early_cutoff = true,
-				partial_salvage = true,
-				partial_salvaged_calls = salvaged_calls,
-				sse_stats = sse_stats,
-			}
-		end
 		err.text_chunks = chunks
 		err.sse_stats = sse_stats
 		return nil, err
@@ -1315,17 +1112,7 @@ local function do_complete(request, credentials, body, on_token)
 	result.sse_stats = sse_stats
 	result.text = table.concat(chunks)
 	result.output_items = output_items
-	if cutoff or tool_call_seen then
-		local canonical = canonical_tool_text(result.text)
-		if canonical ~= result.text then
-			log_canonical_tool_change("[codex] canonicalized tool response", result.text, canonical)
-			result.text = canonical
-		end
-	end
 	result.usage = usage
-	result.early_cutoff = cutoff
-	result.stream_tool_cap_reached = stream_tool_cap_reached
-	result.stream_duplicate_cap_reached = stream_duplicate_cap_reached
 	result.abort_reason = abort_reason
 	result.transport = "http"
 	return result
@@ -1356,9 +1143,14 @@ local function native_tool_calls(output_items)
 end
 
 function codex.complete(request, on_token)
+	if request.native_tool_calling == false then
+		error("Codex XML tool fallback was removed; native tool calling is required")
+	end
+	request.native_tool_calling = true
 	local credentials_path = request.credentials_path or config.default_credentials_path()
 	local credentials = load_credentials(credentials_path)
 	local body = request_body(request)
+	if request.on_request_body then request.on_request_body(body) end
 	local summary = request_summary(request, body)
 	dump_request_body(body, summary)
 	local max_retries = request.max_retries
@@ -1367,7 +1159,9 @@ function codex.complete(request, on_token)
 	end
 
 	local last_error = nil
+	local auth_refresh_attempted = false
 	for attempt = 0, max_retries do
+		local retry_immediately = false
 		log_request_summary("[codex] attempt " .. tostring(attempt + 1) .. "/" .. tostring(max_retries + 1), summary)
 		if attempt == 0 then
 			log_prefix_stability(summary)
@@ -1383,9 +1177,11 @@ function codex.complete(request, on_token)
 					tostring(err.phase or "unknown"),
 					tostring(err.detail)
 				)
+				local fallback_error = (tostring(err.kind) .. "/" .. tostring(err.phase or "unknown") .. " " .. tostring(err.detail)):sub(1, 500):gsub("[%c]", " ")
 				result, err = do_complete(websocket_http_fallback_request(request), credentials, body, on_token)
 				if result then
 					result.websocket_fallback = true
+					result.websocket_fallback_error = fallback_error
 				end
 			end
 		else
@@ -1396,7 +1192,7 @@ function codex.complete(request, on_token)
 			if request.native_tool_calling and native_parse_error then
 				error("Codex native tool call error: " .. native_parse_error)
 			end
-			debug_log("[codex] attempt %d succeeded transport=%s http_status=%s response_chars=%d response_bytes=%d timing=%s",
+			debug_log("[codex] attempt %d received response transport=%s http_status=%s response_chars=%d response_bytes=%d timing=%s",
 				attempt + 1,
 				tostring(result.transport or "http"),
 				tostring(result.status or "unknown"),
@@ -1404,14 +1200,8 @@ function codex.complete(request, on_token)
 				result.response_bytes or 0,
 				timing_summary(result.timings)
 			)
-			if result.partial_salvage then
-				debug_log("[codex] attempt %d used salvaged partial tool response calls=%d",
-					attempt + 1,
-					tonumber(result.partial_salvaged_calls) or 0
-				)
-			end
 			if result.sse_stats and ((result.sse_stats.output_deltas or 0) == 0 or LOG_RAW_USAGE) then
-				log_sse_stats("success", result.sse_stats, result.body_tail)
+				log_sse_stats(result.status >= 400 and "http_error" or "received", result.sse_stats, result.body_tail)
 			end
 			if result.usage then
 				local prompt_tokens = tonumber(result.usage.prompt_tokens) or 0
@@ -1436,32 +1226,31 @@ function codex.complete(request, on_token)
 
 			local body_tail = result.body_tail or ""
 			if result.status >= 400 then
-				debug_log("[codex] HTTP error status=%d body=%s",
-					result.status,
-					body_tail:sub(1, 2000):gsub("\n", "\\n")
-				)
+				debug_log("[codex] %s body=%s", http_error_message(result, body_tail):gsub("[%c]", " "),
+					body_tail:sub(1, 2000):gsub("[%c]", " "))
 				if is_auth_error(body_tail) then
-					invalidate_credentials_cache()
 					last_error = "Codex auth error: " .. body_tail:sub(1, 500)
-					if attempt < max_retries and result.text == "" then
-						credentials = load_credentials(credentials_path)
+					if not auth_refresh_attempted and attempt < max_retries and result.text == "" then
+						auth_refresh_attempted = true
+						credentials = refresh_after_auth_error(credentials_path, credentials, request)
+						retry_immediately = true
 					else
 						error(last_error)
 					end
-				end
-				if is_retryable_http(result.status, body_tail) and attempt < max_retries and result.text == "" then
-					last_error = "Codex HTTP error " .. tostring(result.status) .. ": " .. body_tail:sub(1, 200)
+				elseif is_retryable_http(result.status, body_tail) and attempt < max_retries and result.text == "" then
+					last_error = http_error_message(result, body_tail)
 				else
-					error("Codex HTTP error " .. tostring(result.status) .. ": " .. body_tail:sub(1, 500))
+					error(http_error_message(result, body_tail))
 				end
 			elseif result.abort_reason then
 				error("Codex stream aborted: " .. tostring(result.abort_reason))
 			elseif result.text == "" and #(parsed_native_calls or {}) == 0 and body_tail ~= "" then
 				if is_auth_error(body_tail) then
-					invalidate_credentials_cache()
 					last_error = "Codex auth error: " .. body_tail:sub(1, 500)
-					if attempt < max_retries then
-						credentials = load_credentials(credentials_path)
+					if not auth_refresh_attempted and attempt < max_retries then
+						auth_refresh_attempted = true
+						credentials = refresh_after_auth_error(credentials_path, credentials, request)
+						retry_immediately = true
 					else
 						error(last_error)
 					end
@@ -1470,7 +1259,7 @@ function codex.complete(request, on_token)
 				end
 			else
 				return {
-					text = result.text,
+					text = materialize_citations(result.text, result.output_items),
 					_output_items = result.output_items,
 					_native_tool_calls = request.native_tool_calling and parsed_native_calls or nil,
 					_usage = result.usage,
@@ -1478,10 +1267,6 @@ function codex.complete(request, on_token)
 					_http_status = result.status,
 					_timings = result.timings,
 					_response_bytes = result.response_bytes,
-					_partial_salvage = result.partial_salvage or nil,
-					_partial_salvaged_calls = result.partial_salvaged_calls,
-					_stream_tool_cap_reached = result.stream_tool_cap_reached or nil,
-					_stream_duplicate_cap_reached = result.stream_duplicate_cap_reached or nil,
 					_transport = result.transport,
 					_transport_reused = result.websocket_reused or nil,
 					_transport_fallback = result.websocket_fallback or nil,
@@ -1519,7 +1304,7 @@ function codex.complete(request, on_token)
 			end
 		end
 
-		if attempt < max_retries then
+		if attempt < max_retries and not retry_immediately then
 			local backoff = INITIAL_BACKOFF_SEC * (2 ^ attempt)
 			debug_log("[codex] retrying after %ds", backoff)
 			if not cancellable_sleep(backoff) then
@@ -1536,20 +1321,20 @@ codex._request_body = request_body
 codex._input_json = input_json
 codex._native_tool_calls = native_tool_calls
 codex._normalize_output_item = normalize_output_item
-codex._canonical_tool_text = canonical_tool_text
-codex._canonical_tool_debug_summary = canonical_tool_debug_summary
-codex._complete_tool_calls_prefix = complete_tool_calls_prefix
-codex._salvage_partial_tool_response = salvage_partial_tool_response
-codex._post_tool_tail_kind = post_tool_tail_kind
-codex._should_cut_after_tool = should_cut_after_tool
-codex._unique_complete_valid_tool_call_count = unique_complete_valid_tool_call_count
-codex._complete_valid_tool_call_stats = complete_valid_tool_call_stats
-codex._default_stream_tool_call_cap = DEFAULT_STREAM_TOOL_CALL_CAP
-codex._default_stream_duplicate_call_cap = DEFAULT_STREAM_DUPLICATE_CALL_CAP
 codex._default_deadlines = default_deadlines
 codex._websocket_deadlines = websocket_deadlines
 codex._prompt_cache_key = prompt_cache_key
 codex._usage_from_payload = usage_from_payload
 codex._headers = codex_headers
+codex._process_event_payload = process_event_payload
+codex._new_sse_stats = new_sse_stats
+codex._materialize_citations = materialize_citations
+codex._refresh_after_auth_error = refresh_after_auth_error
+codex._set_http_request = function(fn)
+	http_request = fn or transport.request
+end
+codex._set_websocket_enabled = function(enabled)
+	WEBSOCKET_ENABLED = enabled ~= false
+end
 
 return codex

@@ -13,6 +13,7 @@ pcall(require, "luarocks.loader")
 
 local active_responses = nil
 local active_call = 0
+local native_fixture = dofile(project_dir .. "/tests/native_fixture.lua")
 
 package.loaded["agent.providers"] = {
 	load = function()
@@ -22,9 +23,7 @@ package.loaded["agent.providers"] = {
 				if not active_responses then
 					error("no fake responses configured")
 				end
-				return {
-					text = active_responses[active_call] or "done",
-				}
+				return native_fixture.response(active_responses[active_call] or "done")
 			end,
 		}
 	end,
@@ -64,11 +63,15 @@ local function write_call(path, content)
 	return tool_call("write", '{"path":"' .. path .. '"}', content)
 end
 
-local function edit_call(path, old_text, new_text)
-	return tool_call(
-		"edit",
-		'{"path":"' .. path .. '","oldText":' .. require("agent.util.json").string(old_text) .. ',"newText":' .. require("agent.util.json").string(new_text) .. "}"
-	)
+local function edit_call(path, start_line, old_text, content)
+	local read = require("agent.tools.read")
+	local lines = read.split_lines(old_text)
+	local end_line = start_line + #lines - 1
+	return tool_call("edit", require("agent.util.json").encode({
+		path = path, start_line = start_line, end_line = end_line,
+		start_tag = read.line_tag(start_line, lines[1]),
+		end_tag = read.line_tag(end_line, lines[#lines]), content = content,
+	}))
 end
 
 local function run_test(name, responses, checks)
@@ -236,7 +239,7 @@ end
 
 return M
 ]]),
-	edit_call("edit_target.lua", 'return "bbb"', 'return "BETA_MODIFIED"'),
+	edit_call("edit_target.lua", 8, '  return "bbb"', '  return "BETA_MODIFIED"'),
 	"done",
 }, function()
 	assert_file_exists("edit_target.lua")
@@ -305,7 +308,7 @@ end
 
 return M
 ]]),
-	edit_call("insert_test.lua", "function M.last()\n  return 99\nend", "function M.middle()\n  return 50\nend\n\nfunction M.last()\n  return 99\nend"),
+	edit_call("insert_test.lua", 7, "function M.last()\n  return 99\nend", "function M.middle()\n  return 50\nend\n\nfunction M.last()\n  return 99\nend"),
 	"done",
 }, function()
 	assert_file_exists("insert_test.lua")

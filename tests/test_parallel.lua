@@ -9,6 +9,7 @@ local parallel = require("agent.parallel")
 local read_tool = require("agent.tools.read")
 local registry = require("agent.tool_registry")
 local shell = require("agent.util.shell")
+local uv = require("luv")
 
 local passed = 0
 local failed = 0
@@ -86,6 +87,27 @@ end
 
 io.write("\n" .. dim("═══ Parallel Executor Tests ═══") .. "\n\n")
 
+run_test("batched grep matches direct grep for dash patterns and errors", function()
+	local grep = require("agent.tools.grep")
+	write_file(tmp_dir .. "/dash.txt", "accept --token-ttl-seconds here\n")
+	for _, evidence in ipairs({ false, true }) do
+		local context = { cwd = tmp_dir, session = { grep_evidence = evidence } }
+		local calls = {
+			{ name = "grep", args = { path = "dash.txt", pattern = "--token-ttl-seconds" } },
+			{ name = "grep", args = { path = ".", pattern = "--token-ttl-seconds", glob = "dash.txt" } },
+			{ name = "grep", args = { path = "dash.txt", pattern = "absent-pattern" } },
+			{ name = "grep", args = { path = "dash.txt", pattern = "[" } },
+		}
+		local results = parallel.execute_batch(calls, context)
+		for i, call in ipairs(calls) do
+			local direct = grep.execute(call.args, context)
+			assert_eq(results[i].is_error, direct.is_error, "grep error status #" .. i)
+			assert_eq(results[i].content, direct.content, "grep content #" .. i)
+			assert_eq(results[i].summary, direct.summary, "grep summary #" .. i)
+		end
+	end
+end)
+
 run_test("allows non-overlapping same-file edits in one batch", function()
 	local path = tmp_dir .. "/same.txt"
 	write_file(path, "one\ntwo\nthree\n")
@@ -99,6 +121,9 @@ run_test("allows non-overlapping same-file edits in one batch", function()
 
 	assert_eq(results[1].is_error, false, "first edit should succeed")
 	assert_eq(results[2].is_error, false, "second edit should succeed")
+	assert_eq(results[1].harness_policy.strategy, "descending_source_position")
+	assert_contains(results[1].harness_policy.rationale, "preserve original tagged source coordinates")
+	assert_eq(results[1].harness_policy.group_size, 2)
 	assert_lines(path, { "one", "inserted", "two", "THREE" })
 end)
 
@@ -501,6 +526,31 @@ run_test("caps total read output in one batch", function()
 	assert_eq(results[3].summary, "read budget reached")
 	assert_eq(results[3].ui_state, "deferred")
 	assert_contains(results[3].content, "Read batch output budget reached")
+	assert_eq(results[3].harness_policy.name, "shared_read_output_cap")
+	assert_eq(results[3].harness_policy.strategy, "sequential_model_order_shared_budget")
+	assert_eq(results[3].harness_policy.max_bytes, 24000)
+end)
+
+run_test("session override can widen the shared read experiment budget", function()
+	local path = tmp_dir .. "/read-budget-override.txt"
+	local lines = {}
+	for _ = 1, 80 do lines[#lines + 1] = string.rep("y", 500) end
+	write_file(path, table.concat(lines, "\n") .. "\n")
+	local calls = {
+		{ name = "read", args = { path = path, offset = 1, limit = 80 } },
+		{ name = "read", args = { path = path, offset = 20, limit = 80 } },
+		{ name = "read", args = { path = path, offset = 40, limit = 80 } },
+	}
+	local results = parallel.execute_batch(calls, {
+		cwd = tmp_dir,
+		session = { read_batch_bytes = 48000 },
+	})
+	for index, result in ipairs(results) do
+		if result.summary == "read budget reached" then
+			error("widened budget still deferred read #" .. tostring(index))
+		end
+		assert_eq(result.is_error, false)
+	end
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))

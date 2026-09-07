@@ -1,7 +1,7 @@
 #!/usr/bin/env lua
 
 local function usage()
-	io.stderr:write("usage: lua evals/driver.lua --root DIR --prompt-file FILE --credentials FILE --output FILE --transcript FILE [--model MODEL] [--reasoning EFFORT] [--native-tool-calling true|false] [--multi-edit-enabled true|false] [--system-prompt-profile current|lean|minimal] [--system-prompt-append-file FILE] [--edit-tool-profile tagged|exact] [--stream-tool-call-cap N] [--stream-duplicate-call-cap N] [--read-only-batch-cap N] [--seed-context-file FILE] [--intra-turn-compaction true|false] [--context-compaction-threshold N] [--context-hard-limit N] [--compaction-keep-recent-tokens N] [--context-pressure-after-first-tool N] [--recovery-mutation-file FILE]\n")
+	io.stderr:write("usage: lua evals/driver.lua --root DIR --prompt-file FILE --credentials FILE --output FILE --transcript FILE [--model gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna] [--reasoning EFFORT] [--tool-scope all|web_only|none] [--multi-edit-enabled true|false] [--system-prompt-profile current|pre-harness-quality] [--system-prompt-append-file FILE] [--edit-tool-profile tagged] [--read-only-batch-cap N] [--grep-evidence true|false] [--stale-edit-evidence true|false] [--completion-audit true|false] [--blank-workspace-inventory-guard true|false] [--seed-context-file FILE] [--intra-turn-compaction true|false] [--context-compaction-threshold N] [--context-hard-limit N] [--compaction-keep-recent-tokens N] [--context-pressure-after-first-tool N] [--recovery-mutation-file FILE]\n")
 	os.exit(2)
 end
 
@@ -17,6 +17,21 @@ end
 if not options.root or not options["prompt-file"] or not options.credentials
 	or not options.output or not options.transcript then
 	usage()
+end
+
+-- Reject historical treatments before reading fixtures or making model calls.
+for _, key in ipairs({ "delegate-readonly-enabled", "delegate-readonly-profile", "tool-dag-enabled", "readonly-fork-join-enabled" }) do
+	if options[key] ~= nil then error("retired experiment option: " .. key .. "; see research/archive/README.md") end
+end
+local retired_prompt_profiles = {
+	["workflow-lite"] = true, ["planning-clarity"] = true,
+	["repo-facts"] = true, lean = true, minimal = true,
+}
+if retired_prompt_profiles[options["system-prompt-profile"]] then
+	error("retired experiment option: system-prompt-profile=" .. options["system-prompt-profile"] .. "; see research/archive/README.md")
+end
+if options["edit-tool-profile"] == "exact" then
+	error("retired experiment option: edit-tool-profile=exact; native tools require tagged edits")
 end
 
 package.path = options.root .. "/lua/?.lua;" .. options.root .. "/lua/?/init.lua;"
@@ -72,6 +87,11 @@ local function safe_value(value, depth)
 end
 
 local prompt = read_file(options["prompt-file"])
+local tool_scope = options["tool-scope"]
+if tool_scope == "all" then tool_scope = nil end
+if tool_scope ~= nil and tool_scope ~= "web_only" and tool_scope ~= "none" and tool_scope ~= "local_only" then
+	error("tool scope must be all, local_only, web_only, or none")
+end
 local function optional_bool(value)
 	if value == nil then return nil end
 	if value == "true" or value == "1" then return true end
@@ -88,15 +108,17 @@ local session = session_module.create({
 	credentials_path = options.credentials,
 	model = options.model,
 	reasoning_effort = options.reasoning,
-	native_tool_calling = optional_bool(options["native-tool-calling"]),
-	stream_tool_call_cap = options["stream-tool-call-cap"],
-	stream_duplicate_call_cap = options["stream-duplicate-call-cap"],
+	tool_scope = tool_scope,
 	read_only_batch_cap = options["read-only-batch-cap"],
+	grep_evidence = optional_bool(options["grep-evidence"]),
+	stale_edit_evidence = optional_bool(options["stale-edit-evidence"]),
 	intra_turn_compaction = optional_bool(options["intra-turn-compaction"]),
 	context_compaction_threshold = options["context-compaction-threshold"],
 	context_hard_limit = options["context-hard-limit"],
 	compaction_keep_recent_tokens = options["compaction-keep-recent-tokens"],
 })
+session.completion_audit = optional_bool(options["completion-audit"])
+session.blank_workspace_inventory_guard = optional_bool(options["blank-workspace-inventory-guard"])
 
 if options["seed-context-file"] then
 	local seed = json.decode(read_file(options["seed-context-file"]))
@@ -123,113 +145,19 @@ if options["seed-context-file"] then
 	end
 end
 
-local function profiled_system_prompt(full, profile)
-	local context_start = full:find("\n## Context window\n", 1, true)
-	local response_start = full:find("\n## Response guidelines\n", 1, true)
-	if not context_start or not response_start or response_start <= context_start then
-		error("cannot locate system prompt sections for minimal profile")
-	end
-
-	local suffix_markers = {
-		"\n## Mode\n",
-		"\n# Project Context\n",
-		"\n## Brave Search\n",
-		"\n# Project Index\n",
-		"\nCurrent date:",
+local function pre_harness_quality_prompt(full)
+	local lines = {
+		"- In a blank or new workspace, use at most one inventory call. Do not batch ls, find, and grep against the same empty root; use the project index and the first result, then begin the requested research or implementation.",
+		"- For web-researched implementation, prefer primary current documentation and turn mandatory platform or API requirements into an explicit acceptance checklist before coding. Start with at most three focused searches; search again only for a named unresolved requirement.",
+		"- Separate fast deterministic local checks from slow, environment-dependent, remote, cloud, or hardware checks. Do not hide a slow external probe at the end of a long command chain; preserve clear evidence for every check that completed.",
+		"- For deployment and infrastructure work, syntax checks and static builds do not prove deployability. Distinguish files written, local checks executed, static contracts checked, and external deployment or invocation actually completed.",
+		"- Do not call an implementation complete when a required external path was not exercised. State the exact boundary and lead with what was actually proven.",
 	}
-	local suffix_start
-	for _, marker in ipairs(suffix_markers) do
-		local found = full:find(marker, response_start + 1, true)
-		if found and (not suffix_start or found < suffix_start) then suffix_start = found end
-	end
-	if not suffix_start then error("cannot locate system prompt suffix for minimal profile") end
-
-	local guidance
-	if profile == "minimal" then
-		guidance = {
-			"\n## Response guidelines",
-			"- Complete the requested task using the available tools when needed.",
-			"- Be concise, verify code changes, and report only work supported by tool results.",
-			"- A tool-call message must contain only tool calls.",
-		}
-	elseif profile == "lean" then
-		guidance = {
-			"\n## Context window",
-			"- Do not re-read content still visible in recent tool results. After compaction, re-read source before quoting or editing it.",
-			"- Keep tool output focused; search or read a range instead of dumping large files.",
-			"",
-			"## Response guidelines",
-			"- Complete clear local work without asking permission. Be concise.",
-			"- Use run to verify code changes.",
-			"- A tool-call message must contain only tool calls.",
-			"- Never claim a file action or test without its tool result. Acknowledge tool errors.",
-			"- Ground cited paths, symbols, and code in visible tool results; re-read them when necessary.",
-		}
-	else
-		error("cannot build system prompt profile: " .. tostring(profile))
-	end
-	return full:sub(1, context_start - 1) .. table.concat(guidance, "\n") .. full:sub(suffix_start)
-end
-
-local function exact_edit_tool_prompt(full)
-	local function replace_plain(text, before, after)
-		local start_at, end_at = text:find(before, 1, true)
-		if not start_at then error("cannot locate edit prompt section for exact profile") end
-		if text:find(before, end_at + 1, true) then
-			error("edit prompt section is not unique for exact profile")
-		end
-		return text:sub(1, start_at - 1) .. after .. text:sub(end_at + 1)
-	end
-	local replacements = {
-		{
-			[[For edit and write, put ONLY metadata in JSON. File content goes as RAW TEXT after the JSON line — NO escaping, NO quoting, just the literal code:
-
-<tool_call name="edit">
-{"path":"file.lua","start_line":10,"start_tag":"Q8fA","end_line":12,"end_tag":"rX2b"}
-replacement line 1
-replacement line 2
-</tool_call>
-
-<tool_call name="write">]],
-			[[For edit, put path, the exact old text, and replacement text in JSON. The old text must occur exactly once:
-
-<tool_call name="edit">
-{"path":"file.lua","oldText":"old line 1\nold line 2","newText":"replacement line 1\nreplacement line 2"}
-</tool_call>
-
-For write, put ONLY path metadata in JSON. File content goes as raw text after the JSON line:
-
-<tool_call name="write">]],
-		},
-		{
-			[[To delete lines, leave the content empty (nothing after the JSON line):
-<tool_call name="edit">
-{"path":"file.lua","start_line":10,"start_tag":"Q8fA","end_line":12,"end_tag":"rX2b"}
-</tool_call>]],
-			[[To delete text, use an empty newText string:
-<tool_call name="edit">
-{"path":"file.lua","oldText":"obsolete line\n","newText":""}
-</tool_call>]],
-		},
-		{
-			[[edit: replace lines in a file. JSON args: path, start_line, start_tag, end_line, end_tag. Raw content after JSON replaces all lines in the range. Tags are the 4-char CAS codes from read output (e.g. "10:Q8fA") — they verify the file hasn't changed.]],
-			[[edit: replace one exact, unique text block in a file. JSON args: path, oldText, newText. Copy only the file content from a recent read, including whitespace; do not include displayed line-number/CAS prefixes such as "10:Q8fA:". Ambiguous or stale matches are rejected.]],
-		},
-		{
-			[[You may batch multiple edits to the same file only when the line ranges are non-overlapping and all edits use tags from a previous read output already visible in this conversation. They are applied bottom-to-top so line numbers stay valid. If edits overlap or depend on earlier edits, make one edit, re-read, then continue.]],
-			[[Do not batch multiple edits to the same file. Make one exact replacement, then re-read before another edit because the original text may be stale.]],
-		},
-		{
-			[[For edit and write: put the raw file content DIRECTLY after the JSON metadata line. Do NOT put content inside the JSON. Do NOT escape newlines or quotes. Just write the code exactly as it should appear in the file. ONE EXCEPTION: raw content must not contain literal "<tool_call" or "</tool_call>" markup. If the file needs those strings, split or escape them in the code (e.g. "</" .. "tool_call>").]],
-			[[For edit, put oldText and newText inside the JSON and escape newlines and quotes normally. For write, put raw file content directly after the JSON metadata line. Raw write content must not contain literal "<tool_call" or "</tool_call>" markup; split or escape those strings if needed.]],
-		},
-		{
-			[[When editing, copy the line tags EXACTLY from the read output. They are 4-char codes like "Q8fA". If a tag doesn't match, the file changed — re-read it.]],
-			[[When editing, copy oldText exactly from a recent read and include enough surrounding text to make it unique. Strip the displayed line-number/CAS prefix from every copied line; it is read metadata, not file content. If oldText does not match, re-read the file instead of guessing.]],
-		},
-	}
-	for _, replacement in ipairs(replacements) do
-		full = replace_plain(full, replacement[1], replacement[2])
+	for _, line in ipairs(lines) do
+		local needle = "\n" .. line
+		local start_at, end_at = full:find(needle, 1, true)
+		if not start_at then error("cannot locate harness-quality policy line") end
+		full = full:sub(1, start_at - 1) .. full:sub(end_at + 1)
 	end
 	return full
 end
@@ -237,21 +165,35 @@ end
 local prompt_profile = options["system-prompt-profile"] or "current"
 local edit_tool_profile = options["edit-tool-profile"] or "tagged"
 local full_system_prompt = session:get_system_prompt()
-if prompt_profile == "minimal" or prompt_profile == "lean" then
-	session.system_prompt = profiled_system_prompt(full_system_prompt, prompt_profile)
+if prompt_profile == "pre-harness-quality" then
+	session.system_prompt = pre_harness_quality_prompt(full_system_prompt)
 elseif prompt_profile ~= "current" then
 	error("unknown system prompt profile: " .. tostring(prompt_profile))
 end
-if edit_tool_profile == "exact" then
-	session.system_prompt = exact_edit_tool_prompt(session.system_prompt or full_system_prompt)
-elseif edit_tool_profile ~= "tagged" then
+if edit_tool_profile ~= "tagged" then
 	error("unknown edit tool profile: " .. tostring(edit_tool_profile))
 end
 if options["system-prompt-append-file"] then
 	session.system_prompt = (session.system_prompt or full_system_prompt)
 		.. "\n\n" .. read_file(options["system-prompt-append-file"])
 end
+if options["experience-file"] then
+	session:add_user(read_file(options["experience-file"]))
+end
+if prompt_profile == "current" then
+	local directory = assert(options.output:match("^(.*)/[^/]+$"))
+	write_file(directory .. "/prompt-profile.json", json.encode({
+		profile = prompt_profile, baseline = full_system_prompt,
+		effective = session.system_prompt or full_system_prompt,
+	}))
+end
 session:add_user(prompt)
+
+local context_pilot
+if options["context-mode"] then
+	context_pilot = dofile(options.root .. "/evals/state_context.lua").new(
+		options["context-mode"], session, assert(options.output:match("^(.*)/[^/]+$")))
+end
 
 local initial_assistant_messages = 0
 for _, message in ipairs(session.messages or {}) do
@@ -283,7 +225,9 @@ if options["recovery-mutation-file"] then
 	recovery_mutation.target_changed = false
 end
 
+local captured_events = {}
 local function eval_on_tool(event)
+	captured_events[#captured_events + 1] = event
 	if recovery_mutation and not recovery_mutation.applied
 		and recovery_mutation.target_changed
 		and event.phase == "start" and event.name == "run"
@@ -338,18 +282,21 @@ end
 
 core.set_transcript(options.transcript)
 local started = uv.hrtime()
-local ok, result = pcall(core.run_session, session, nil, eval_on_tool)
+local model_activities = {}
+local ok, result = pcall(core.run_session, session, nil, eval_on_tool, nil, nil, {
+	before_step = context_pilot and context_pilot.before_step,
+	on_request = context_pilot and context_pilot.on_request,
+	on_response = context_pilot and context_pilot.on_response,
+	on_model_activity = function(activity)
+		model_activities[#model_activities + 1] = safe_value(activity)
+	end,
+})
 local elapsed_ms = math.floor((uv.hrtime() - started) / 1000000)
 core.set_transcript(nil)
 
 if not ok then
-	write_file(options.output, json.encode({
-		ok = false,
-		error = tostring(result),
-		elapsed_ms = elapsed_ms,
-	}))
 	io.stderr:write("LCA eval run failed: " .. tostring(result) .. "\n")
-	os.exit(1)
+	result = { error = tostring(result), events = captured_events }
 end
 
 local tool_calls = 0
@@ -362,16 +309,19 @@ for _, message in ipairs(session.messages or {}) do
 end
 
 write_file(options.output, json.encode({
-	ok = true,
+	ok = ok,
+	error = result.error,
+	context_pilot = context_pilot and context_pilot.report(),
 	model = session.model,
 	reasoning_effort = session.reasoning_effort,
+	tool_scope = session.tool_scope,
 	system_prompt_profile = prompt_profile,
 	edit_tool_profile = edit_tool_profile,
 	multi_edit_enabled = registry.multi_edit_enabled(),
+	grep_evidence = session.grep_evidence,
+	stale_edit_evidence = session.stale_edit_evidence,
 	stale_mutation_applied = stale_mutation and stale_mutation.applied or false,
 	system_prompt_chars = #(session.system_prompt or ""),
-	stream_tool_call_cap = session.stream_tool_call_cap,
-	stream_duplicate_call_cap = session.stream_duplicate_call_cap,
 	native_tool_calling = session.native_tool_calling,
 	intra_turn_compaction = session.intra_turn_compaction,
 	context_compaction_threshold = session.context_compaction_threshold,
@@ -381,9 +331,11 @@ write_file(options.output, json.encode({
 	recovery_mutation_applied = recovery_mutation and recovery_mutation.applied or false,
 	final = result.text or "",
 	tool_calls = tool_calls,
-	llm_calls = math.max(0, assistant_tool_turns - initial_assistant_messages) + 1,
+	llm_calls = context_pilot and context_pilot.requests or math.max(0, assistant_tool_turns - initial_assistant_messages) + 1,
 	elapsed_ms = elapsed_ms,
-	usage = safe_value(session.usage_history or {}),
+	usage = safe_value(context_pilot and context_pilot.usage or session.usage_history or {}),
+	model_activities = model_activities,
 	events = safe_value(result.events or {}),
 	messages = safe_value(session.messages or {}),
 }))
+if not ok then os.exit(1) end

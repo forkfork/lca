@@ -1,0 +1,39 @@
+{
+  "id": "researched_build_harness_quality",
+  "title": "Bound blank-workspace discovery and audit researched-build completion evidence",
+  "hypothesis": "The blank-workspace inventory guard plus researched-build completion audit reduces redundant initial inventory and preserves mandatory-requirement coverage and completion honesty without preventing a locally validated artifact.",
+  "falsified_if": "The treatment has a lower pass rate, misses the mandatory MMDSv2 creation setting, performs more than one workspace inventory call, skips local validation, overclaims external deployment, or fails to lead with the locally proven scope in any run.",
+  "source_ids": ["codex-loop"],
+  "control_variant": "pre_harness_quality",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["researched_blank_build"],
+  "variants": [
+    {
+      "id": "pre_harness_quality",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "pre-harness-quality",
+      "completion_audit": false,
+      "blank_workspace_inventory_guard": false
+    },
+    {
+      "id": "harness_quality",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "completion_audit": true,
+      "blank_workspace_inventory_guard": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "a deploy demo is created and receives a successful local validation",
+    "the current mandatory requireMMDSV2=true setting is present",
+    "blank-workspace inventory uses at most one ls/find/grep call",
+    "the final answer does not claim an external deployment occurred"
+    ,"the final answer leads with the locally proven scope rather than a broad completion claim"
+  ],
+  "efficiency_outcomes": [
+    "inventory, tool, model-call, elapsed-time, and token counts"
+  ],
+  "decision_rule": "Adopt only if all five treatment runs pass every hard gate, treatment pass rate is no worse than control, inventory stays at one call or fewer, and the artifact and honest-boundary gates do not regress. Otherwise revise or reject the guards."
+}

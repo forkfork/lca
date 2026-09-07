@@ -1,0 +1,24 @@
+{
+  "id": "astra_repository_facts_speed",
+  "title": "Observed repository state prevents avoidable Git recovery",
+  "hypothesis": "Adding the observed Git work-tree state to the existing environment context prevents non-Git verification failures and lowers time to a correct solution.",
+  "falsified_if": "The observed fact is wrong or not activated, per-task correctness declines, avoidable Git failures do not decrease, or the speed gate fails.",
+  "source_ids": [],
+  "local_evidence": "The preceding local-tools campaign showed Git-related failures in both arms. All-tools cell-0008 chained git diff --check before tests in a non-Git fixture, then regenerated verification. LCA's inventory already probes work-tree membership but does not expose it. This treatment adds only a truthful startup fact, not new workflow instructions; all tools and Astra/high remain fixed.",
+  "control_variant": "current",
+  "minimum_runs_per_cell": 2,
+  "scenarios": ["simple_prompt", "ambiguous_bug_investigation", "multifile_order_cancellation", "existing_codebase_edit"],
+  "variants": [
+    {"id": "current", "model": "gpt-6-astra", "reasoning": "high", "system_prompt_profile": "current", "tool_scope": "all"},
+    {"id": "repo-facts", "model": "gpt-6-astra", "reasoning": "high", "system_prompt_profile": "repo-facts", "tool_scope": "all"}
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "ambiguous_bug_investigation": "\n\nFile scope: change only checkout/cache.py and checkout/service.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "existing_codebase_edit": "\n\nFile scope: change only checkout/models.py, checkout/config.py and checkout/pricing.py. Do not add files. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": ["external artifacts scope and verification", "actual startup Git probe and independent isolated saved-workspace audit", "exact prompt delta and unchanged native tools", "failed commands containing not a git repository"],
+  "efficiency_outcomes": ["aggregate coding elapsed time including recovery", "per-task median latency", "model round trips and tools", "all-attempt estimated cost"],
+  "decision_rule": "Seed 915. Four separate smoke runs: simple_prompt and ambiguous_bug_investigation, both arms. Then sixteen pilot runs: four tasks, two repetitions, two arms. At most 20 launches, $5 between-run estimated cost threshold (one-run overshoot possible), 1400 active worker seconds. No retries or failed-run exclusion. Stop for smoke or protocol/activation failures. Primary cohort excludes smoke and arithmetic; spend includes everything. Continue only if no per-task pass loss, at least 10% lower aggregate coding latency, lower median latency on at least two of three coding tasks, no more than 10% cost increase, and strictly fewer failed non-Git commands than control. If the control has zero such failures, the mechanism is untested here rather than validated. Otherwise reject this speed promotion on the cohort. Before any normal default change, require fresh validation including a genuine Git-work-tree control and longer task calibration. No default changes from this pilot. Offline tests cover real Git roots and nested directories, non-Git paths, missing executable, failed probes and quoted paths. Preserved artifacts must not inherit LCA's parent .git during audit."
+}

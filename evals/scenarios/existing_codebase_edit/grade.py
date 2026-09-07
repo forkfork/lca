@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from verification_evidence import verified_after_mutations
+
 
 workspace = Path(sys.argv[1])
 trajectory = json.loads(Path(sys.argv[2]).read_text())
@@ -125,12 +128,13 @@ checks = {
     "hidden_behavior": hidden_ok,
     "scope_control": scope_ok,
     "all_required_files_changed": all(required_files_changed.values()),
+    "verified_after_mutations": verified_after_mutations(trajectory.get("events", [])),
 }
 hard_gates = dict(checks)
 dimensions = {
     "behavior": 75 if checks["public_tests"] and checks["hidden_behavior"] else 0,
     "scope": 15 if checks["scope_control"] and checks["all_required_files_changed"] else 0,
-    "verification": 5 if verification_runs else 0,
+    "verification": 5 if checks["verified_after_mutations"] else 0,
     "communication": 5 if trajectory.get("final", "").strip() else 0,
 }
 

@@ -1,0 +1,19 @@
+{
+  "id": "lesson_applicability_pilot",
+  "title": "Abstain from a conditional lesson after parser contract drift",
+  "hypothesis": "Checking a lesson's declared applicability prevents stale advice from degrading coding outcomes, while preserving its benefit when conditions still hold.",
+  "falsified_if": "Advisory Astra already rejects stale advice with equivalent success and cost, or checked advice degrades relevant-task outcomes; no measured benefit means do not expand this gate.",
+  "source_ids": [],
+  "local_evidence": "Follow-up to the 2026-09-05 research discussion. This is an authored stress probe, not a promotion validation campaign. The caching lesson is correct for a pure text-only parser but does not apply after the callback becomes path-sensitive.",
+  "control_variant": "none",
+  "minimum_runs_per_cell": 2,
+  "scenarios": ["simple_prompt", "lesson_cache_valid", "lesson_cache_stale"],
+  "variants": [
+    {"id": "none", "model": "gpt-6-astra", "reasoning": "high", "lesson_policy": "none"},
+    {"id": "advisory", "model": "gpt-6-astra", "reasoning": "high", "lesson_policy": "advisory"},
+    {"id": "checked", "model": "gpt-6-astra", "reasoning": "high", "lesson_policy": "checked"}
+  ],
+  "deterministic_outcomes": ["external public and hidden behavioral tests", "protected fixture scope", "successful documented verification", "request-level lesson injection matches policy", "None result caching, iterator support, no cross-call cache, changed text and contextual parser isolation"],
+  "efficiency_outcomes": ["all-run standard-equivalent cost", "elapsed time", "calls", "injected bytes", "advisory-versus-checked stale-task cost and correctness"],
+  "decision_rule": "Run six smoke cases (simple_prompt and lesson_cache_valid across three arms), then eighteen pilot cases (three scenarios, two repetitions, three arms) in frozen randomized order, seed 908. At most 24 launches, $6 between-run standard-equivalent cost threshold, 1800 active seconds. No retries or post-hoc grader relaxation. Correctness/scope failures in smoke halt; policy/protocol failures always halt. Primary contrast checked vs advisory on stale tasks, relevant task as positive control, arithmetic as irrelevance/overhead control. Continue only for repeatable advisory correctness failure avoided by checked, or at least 20% lower stale-task aggregate cost without correctness loss and without >10% relevant-task median latency regression. Otherwise retain normal no-lesson behavior; tiny or mixed differences are inconclusive. Checked and none have identical model input when the condition fails, so differences between those arms are sampling noise, not evidence of model improvement. This tests an explicit metadata gate on two small related fixtures, not semantic retrieval, cross-task promotion, persistent demotion, or long coding tasks. Report all evidence and do not promote the seeded lesson."
+}

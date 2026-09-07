@@ -49,32 +49,18 @@ end
 
 io.write("\n" .. dim("═══ Context Limit Tests ═══") .. "\n\n")
 
-run_test("GPT-5.5 uses its current context and maximum input limits", function()
-	local limits = reload()
-	assert_eq(limits.context_window("gpt-5.5"), 1050000)
-	assert_eq(limits.max_input_tokens("gpt-5.5"), 922000)
-	assert_eq(limits.reserve_tokens(), 16384)
-	assert_eq(limits.auto_compact_threshold("gpt-5.5"), 905616)
-end)
-
 run_test("GPT-5.6 tiers share current context and maximum input limits", function()
 	local limits = reload()
-	for _, model in ipairs({ "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna" }) do
+	for _, model in ipairs({ "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna" }) do
 		assert_eq(limits.context_window(model), 1050000)
 		assert_eq(limits.max_input_tokens(model), 922000)
 		assert_eq(limits.auto_compact_threshold(model), 905616)
 	end
 end)
 
-run_test("gpt-5 family defaults to larger context", function()
+run_test("unknown models receive the conservative GPT-5.6 window", function()
 	local limits = reload()
-	assert_eq(limits.context_window("gpt-5-something"), 400000)
-end)
-
-run_test("deepseek family uses documented large context", function()
-	local limits = reload()
-	assert_eq(limits.context_window("deepseek-v4-pro"), 1000000)
-	assert_eq(limits.context_window("deepseek-custom"), 1000000)
+	assert_eq(limits.context_window("unknown"), 1050000)
 end)
 
 

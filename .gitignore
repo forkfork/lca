@@ -5,8 +5,10 @@ credentials.*.json
 .env.*
 .lca-history
 .lca-session.json
+.lca-sessions/
 .lca/jobs/
 lua/agent/.lca-history
+research/inbox/
 
 __pycache__/
 *.py[cod]

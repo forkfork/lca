@@ -11,7 +11,7 @@ answer = trajectory.get("final", "").strip()
 tool_calls = int(trajectory.get("tool_calls", 0))
 llm_calls = int(trajectory.get("llm_calls", 0))
 answer_correct = bool(re.fullmatch(
-    r"\s*(?:17\s*(?:\*|x|×|multiplied by)\s*23\s*=\s*)?391[.!]?\s*",
+    r"\s*(?:17\s*(?:\*|x|×|multiplied by)\s*23\s*=\s*)?(?:391|\*\*391\*\*|__391__)[.!]?\s*",
     answer,
     re.IGNORECASE,
 ))

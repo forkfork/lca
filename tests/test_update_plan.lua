@@ -9,7 +9,6 @@ local update_plan = require("agent.tools.update_plan")
 local registry = require("agent.tool_registry")
 local session_mod = require("agent.session")
 local protocol = require("agent.tool_protocol")
-local ui = require("agent.ui")
 
 local passed = 0
 local failed = 0
@@ -52,6 +51,31 @@ test("stores normalized plan on session", function()
 	assert(result.content:find("2. %[in_progress%] Implement tool"), "missing rendered plan content")
 end)
 
+test("stores a concrete user-facing journey beside the mechanical plan", function()
+	local s = session_mod.create({})
+	local result = update_plan.execute({
+		journey = {
+			destination = "a tiny database that makes Linux I/O legible",
+			approach = "fixed pages · sync · threads · raw io_uring",
+			proof = "build · round-trip tests · three comparable benchmarks",
+		},
+		plan = {
+			{ step = "Build the three read paths", status = "in_progress" },
+			{ step = "Prove comparable behavior", status = "pending" },
+		},
+	}, { session = s })
+	assert_eq(result.is_error, false)
+	assert_eq(result.journey.destination, "a tiny database that makes Linux I/O legible")
+	assert_eq(s.journey.approach, "fixed pages · sync · threads · raw io_uring")
+
+	local invalid = update_plan.execute({
+		journey = { destination = "something", approach = "somehow" },
+		plan = { { step = "Do it", status = "in_progress" } },
+	}, { session = session_mod.create({}) })
+	assert_eq(invalid.is_error, true)
+	assert_eq(invalid.summary, "invalid journey")
+end)
+
 test("marks only the first plan after empty state as fresh", function()
 	local s = session_mod.create({})
 	local first = update_plan.execute({
@@ -72,9 +96,56 @@ test("marks only the first plan after empty state as fresh", function()
 	assert_eq(second.plan_fresh, false)
 end)
 
-test("insanitywolf prompt stays compact", function()
-	assert_eq(ui.plain_prompt({ flow = "off" }), "lca > ")
-	assert_eq(ui.plain_prompt({ flow = "insanitywolf" }), "lca ! > ")
+test("insanitywolf plan publishes stable capability intent and payoff", function()
+	local s = session_mod.create({ flow = "insanitywolf" })
+	local first = update_plan.execute({
+		wolf = {
+			title = "Automatic session recovery",
+			payoff = "reopen LCA and continue without thinking",
+			proof = "restart and recover the unfinished turn",
+		},
+		plan = {
+			{ step = "Build recovery", status = "in_progress" },
+			{ step = "Prove restart", status = "pending" },
+		},
+	}, { session = s })
+
+	assert_eq(first.is_error, false)
+	assert_eq(first.wolf_status.phase, "hunt")
+	assert_eq(first.wolf_status.cycle, 1)
+	assert_eq(first.wolf_status.title, "Automatic session recovery")
+	assert_eq(first.wolf_status.payoff, "reopen LCA and continue without thinking")
+
+	local completed = update_plan.execute({
+		plan = {
+			{ step = "Build recovery", status = "completed" },
+			{ step = "Prove restart", status = "completed" },
+		},
+	}, { session = s })
+	assert_eq(completed.is_error, false)
+	assert_eq(completed.wolf_status.phase, "shipped")
+	assert_eq(completed.wolf_status.title, "Automatic session recovery")
+	assert_eq(#s.wolf_ledger, 1)
+	assert_eq(s.wolf_ledger[1].title, "Automatic session recovery")
+
+	local repeated = update_plan.execute({
+		plan = {
+			{ step = "Build recovery", status = "completed" },
+			{ step = "Prove restart", status = "completed" },
+		},
+	}, { session = s })
+	assert_eq(repeated.is_error, false)
+	assert_eq(#s.wolf_ledger, 1)
+end)
+
+test("insanitywolf requires intent on the first plan of each cycle", function()
+	local s = session_mod.create({ flow = "insanitywolf" })
+	local result = update_plan.execute({
+		plan = { { step = "Mystery work", status = "in_progress" } },
+	}, { session = s })
+	assert_eq(result.is_error, true)
+	assert_eq(result.summary, "missing wolf status")
+	assert_eq(s.plan, nil)
 end)
 
 test("accepts plan array from parsed tool call", function()
@@ -147,146 +218,23 @@ test("plan is saved and loaded with session", function()
 	assert_eq(loaded.plan[1].status, "completed")
 end)
 
-test("ui exposes active plan reference", function()
-	local plan = {
-		{ step = "Inspect target", status = "completed" },
-		{ step = "Implement compact progress", status = "in_progress" },
-		{ step = "Run checks", status = "pending" },
-	}
-
-	local step, index = ui.plan_current(plan)
-
-	assert_eq(step, "Implement compact progress")
-	assert_eq(index, 2)
-	assert_eq(ui.plan_ref(index), "②")
-end)
-
-test("ui plan progress shows completed task and next task", function()
-	local plan = {
-		{ step = "Inspect target", status = "completed" },
-		{ step = "Draft app structure", status = "completed" },
-		{ step = "Write scripts", status = "in_progress" },
-	}
-
-	assert_eq(ui.plan_progress_label(plan), "Draft app structure → next: Write scripts")
-end)
-
-test("ui plan progress falls back to current task before completion", function()
-	local plan = {
-		{ step = "Inspect target", status = "in_progress" },
-		{ step = "Draft app structure", status = "pending" },
-	}
-
-	assert_eq(ui.plan_progress_label(plan), "Inspect target")
-end)
-
-test("ui lists only fresh plans by default", function()
-	local fresh = {
-		{ step = "Inspect target", status = "in_progress" },
-		{ step = "Implement compact progress", status = "pending" },
-	}
-	local active = {
-		{ step = "Inspect target", status = "completed" },
-		{ step = "Implement compact progress", status = "in_progress" },
-	}
-
-	assert_eq(ui.plan_should_list(fresh), true)
-	assert_eq(ui.plan_should_list(active), false)
-end)
-
-test("ui checkpoint renderer writes checkpoint summary", function()
-	local old_write = io.write
-	local out = {}
-	io.write = function(...)
-		for i = 1, select("#", ...) do
-			out[#out + 1] = tostring(select(i, ...))
-		end
-	end
-	local ok, err = pcall(function()
-		ui.checkpoint("## Next Steps\n1. Improve docs\n\n## Critical Context\n- Keep dry-run safe", {
-			cycle = 1,
-			tokens = 1461,
-		})
-	end)
-	io.write = old_write
-	if not ok then
-		error(err)
-	end
-	local text = table.concat(out)
-	assert(text:find("checkpoint", 1, true), "missing checkpoint rail")
-	assert(text:find("insanitywolf transition", 1, true), "missing transition label")
-	assert(text:find("Ctrl%-C"), "missing interrupt hint")
-	assert(text:find("Improve docs", 1, true), "missing next steps")
-end)
-
-test("ui checkpoint renderer wraps long next steps", function()
-	local old_write = io.write
-	local out = {}
-	io.write = function(...)
-		for i = 1, select("#", ...) do
-			out[#out + 1] = tostring(select(i, ...))
-		end
-	end
-	local ok, err = pcall(function()
-		ui.checkpoint("## Next Steps\n1. No further autonomous cycle is warranted. Offer: add persistent storage with a file-backed adapter if the user wants state to survive restarts; add password hashing if the user wants real credential handling; add TLS guidance if the user wants production deployment.\n\n## Critical Context\n- Keep dry-run safe", {
-			cycle = 1,
-			tokens = 1461,
-		})
-	end)
-	io.write = old_write
-	if not ok then
-		error(err)
-	end
-	local text = table.concat(out)
-	assert(text:find("password hashing", 1, true), "missing wrapped offer detail")
-	assert(text:find("production deployment", 1, true), "missing wrapped ending detail")
-end)
-
-test("ui plan progress keeps useful next-step detail", function()
-	local old_write = io.write
-	local out = {}
-	io.write = function(...)
-		for i = 1, select("#", ...) do
-			out[#out + 1] = tostring(select(i, ...))
-		end
-	end
-	local ok, err = pcall(function()
-		ui.plan_progress({
-			{ step = "Scaffold app", status = "completed" },
-			{ step = "Exercise endpoints and harden obvious gaps", status = "completed" },
-			{ step = "Add admin CSRF protection and verify portal form behavior", status = "in_progress" },
-		})
-	end)
-	io.write = old_write
-	if not ok then
-		error(err)
-	end
-	local text = table.concat(out)
-	assert(text:find("Add admin CSRF protection", 1, true), "missing next-step detail")
-	assert(not text:find("Add admin CSRF p%.%.%."), "truncated too aggressively")
-end)
-
-test("tool is advertised with usage guidance", function()
+test("tool is advertised through native schema and guidance", function()
 	assert_eq(registry.is_valid("update_plan"), true)
-	local prompt = registry.system_prompt()
-	assert(prompt:find("- update_plan:", 1, true), "missing tool listing")
-	assert(prompt:find("short phase checklist", 1, true), "missing phase checklist guidance")
-	assert(prompt:find("not user-facing explanation", 1, true), "missing internal plan guidance")
-	assert(prompt:find("multiple user%-facing surfaces"), "missing multi-surface planning guidance")
-	assert(prompt:find("HTTP API", 1, true), "missing API workstream example")
-	assert(prompt:find("Admin portal", 1, true), "missing admin portal workstream example")
-	assert(prompt:find("Auth/session state", 1, true), "missing auth/session workstream example")
-	assert(prompt:find("server%-rendered HTML"), "missing small web default")
-	assert(prompt:find("plain CSS", 1, true), "missing plain CSS default")
-	assert(prompt:find("no frontend framework", 1, true), "missing no-framework default")
-	assert(prompt:find("env vars", 1, true), "missing config default")
-	assert(prompt:find("health checks", 1, true), "missing HTTP API default")
-	assert(prompt:find("curl%-based smoke tests"), "missing API smoke test default")
-	assert(prompt:find('request that is only "commit"', 1, true), "missing commit-only fast path")
-	assert(prompt:find("do not inspect source files", 1, true), "missing commit exploration guard")
-	assert(prompt:find("do not combine `git commit` and `git push`", 1, true), "missing commit/push split guidance")
+	local found = false
+	for _, spec in ipairs(registry.native_tools()) do
+		if spec.name == "update_plan" then
+			found = true
+			assert_eq(spec.parameters.properties.plan.type, "array")
+			assert_eq(spec.parameters.properties.journey.properties.destination.type, "string")
+		end
+	end
+	assert_eq(found, true)
+	local prompt = registry.native_system_prompt()
+	assert(prompt:find("short execution plan", 1, true), "missing native planning guidance")
+	assert(prompt:find("bounded initial inspection batch", 1, true), "missing evidence-before-trajectory guidance")
+	assert(prompt:find("Avoid generic plan steps", 1, true), "missing generic-plan guard")
+	assert(prompt:find("Do not call read and edit/write for the same file in parallel", 1, true), "missing dependency guidance")
 end)
-
 test("native prompt requests evidence-dense project orientation", function()
 	local prompt = registry.native_system_prompt()
 	assert(prompt:find("authoritative documentation", 1, true), "missing authoritative orientation sources")

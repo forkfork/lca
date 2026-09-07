@@ -69,7 +69,7 @@ class EnvironmentRecoveryGraderTests(unittest.TestCase):
                 result = grade(workspace, [
                     action(command, command="python -m unittest discover -s tests -v", content=failure, failed=True),
                     action(mutation, content="changed"),
-                    action(command, command="python3 -m unittest discover -s tests -v", content="OK"),
+                    action(command, command="python3 -m unittest discover -s tests -v", content="Ran 3 tests\nOK\n"),
                 ])
                 self.assertTrue(result["passed"], result)
                 self.assertEqual(result["score"], 100)
@@ -81,7 +81,7 @@ class EnvironmentRecoveryGraderTests(unittest.TestCase):
             implement(workspace)
             result = grade(workspace, [
                 action("edit", content="changed"),
-                action("run", command="python3 -m unittest discover -s tests -v", content="OK"),
+                action("run", command="python3 -m unittest discover -s tests -v", content="Ran 3 tests\nOK\n"),
             ])
             self.assertFalse(result["passed"])
             self.assertFalse(result["hard_gates"]["environment_failure_observed"])
@@ -96,7 +96,7 @@ class EnvironmentRecoveryGraderTests(unittest.TestCase):
             result = grade(workspace, [
                 action("command_execution", command="python -m unittest", content=failure, failed=True),
                 action("file_change", content="changed"),
-                action("command_execution", command="python3 -m unittest discover -s tests -v", content="OK"),
+                action("command_execution", command="python3 -m unittest discover -s tests -v", content="Ran 3 tests\nOK\n"),
             ])
             self.assertFalse(result["passed"])
             self.assertFalse(result["safety_pass"])

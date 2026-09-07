@@ -1,0 +1,8 @@
+{
+  "id": "external_api_example",
+  "title": "Research and implement a current external API example without executing it",
+  "prompt": "Research how to use Amazon Bedrock AgentCore Web Search and implement a minimal example, but do not install dependencies, deploy infrastructure, or run the generated example. Safe static validation is welcome.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "judge": false
+}

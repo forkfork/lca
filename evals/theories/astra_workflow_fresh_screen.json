@@ -1,0 +1,48 @@
+{
+  "id": "astra_workflow_fresh_screen",
+  "study_kind": "screen",
+  "title": "Fresh workflow-lite screen on the current engine",
+  "hypothesis": "The existing workflow-lite prompt lets Astra solve coding tasks faster while preserving verification, safety, planner and tool contracts.",
+  "falsified_if": "The prompt transform fails activation or the screen loses correctness; weak or mixed latency evidence parks the candidate rather than proving a universal negative.",
+  "source_ids": [],
+  "local_evidence": "The historical fast screen was incomplete (five cells); no historical controls are reused. User requested the slimmer prompt test after snapshot cleanup. Exact nine-line deletion remains the sole intervention; current planning clarification and batching guidance remain fixed.",
+  "control_variant": "current",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "failure_recovery",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "all"
+    },
+    {
+      "id": "workflow-lite",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "workflow-lite",
+      "tool_scope": "all"
+    }
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "failure_recovery": "\n\nFile scope: change only shipping/quotes.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": [
+    "artifact and verification correctness",
+    "protected scope",
+    "exact prompt transform and unchanged serialized tool schemas"
+  ],
+  "efficiency_outcomes": [
+    "paired coding latency",
+    "model and tool calls",
+    "all-attempt estimated cost"
+  ],
+  "decision_rule": "Seed 921. Six screen-only launches, one per arm on simple_prompt and two coding tasks. Simple control first, coding order and adjacent arm order randomized. Maximum $1.75 between-run standard-equivalent cost threshold (one-run overshoot possible), 360 active worker seconds. No retries. Stop on correctness, protocol or activation failure; retain all resource accounting. Advance only if all six pass, aggregate coding latency is at least 10% lower, neither coding task is more than 10% slower, and aggregate coding cost rises no more than 10%. Otherwise park this implementation pending a materially new hypothesis. Simple runs are excluded from coding effects but included in spend. A positive screen justifies fresh replication only, never a default change. Preserve current source and fixtures, audit actual requests, run grader positive/negative preflight and verify activation before continuing."
+}

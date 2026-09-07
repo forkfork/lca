@@ -29,10 +29,23 @@ local function assert_not_contains(text, needle, message)
 	end
 end
 
+local function assert_eq(actual, expected, message)
+	if actual ~= expected then
+		error((message or "values differ") .. "\nexpected: " .. tostring(expected) .. "\nactual: " .. tostring(actual))
+	end
+end
+
 local function write_file(path, content)
 	local f = assert(io.open(path, "w"))
 	f:write(content)
 	f:close()
+end
+
+local function read_file(path)
+	local file = assert(io.open(path, "r"))
+	local content = file:read("*a")
+	file:close()
+	return content
 end
 
 local tmp_dir = "/tmp/lca_edit_tests_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000))
@@ -53,6 +66,72 @@ local function run_test(name, fn)
 end
 
 io.write("\n" .. dim("═══ Edit Tool Tests ═══") .. "\n\n")
+
+run_test("untagged legacy edit arguments cannot mutate files", function()
+	local target = tmp_dir .. "/legacy.txt"
+	write_file(target, "original\n")
+	local result = edit_tool.execute({ path = target, oldText = "original", newText = "changed" }, { cwd = tmp_dir })
+	assert_eq(result.is_error, true)
+	assert_contains(result.content, "start_line is required")
+	assert_eq(read_file(target), "original\n")
+end)
+
+run_test("tagged edits preserve exact LF bytes and trailing newline count", function()
+	for _, ending in ipairs({ "", "\n", "\n\n", "\n\n\n" }) do
+		local target = tmp_dir .. "/newline.txt"
+		local original = "head\nold\ntail" .. ending
+		write_file(target, original)
+		for _, replacement in ipairs({ "new", "newer" }) do
+			local before = read_file(target)
+			local lines = read_tool.split_lines(before)
+			local result = edit_tool.execute({path = target, start_line = 2, end_line = 2,
+				start_tag = read_tool.line_tag(2, lines[2]), end_tag = read_tool.line_tag(2, lines[2]),
+				content = replacement}, {cwd = tmp_dir})
+			assert_eq(result.is_error, false)
+			assert_eq(read_file(target), "head\n" .. replacement .. "\ntail" .. ending,
+				"edit changed bytes outside the selected line")
+		end
+	end
+end)
+
+run_test("multi-edit preserves exact LF bytes outside its hunks", function()
+	for _, ending in ipairs({ "", "\n", "\n\n" }) do
+		local target = tmp_dir .. "/multi-newline.txt"
+		local original = "first\nmiddle\nlast" .. ending
+		write_file(target, original)
+		local lines = read_tool.split_lines(original)
+		local result = edit_tool.execute({path = target, edits = {
+			{start_line = 1, end_line = 1, start_tag = read_tool.line_tag(1, lines[1]),
+				end_tag = read_tool.line_tag(1, lines[1]), content = "FIRST"},
+			{start_line = 3, end_line = 3, start_tag = read_tool.line_tag(3, lines[3]),
+				end_tag = read_tool.line_tag(3, lines[3]), content = "LAST"},
+		}}, {cwd = tmp_dir})
+		assert_eq(result.is_error, false)
+		assert_eq(read_file(target), "FIRST\nmiddle\nLAST" .. ending)
+	end
+end)
+
+run_test("EOF replacement and deletion do not manufacture blank lines", function()
+	local cases = {
+		{ "first\nlast\n", 2, "LAST", "first\nLAST\n" },
+		{ "first\nlast", 2, "LAST", "first\nLAST" },
+		{ "a\nb\n", 2, "", "a\n" },
+		{ "a\n", 1, "", "" },
+		{ "a\n", 2, "b", "a\nb\n" },
+		{ "a\n", 2, "", "a\n" },
+		{ "", 1, "b", "b" },
+	}
+	for _, case in ipairs(cases) do
+		local target = tmp_dir .. "/eof.txt"
+		write_file(target, case[1])
+		local lines = read_tool.split_lines(case[1])
+		local tag = read_tool.line_tag(case[2], lines[case[2]])
+		local result = edit_tool.execute({path = target, start_line = case[2], end_line = case[2],
+			start_tag = tag, end_tag = tag, content = case[3]}, {cwd = tmp_dir})
+		assert_eq(result.is_error, false)
+		assert_eq(read_file(target), case[4])
+	end
+end)
 
 run_test("blocked syntax errors use target path and candidate context", function()
 	local target = tmp_dir .. "/broken.lua"
@@ -253,6 +332,24 @@ run_test("tagged edit rejects ambiguous relocation candidates", function()
 	}, { cwd = tmp_dir })
 	if not result.is_error then error("ambiguous relocated edit should fail") end
 	if result.summary ~= "stale tag" then error(result.summary) end
+end)
+
+run_test("stale edit evidence returns fresh tagged source without writing", function()
+	local file = tmp_dir .. "/stale_evidence.py"
+	write_file(file, "VALUES = {\n    'timeout': 30,  # operator note\n}\n")
+	local result = edit_tool.execute({
+		path = file,
+		start_line = 2,
+		start_tag = "bad1",
+		end_line = 2,
+		end_tag = "bad2",
+		content = "    'timeout': 45,",
+	}, { cwd = tmp_dir, session = { stale_edit_evidence = true } })
+	assert_eq(result.is_error, true)
+	assert_eq(result.summary, "stale tag")
+	assert_contains(result.content, "[current tagged source:")
+	assert_contains(result.content, "'timeout': 30,  # operator note")
+	assert_eq(read_file(file), "VALUES = {\n    'timeout': 30,  # operator note\n}\n")
 end)
 
 os.execute("rm -rf " .. shell.quote(tmp_dir))

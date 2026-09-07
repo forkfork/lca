@@ -2,220 +2,150 @@ local json = require("agent.util.json")
 local fs = require("agent.util.fs")
 local uv = require("luv")
 local config = require("agent.config")
+local codex_oauth = require("agent.codex_oauth")
 
 local providers = {}
-
-local PROVIDER_MODULES = {
-	codex = "agent.providers.codex",
-	bedrock = "agent.providers.bedrock",
-	deepseek = "agent.providers.deepseek",
-}
-
-local PROVIDER_ALIASES = {
-	openai = "codex",
-}
-
 local cache = {}
-
--- Buffer before actual expiry to refresh early (5 minutes)
 local EXPIRY_BUFFER_SEC = 300
+local refresh_handler = codex_oauth.refresh
 
 local function get_mtime(path)
 	local stat = uv.fs_stat(path)
-	if stat then
-		return stat.mtime.sec
-	end
-	return 0
+	return stat and stat.mtime.sec or 0
 end
 
 local function decode_body(body)
-	local ok, tbl = pcall(json.decode, body or "")
-	if ok and type(tbl) == "table" then
-		return tbl
-	end
-	return nil
+	local ok, value = pcall(json.decode, body or "")
+	return ok and type(value) == "table" and value or nil
 end
 
-local function normalize_provider_name(provider)
-	provider = tostring(provider or "")
-	return PROVIDER_ALIASES[provider] or provider
+local function codex_credentials_body(root_body)
+	local root = decode_body(root_body)
+	if not root then error("invalid Codex credentials file; run lca login") end
+	local selected = root
+	if type(root.providers) == "table" then
+		selected = root.providers.codex or root.providers.openai
+	end
+	if type(selected) ~= "table" or not selected.access or not selected.accountId then
+		error("credentials file has no Codex OAuth credentials; run lca login")
+	end
+	selected.provider = "codex"
+	return json.encode(selected)
 end
 
-local function selected_provider_name_from_table(tbl)
-	if type(tbl) ~= "table" then
-		return nil
+local function credentials_tables(root_body)
+	local root = decode_body(root_body)
+	if not root then error("invalid Codex credentials file; run lca login") end
+	local selected = root
+	if type(root.providers) == "table" then
+		selected = root.providers.codex or root.providers.openai
 	end
-	local provider = normalize_provider_name(tbl.provider or tbl.currentProvider)
-	if provider ~= "" and PROVIDER_MODULES[provider] then
-		return provider
+	if type(selected) ~= "table" or not selected.access or not selected.accountId then
+		error("credentials file has no Codex OAuth credentials; run lca login")
 	end
-	return nil
+	return root, selected
 end
 
-local function selected_credentials_body(root_body)
-	local tbl = decode_body(root_body)
-	if not tbl or type(tbl.providers) ~= "table" then
-		error("credentials file must contain provider and providers fields; run lca login <provider>")
+local function is_expired(body)
+	local expires_at = json.number_field(body, "expiresAt")
+	if not expires_at then
+		local expires_ms = json.number_field(body, "expiresAtMs") or json.number_field(body, "expires")
+		if expires_ms then expires_at = expires_ms / 1000 end
 	end
-	local provider = selected_provider_name_from_table(tbl) or "codex"
-	local selected = tbl.providers[provider] or tbl.providers[PROVIDER_ALIASES[provider] or provider]
-	if type(selected) ~= "table" then
-		error("credentials file has no credentials for provider: " .. tostring(provider))
+	return expires_at ~= nil and os.time() >= (expires_at - EXPIRY_BUFFER_SEC)
+end
+
+local function read_credentials(path)
+	local mtime = get_mtime(path)
+	if cache.path == path and cache.mtime == mtime and cache.body then return cache.body end
+	local body = fs.read_file(path)
+	if not body then error("cannot read Codex credentials at " .. tostring(path) .. "; run lca login") end
+	cache.path, cache.mtime, cache.body = path, mtime, body
+	return body
+end
+
+local function write_credentials_atomic(path, root)
+	local body = json.encode(root) .. "\n"
+	local tmp = path .. ".refresh-" .. tostring(uv.getpid()) .. "-" .. tostring(uv.hrtime())
+	local file, open_err = io.open(tmp, "w")
+	if not file then return nil, open_err end
+	local wrote, write_err = file:write(body)
+	local closed, close_err = file:close()
+	if not wrote or not closed then
+		pcall(uv.fs_unlink, tmp)
+		return nil, write_err or close_err or "failed to write credentials"
 	end
-	if selected.provider == nil then
-		selected.provider = provider
+	local chmod_ok, chmod_err = uv.fs_chmod(tmp, tonumber("600", 8))
+	if not chmod_ok then
+		pcall(uv.fs_unlink, tmp)
+		return nil, chmod_err
+	end
+	local renamed, rename_err = uv.fs_rename(tmp, path)
+	if not renamed then
+		pcall(uv.fs_unlink, tmp)
+		return nil, rename_err
+	end
+	local stat = uv.fs_stat(path)
+	cache.path, cache.mtime, cache.body = path, stat and stat.mtime.sec or 0, body
+	return true
+end
+
+local function refresh_credentials(path, failed_access)
+	local root_body = fs.read_file(path)
+	if not root_body then error("cannot read Codex credentials at " .. tostring(path) .. "; run lca login") end
+	local root, selected = credentials_tables(root_body)
+	if failed_access and selected.access ~= failed_access then
+		cache.path, cache.mtime, cache.body = nil, nil, nil
+		return codex_credentials_body(root_body)
+	end
+	if type(selected.refresh) ~= "string" or selected.refresh == "" then
+		error("Codex credentials cannot be refreshed automatically; run lca login")
+	end
+	local ok, refreshed = pcall(refresh_handler, selected.refresh)
+	if not ok then
+		error("Codex token refresh failed: " .. tostring(refreshed) .. "; run lca login")
+	end
+	if type(refreshed) ~= "table" or type(refreshed.access) ~= "string"
+		or refreshed.access == "" or type(refreshed.expires_in) ~= "number"
+	then
+		error("Codex token refresh returned invalid credentials; run lca login")
+	end
+	selected.access = refreshed.access
+	selected.refresh = refreshed.refresh or selected.refresh
+	selected.expires = math.floor((os.time() + refreshed.expires_in) * 1000)
+	selected.expiresAt = nil
+	selected.expiresAtMs = nil
+	selected.provider = "codex"
+	local wrote, write_err = write_credentials_atomic(path, root)
+	if not wrote then
+		error("failed to persist refreshed Codex credentials: " .. tostring(write_err))
 	end
 	return json.encode(selected)
 end
 
-local function is_expired(body)
-	-- Check for expiresAt (epoch seconds) or expiresAtMs (epoch milliseconds)
-	local expires_at = json.number_field(body, "expiresAt")
-	if not expires_at then
-		local expires_ms = json.number_field(body, "expiresAtMs")
-		if expires_ms then
-			expires_at = expires_ms / 1000
-		end
-	end
-	if not expires_at then
-		-- Also check "expires" field (used by codex OAuth tokens, in ms)
-		local expires = json.number_field(body, "expires")
-		if expires then
-			expires_at = expires / 1000
-		end
-	end
-	if not expires_at then
-		return false
-	end
-	local now = os.time()
-	return now >= (expires_at - EXPIRY_BUFFER_SEC)
-end
-
-local function run_credential_process(command)
-	local handle = io.popen(command .. " 2>/dev/null", "r")
-	if not handle then
-		return nil, "failed to run credential_process"
-	end
-	local output = handle:read("*a")
-	local ok = handle:close()
-	if not ok or not output or output == "" then
-		return nil, "credential_process returned no output"
-	end
-	return output
-end
-
-local function refresh_credentials(credentials_path, body)
-	local selected_body = selected_credentials_body(body)
-	-- Strategy 1: credential_process field in the credentials file
-	-- If present, run the command and use its output as new credentials
-	local credential_process = json.field(selected_body, "credential_process")
-	if credential_process then
-		local new_body, err = run_credential_process(credential_process)
-		if new_body then
-			-- Validate the new credentials have required fields
-			local access_key = json.field(new_body, "accessKeyId")
-			if access_key then
-				-- Preserve the credential_process and provider fields
-				local cjson = require("cjson")
-				local ok_decode, new_tbl = pcall(cjson.decode, new_body)
-				if ok_decode and type(new_tbl) == "table" then
-					new_tbl.credential_process = credential_process
-					local provider = json.field(selected_body, "provider")
-					if provider then
-						new_tbl.provider = provider
-					end
-					local model = json.field(selected_body, "model")
-					if model then
-						new_tbl.model = model
-					end
-					local root = decode_body(body)
-					if root and type(root.providers) == "table" and provider then
-						root.providers[provider] = new_tbl
-						new_body = cjson.encode(root)
-					else
-						new_body = cjson.encode(new_tbl)
-					end
-				end
-				-- Write refreshed credentials back to disk
-				pcall(fs.write_file, credentials_path, new_body)
-				cache.path = credentials_path
-				cache.mtime = get_mtime(credentials_path)
-				cache.body = new_body
-				cache.parsed = nil
-				return new_body
-			end
-		end
-		-- credential_process failed; fall through to return stale credentials
-		io.stderr:write("[warn] credential_process failed: " .. (err or "unknown error") .. "\n")
-	end
-
-	-- Strategy 2: If the file has been updated externally (e.g., by a cron job
-	-- or another process), re-read it from disk by invalidating the cache
-	cache.path = nil
-	cache.mtime = nil
-	cache.body = nil
-	cache.parsed = nil
-	local fresh_body = fs.read_file(credentials_path)
-	if fresh_body and not is_expired(selected_credentials_body(fresh_body)) then
-		cache.path = credentials_path
-		cache.mtime = get_mtime(credentials_path)
-		cache.body = fresh_body
-		return fresh_body
-	end
-
-	-- Could not refresh — return the original (possibly expired) body
-	io.stderr:write("[warn] credentials at " .. credentials_path .. " appear expired and could not be refreshed\n")
-	return body
-end
-
-local function read_credentials(credentials_path)
-	local mtime = get_mtime(credentials_path)
-	if cache.path == credentials_path and cache.mtime == mtime and cache.body then
-		-- Check if cached credentials are expired
-		if is_expired(selected_credentials_body(cache.body)) then
-			return refresh_credentials(credentials_path, cache.body)
-		end
-		return cache.body
-	end
-	local body = fs.read_file(credentials_path)
-	cache.path = credentials_path
-	cache.mtime = mtime
-	cache.body = body
-	cache.parsed = nil
-
-	-- Check if freshly-read credentials are already expired
-	if is_expired(selected_credentials_body(body)) then
-		return refresh_credentials(credentials_path, body)
-	end
-
-	return body
-end
-
 function providers.credentials_body(credentials_path)
-	return selected_credentials_body(read_credentials(credentials_path or config.default_credentials_path()))
-end
-
-local function detect_provider(credentials_path)
-	local body = read_credentials(credentials_path)
-	local tbl = decode_body(body)
-	local provider = selected_provider_name_from_table(tbl)
-	if provider and PROVIDER_MODULES[provider] then
-		return provider
+	local path = credentials_path or config.default_credentials_path()
+	local selected = codex_credentials_body(read_credentials(path))
+	if is_expired(selected) then
+		return refresh_credentials(path)
 	end
-	error("credentials file must select a supported provider")
+	return selected
 end
 
-function providers.load(credentials_path)
-	credentials_path = credentials_path or config.default_credentials_path()
-	local name = detect_provider(credentials_path)
-	local mod = require(PROVIDER_MODULES[name])
-	return mod, name
+function providers.refresh_credentials(credentials_path, failed_access)
+	return refresh_credentials(credentials_path or config.default_credentials_path(), failed_access)
 end
+
+function providers.load(_credentials_path)
+	return require("agent.providers.codex"), "codex"
+end
+
 function providers._invalidate_cache()
-	cache.path = nil
-	cache.mtime = nil
-	cache.body = nil
-	cache.parsed = nil
+	cache.path, cache.mtime, cache.body = nil, nil, nil
+end
+
+function providers._set_refresh_handler(handler)
+	refresh_handler = handler or codex_oauth.refresh
 end
 
 return providers

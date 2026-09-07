@@ -70,7 +70,7 @@ local function lua_command_prefix(require_tui)
 			candidates[#candidates + 1] = candidate
 		end
 	end
-	for _, candidate in ipairs({ "lua5.5", "lua5.4", "lua5.3", "lua5.2", "lua5.1", "lua", "luajit" }) do
+	for _, candidate in ipairs({ "lua5.5" }) do
 		candidates[#candidates + 1] = candidate
 	end
 
@@ -78,38 +78,37 @@ local function lua_command_prefix(require_tui)
 	for _, candidate in ipairs(candidates) do
 		if candidate and candidate ~= "" and not seen[candidate] and executable_exists(candidate) then
 			seen[candidate] = true
-			if lua_can_run_lca(candidate, nil, require_tui) then
+			local version = lua_version_name(candidate)
+			if version == "5.5" and lua_can_run_lca(candidate, nil, require_tui) then
 				return shell_quote(candidate)
 			end
-			local version = lua_version_name(candidate)
-			local prefix = version and parse_luarocks_prefix(version) or nil
+			local prefix = version == "5.5" and parse_luarocks_prefix(version) or nil
 			if prefix and lua_can_run_lca(candidate, prefix, require_tui) then
 				return prefix .. shell_quote(candidate)
 			end
 		end
 	end
 
-	return "lua"
+	io.stderr:write("error: LCA requires Lua 5.5 with its local LuaRocks dependencies\n")
+	os.exit(1)
 end
 
 local function usage()
 	io.stderr:write([[
 Usage:
-  lca [--tui] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [repl options]
-  lca repl [--tui] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [repl options]
-  lca run <prompt> [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools]
-  lca login <openai|bedrock|deepseek> [login options]
+  lca [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--tool-stage|--no-tool-stage] [options]
+  lca repl [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--tool-stage|--no-tool-stage] [options]
+  lca run <prompt> [--model model] [--credentials path] [--reasoning effort] [--service-tier tier]
+  lca login [--out path]
   lca auth <login|refresh> [auth options]
 
 Examples:
   lca
-  lca --tui
-  lca --tui --tui-effect filament
-  lca repl --tui
-  lca repl --model gpt-5.6-sol
+  lca --tool-stage
+  lca --tui-effect filament
+  lca repl
   lca run "Explain this project"
-  lca login openai
-  lca login deepseek
+  lca login
 ]])
 	os.exit(2)
 end
@@ -151,16 +150,16 @@ if subcommand == "login" then
 end
 
 local executable = target.installed
-local local_file = io.open(target.local_path, "r")
-if local_file then
-	local_file:close()
-	local require_tui = false
-	if subcommand == "repl" then
-		for index = start_index, #arg do
-			if arg[index] == "--tui" or arg[index] == "--tui-effect" then require_tui = true; break end
-		end
-	end
-	executable = lua_command_prefix(require_tui) .. " " .. shell_quote(target.local_path)
+local runnable_path = target.local_path
+local runnable_file = io.open(runnable_path, "r")
+if not runnable_file then
+	runnable_path = script_dir .. "/" .. target.installed
+	runnable_file = io.open(runnable_path, "r")
+end
+if runnable_file then
+	runnable_file:close()
+	local require_tui = subcommand == "repl"
+	executable = lua_command_prefix(require_tui) .. " " .. shell_quote(runnable_path)
 end
 
 local parts = { executable }

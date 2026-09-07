@@ -85,14 +85,9 @@ local function rpc_call(conn, method, params, timeout_ms)
 
 	conn.stdin:write(request)
 
-	local repl_ok, repl_mod = pcall(require, "agent.repl")
 	local deadline = uv.now() + (timeout_ms or 10000)
 	while not done and uv.now() < deadline do
 		uv.run("once")
-		if repl_ok and repl_mod.cancelled then
-			conn.pending[id] = nil
-			return nil, "cancelled"
-		end
 	end
 
 	if not done then
@@ -201,15 +196,6 @@ function mcp.call_tool(server_name, tool_name, arguments)
 		content = table.concat(parts, "\n"),
 		summary = tool_name .. " completed",
 	}
-end
-
-function mcp.stop()
-	for _, conn in pairs(connections) do
-		if not conn.stdin:is_closing() then
-			conn.stdin:close()
-		end
-	end
-	connections = {}
 end
 
 function mcp.connected_servers()

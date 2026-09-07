@@ -1,0 +1,40 @@
+{
+  "id": "sam_datetime_engine_screen",
+  "study_kind": "screen",
+  "title": "Codex versus LCA: small AWS SAM datetime API",
+  "hypothesis": "At the same model and reasoning, both engines can build a correct small SAM API; the screen measures artifact correctness and elapsed time.",
+  "falsified_if": "Either engine fails the frozen artifact contract or its invocation protocol; stop before scaling.",
+  "source_ids": [],
+  "control_variant": "codex",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "sam_datetime_api"
+  ],
+  "variants": [
+    {
+      "id": "codex",
+      "engine": "codex_cli",
+      "model": "gpt-6-astra",
+      "reasoning": "high"
+    },
+    {
+      "id": "lca",
+      "engine": "lca",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal"
+    }
+  ],
+  "deterministic_outcomes": [
+    "independent handler and template checks",
+    "local verification evidence",
+    "protocol status separate from artifact result"
+  ],
+  "efficiency_outcomes": [
+    "wall time",
+    "completed actions",
+    "reported tokens and standard-equivalent estimated cost"
+  ],
+  "decision_rule": "Seed 90517; four runs total, randomized arm order inside each adjacent pair, simple control first. Maximum $4 standard-equivalent estimated cost between runs (one-run overshoot possible); 1080 active seconds total, 480 seconds per API cell. Stop after any failed artifact, protocol, or unknown usage. Both controls must pass before coding. A passing pair only justifies a fresh replication; no default promotion or general speed claim. The intervention is the entire engine bundle including system prompt/tools, not an isolated loop component. Codex CLI request configuration and JSONL are observable, but its wire requests and per-response usage are not; preserve that evidence limitation explicitly rather than asserting wire-level model activation. LCA records requests/responses. Original artifacts and all attempted usage remain outside task workspaces."
+}

@@ -1,0 +1,49 @@
+{
+  "id": "automatic_readonly_fork_join",
+  "title": "Model-invisible read-only delegate fork-join",
+  "hypothesis": "When Sol already emits a delegate and independent shell-backed repository discovery in the same read-only batch, automatically overlapping them can reduce latency without changing the model-visible prompt, schemas, selected calls, tool results, or combined API cost.",
+  "falsified_if": "Any treatment loses a deterministic hard gate, changes the simple negative control's tool behavior, fails to activate fork-join in at least half of repository treatment runs, increases pooled repository median combined API cost by more than 5%, or fails to reduce median latency among activated treatment runs by at least 8% relative to the serial control.",
+  "source_ids": ["harnessdev-2609.01437", "harnessevolve-2609.00829"],
+  "control_variant": "serial_delegate",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "project_orientation",
+    "ambiguous_bug_investigation",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "serial_delegate",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true,
+      "tool_dag_enabled": false,
+      "readonly_fork_join_enabled": false
+    },
+    {
+      "id": "automatic_fork_join",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true,
+      "tool_dag_enabled": false,
+      "readonly_fork_join_enabled": true
+    }
+  ],
+  "deterministic_outcomes": [
+    "all existing scenario hard gates remain authoritative",
+    "control and treatment expose identical prompts and native tool schemas",
+    "only an all-read-only batch containing both shell-backed discovery and delegate_readonly may activate fork-join",
+    "simple_prompt completes without tools or delegation"
+  ],
+  "efficiency_outcomes": [
+    "fork-join calls and activated batches",
+    "model calls, tool calls, and elapsed time",
+    "parent cost, child cost, and combined estimated API cost"
+  ],
+  "decision_rule": "Reject for any correctness regression or any fork-join activation on a batch containing mutation or command tools. Otherwise require zero simple_prompt tool calls, activation in at least half of repository treatment runs, at least 8% lower median elapsed_ms in activated repository treatments versus their serial scenario controls, and no more than 5% higher pooled repository median estimated_total_api_cost_usd. Acceptance promotes only invisible overlap when the experimental delegate is explicitly enabled; it does not enable delegation by default."
+}

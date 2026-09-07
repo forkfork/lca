@@ -31,6 +31,14 @@ class SimplePromptGraderTests(unittest.TestCase):
     def test_brief_worked_answer_passes(self):
         self.assertTrue(grade("17 × 23 = 391.")["passed"])
 
+    def test_bold_correct_answer_passes(self):
+        self.assertTrue(grade("17 × 23 = **391**.")["passed"])
+        self.assertTrue(grade("__391__")["passed"])
+
+    def test_bold_wrong_or_conflicting_answer_fails(self):
+        self.assertFalse(grade("17 × 23 = **392**.")["passed"])
+        self.assertFalse(grade("**391** or 392")["passed"])
+
     def test_wrong_answer_fails(self):
         self.assertFalse(grade("392")["passed"])
 

@@ -1,0 +1,8 @@
+{
+  "id": "repo_dependent_web_research",
+  "title": "Repository-dependent web research still inspects local evidence",
+  "prompt": "Compare our current web-search integration with AWS AgentCore and recommend whether this project should switch. Inspect this repository for our actual constraints, search current authoritative sources, and do not change anything.",
+  "timeout_seconds": 300,
+  "grader": "grade.py",
+  "judge": false
+}

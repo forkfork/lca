@@ -1,0 +1,39 @@
+{
+  "id": "astra_concrete_batching_screen",
+  "title": "Concrete import/body and implementation/test batching guidance",
+  "study_kind": "screen",
+  "hypothesis": "Concrete examples increase independent mutation batching and reduce unnecessary model rounds without changing correctness.",
+  "falsified_if": "Any artifact or protocol failure; no additional batching means the behavioral mechanism did not activate.",
+  "source_ids": [],
+  "control_variant": "baseline",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "multi_location_edit"
+  ],
+  "variants": [
+    {
+      "id": "baseline",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal"
+    },
+    {
+      "id": "batching",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal"
+    }
+  ],
+  "intervention": "Frozen engine roots selected by results/20260905-edit-batching-screen/screen.py; only the two registered native prompt lines differ. Verification guidance is identical in both arms. Do not run through the generic CLI: it cannot select these roots.",
+  "decision_rule": "Four serial runs, simple baseline first; coding order randomized with seed 925. Stop on first artifact/protocol/activation failure, unknown usage, 360 active seconds or $1.50 between-run estimated-cost threshold (one run overshoot possible). Exact request audits must confirm model, reasoning, tools and the two added lines. Grader positive/negative checks precede live calls. Advance to fresh validation only if all pass, coding treatment uses fewer mutation rounds, and time/output tokens do not rise more than 10%; otherwise record nonactivation or park. This screen cannot promote a default. User independently authorized these small guidance changes. Does not test interactive verification or implementation/test-file batching activation.",
+  "runner": "evals/results/20260905-edit-batching-screen/screen.py",
+  "deterministic_outcomes": [
+    "Public and hidden tests, scope, surgical edits and verification evidence",
+    "Exact outgoing prompt and model activation"
+  ],
+  "efficiency_outcomes": [
+    "Coding mutation rounds and stale edit failures",
+    "Model rounds, elapsed time, output tokens, all-attempt estimated cost"
+  ]
+}

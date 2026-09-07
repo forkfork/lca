@@ -1,0 +1,14 @@
+
+
+story:
+1/ i was a big claude code user
+2/ i was frusted by a quality drop, so I wanted to experiment with my own harness - found anthropic treat me as a consumer - cant use my own harness
+3/ switched to codex - big improvment - 5.4/5.5 came out, feels like quality, freedom
+
+CLAUDE CODE = HAPPY
+PROBLEM - enshittification
+SWITCH TO CODEX = NOW HAPPY
+PROBLEM - I CARRY MY LAPTOP OPEN AROUND - dropped at train station smashed laptop
+USE CODEX APP SERVER SDK - Build moonclaw.dev/pocket = NOW HAPPY - talk about the architecture
+ - SKILL 1/ predictable
+

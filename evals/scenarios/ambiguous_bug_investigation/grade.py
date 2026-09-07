@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from grader_support import successful_test_evidence
+
 
 workspace = Path(sys.argv[1])
 trajectory = json.loads(Path(sys.argv[2]).read_text())
@@ -91,11 +93,7 @@ reproduced_before_edit = bool(
 green_after_edit = any(
     index > first_mutation
     and event.get("name") in ("run", "shell", "command_execution")
-    and not event["result"].get("is_error")
-    and (
-        "unittest" in str(event.get("args", {}).get("command", "")).lower()
-        or "pytest" in str(event.get("args", {}).get("command", "")).lower()
-    )
+    and successful_test_evidence(event)
     for index, event in completed
 ) if first_mutation is not None else False
 relevant_reads = {

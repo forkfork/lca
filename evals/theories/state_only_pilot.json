@@ -1,0 +1,19 @@
+{
+  "id": "state_only_pilot",
+  "title": "Pilot explicit state with and without retained coding history",
+  "hypothesis": "Replacing history after each tool batch with bounded explicit state and the latest observation preserves short coding-task correctness while reducing total inference cost versus normal LCA and explicit state plus history.",
+  "falsified_if": "State-only repeatedly loses constraints, acts on contradicted beliefs, repeats resolved investigations, or loses deterministic correctness; or retained history plus identical state consistently performs better. This pilot cannot establish the long-task hypothesis.",
+  "source_ids": [],
+  "local_evidence": "User-proposed state-machine hypothesis, 2026-09-05. Existing ambiguous bug and multifile coding trajectories have medians of 11 and 14 tool calls, so this is an activation and overhead pilot only.",
+  "control_variant": "normal",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["ambiguous_bug_investigation", "multifile_order_cancellation", "stale_edit_recovery", "stable_verification_regression", "context_boundary_edit", "simple_prompt"],
+  "variants": [
+    {"id": "normal", "context_mode": "normal", "model": "gpt-5.6-sol", "reasoning": "high"},
+    {"id": "state_only", "context_mode": "state_only", "model": "gpt-5.6-sol", "reasoning": "high"},
+    {"id": "state_history", "context_mode": "state_history", "model": "gpt-5.6-sol", "reasoning": "high"}
+  ],
+  "deterministic_outcomes": ["external scenario hard gates and pass rate", "state emitted on every response within 8000 bytes", "state-only requests contain original user instructions, current state and only latest batch, without older provider reasoning", "manual trajectory review of stale beliefs and repeated investigations"],
+  "efficiency_outcomes": ["all-run estimated API cost including state output and failed responses", "prompt, cached, uncached and output tokens", "elapsed time and model/tool calls", "simple-prompt overhead"],
+  "decision_rule": "Run three randomized repetitions per scenario and arm (54 runs). Missing/invalid state is a protocol failure, with no silent fallback or extra retry. Audit exact requests before interpreting results. Continue to longer-task construction only if all state-only hard gates pass and no repeated memory-loss pattern appears. Reject this implementation on repeatable correctness losses; revise the protocol only as a new experiment. Cost reduction of at least 20% and median latency within +10% relative to normal is a promising efficiency signal, not an adoption criterion on these short tasks. Mixed or small-sample outcomes are inconclusive. C isolates the effect of keeping history under the same state requirement. Context-boundary scenario tests user corrections with existing default limits; this pilot does not force compaction or claim a real long context boundary. No production default changes."
+}

@@ -1,0 +1,24 @@
+{
+  "id": "astra_local_tools_speed",
+  "title": "Hosted search availability versus local native tools on offline coding",
+  "hypothesis": "Removing unused hosted search from explicitly offline coding requests lowers time to a verified solution without changing native tools or correctness.",
+  "falsified_if": "The treatment fails activation, loses per-task correctness, or fails the registered latency gate; fewer schema tokens alone do not establish a speed win.",
+  "source_ids": [],
+  "local_evidence": "The provider appends hosted web_search to normal requests. Native tools remain identical under the new local_only scope. Official tool configuration: https://developers.openai.com/api/docs/guides/tools-web-search . No assumption about the endpoint token cost of an unused hosted tool. Earlier effort validation failed to replicate; keep explicit high in both arms.",
+  "control_variant": "all",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["simple_prompt", "ambiguous_bug_investigation", "multifile_order_cancellation", "failure_recovery"],
+  "variants": [
+    {"id": "all", "model": "gpt-6-astra", "reasoning": "high", "system_prompt_profile": "current", "tool_scope": "all"},
+    {"id": "local_only", "model": "gpt-6-astra", "reasoning": "high", "system_prompt_profile": "current", "tool_scope": "local_only"}
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "ambiguous_bug_investigation": "\n\nFile scope: change only checkout/cache.py and checkout/service.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "failure_recovery": "\n\nFile scope: change only shipping/quotes.py. Do not add files. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": ["external artifact and verification grades", "per-task passes and protected scope", "actual serialized provider tools exactly equal native baseline with or without only web_search", "unchanged model effort prompt and task contracts"],
+  "efficiency_outcomes": ["aggregate coding elapsed time including failures", "per-task median latency", "input output cached tokens and complete estimated cost", "model and tool calls", "first-response input token attribution when available"],
+  "decision_rule": "Seed 914. Four separate smoke runs: simple_prompt and ambiguous_bug_investigation, both arms. Then 24 pilot runs: four scenarios, three repetitions, two arms. Maximum 28 launches, $7 between-run standard-equivalent estimated cost threshold (one-run overshoot possible), 1800 active worker seconds. Stop on smoke failures or protocol/activation failures. No retries or failed-run exclusion. Exclude smoke/arithmetic from primary outcomes, include all attempts in spend. Continue only with no per-task pass-count loss, at least 15% lower aggregate coding elapsed time, lower median latency on at least two of three coding tasks, and no more than 10% cost increase. Otherwise reject this speed route on the tested cohort; retain evidence without adopting a default. If qualified, validate freshly on existing_codebase_edit, context_boundary_edit and stable_verification_regression, three repeats, same gates, before a conditional offline recommendation. No long-task or global browsing claim. Inspect actual usage and tool traces rather than inferring savings from local serialized bytes. Compare contemporaneous controls only. Ordinary production browsing remains unchanged. local_only is a tool-availability ablation, not a network sandbox."
+}

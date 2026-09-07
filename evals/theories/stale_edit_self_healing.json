@@ -1,0 +1,17 @@
+{
+  "id": "stale_edit_self_healing",
+  "title": "Return fresh tagged evidence with stale edit failures",
+  "hypothesis": "Attaching a bounded current tagged source window to an edit rejected for stale tags lets Sol preserve concurrent changes and retry directly, removing the explicit recovery read and sometimes a model round without weakening stale-write safety.",
+  "falsified_if": "Any treatment run loses behavior, concurrent annotations, scope, or verification; treatment performs a focused source read after the stale failure as often as control; mean model calls do not improve; or latency and prompt tokens both regress by more than ten percent.",
+  "source_ids": ["codex-loop"],
+  "control_variant": "plain_stale_error",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["stale_edit_recovery"],
+  "variants": [
+    {"id": "plain_stale_error", "engine": "lca", "model": "gpt-5.6-sol", "system_prompt_profile": "current", "stale_edit_evidence": false},
+    {"id": "tagged_stale_error", "engine": "lca", "model": "gpt-5.6-sol", "system_prompt_profile": "current", "stale_edit_evidence": true}
+  ],
+  "deterministic_outcomes": ["stale write is rejected", "operator annotation survives", "requested timeout change is applied", "scope remains focused", "verification runs"],
+  "efficiency_outcomes": ["source reads after stale failure", "model calls", "tool calls", "latency and tokens"],
+  "decision_rule": "Adopt only if every treatment run passes, the current tagged window materially reduces recovery reads, and model calls or latency improve without a greater than ten percent regression in the other."
+}

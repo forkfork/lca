@@ -1,0 +1,11 @@
+{
+  "id": "preserve-current-verification",
+  "observations": ["verification-record-loss"],
+  "family": "coding-verification-state",
+  "lesson": "When replacing working state, retain successful verification records with their exact command and tested repository version until a relevant change invalidates them.",
+  "condition": "Coding tasks using replacement summaries where completed verification is still applicable to the current repository version; stale results must be invalidated.",
+  "metric": "estimated_total_api_cost_usd",
+  "validation_tasks": ["stale_edit_recovery", "stable_verification_regression", "transient_verification_failure", "context_boundary_edit", "failure_recovery"],
+  "evaluation_tasks": ["existing_codebase_edit", "credential_loader_bug"],
+  "rule": {"direction": "lower", "minimum_median_gain": 0.1, "maximum_regression": 0.05}
+}

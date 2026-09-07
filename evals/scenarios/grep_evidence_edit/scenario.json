@@ -1,0 +1,8 @@
+{
+  "id": "grep_evidence_edit",
+  "title": "Repair a diagnostic marker located by content search",
+  "prompt": "Fix the narrowly scoped diagnostic marker regression described in README.md. Use grep/content search to locate the emitted legacy marker, preserve all other mappings and formatting, run the documented tests, and do not modify README.md or tests.",
+  "timeout_seconds": 600,
+  "grader": "grade.py",
+  "judge": false
+}

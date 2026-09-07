@@ -15,8 +15,25 @@ function json.decode(text)
 	return cjson.decode(text)
 end
 
+-- Lua strings (including shell output) can contain arbitrary bytes. cjson
+-- escapes JSON controls but passes invalid UTF-8 through unchanged. Repair
+-- only the serialized text, keeping callers' raw data and valid Unicode intact.
+local function valid_utf8(text)
+	local _, invalid = utf8.len(text)
+	if not invalid then return text end
+	local parts, start = {}, 1
+	while invalid do
+		parts[#parts + 1] = text:sub(start, invalid - 1)
+		parts[#parts + 1] = "�"
+		start = invalid + 1
+		_, invalid = utf8.len(text, start)
+	end
+	parts[#parts + 1] = text:sub(start)
+	return table.concat(parts)
+end
+
 function json.encode(value)
-	return cjson.encode(value)
+	return valid_utf8(cjson.encode(value))
 end
 
 local STRING_ESCAPES = {
@@ -30,7 +47,7 @@ local STRING_ESCAPES = {
 }
 
 function json.string(value)
-	local escaped = tostring(value):gsub('[%z\1-\31\\"]', function(char)
+	local escaped = valid_utf8(tostring(value)):gsub('[%z\1-\31\\"]', function(char)
 		return STRING_ESCAPES[char] or string.format("\\u%04X", string.byte(char))
 	end)
 	return '"' .. escaped .. '"'

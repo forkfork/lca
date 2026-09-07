@@ -1,0 +1,16 @@
+{
+  "id": "astra_long_build_calibration",
+  "study_kind": "calibration",
+  "title": "Calibrate current Astra on a strict complete API build before planner experiments",
+  "hypothesis": "A complete local API build exercises enough current-model planning, verification and recovery to serve as a useful longer-task speed workload.",
+  "falsified_if": "The strict grader is invalid or current Astra completes the task without the long trajectory properties being studied; do not call a small-tool run a long coding task.",
+  "source_ids": [],
+  "local_evidence": "Historical auth_api runs included 20+ tools and repairs, but used older prompts and repeated planner updates. A new strict scenario requires all existing behavioral probes and completed final unittest evidence, preserving historical grading. Offline replay shows a plaintext-token mutation passes the old score (95) but fails the new mandatory security gate.",
+  "control_variant": "current",
+  "minimum_runs_per_cell": 2,
+  "scenarios": ["simple_prompt", "auth_api_strict"],
+  "variants": [{"id": "current", "model": "gpt-6-astra", "reasoning": "high", "system_prompt_profile": "current", "tool_scope": "all"}],
+  "deterministic_outcomes": ["all required behavioral probes", "completed final verification", "protected README and no unrelated infrastructure", "native planner use", "failed checks followed by revisions"],
+  "efficiency_outcomes": ["all-attempt task latency and estimated cost", "model calls and tool count", "planner-only round trips", "repeated investigations requiring trace review"],
+  "decision_rule": "Seed 916. Two independent smoke runs: simple_prompt and auth_api_strict. Then four pilot runs: both scenarios, two repetitions, one baseline arm. At most six launches, $8 between-run standard-equivalent cost threshold (one-run overshoot possible), 1500 active worker seconds. No retries or failed-run exclusion; halt on smoke or protocol/activation failures. This is workload calibration, not a causal speed claim. Record all three API builds including smoke, and distinguish pilot statistics. A candidate long-workload label requires at least two of three API trajectories to use 20+ actual tools, touch multiple code files, and show genuine failed verification/revision or a changed investigated assumption; do not force extra tool operations to satisfy the label. Count actual current planner calls and standalone planner turns before designing a no-planner treatment. If calibration is too short or unreliable, retain evidence and build a richer workload rather than asserting a planner speed improvement. No default changes."
+}

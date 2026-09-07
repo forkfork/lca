@@ -2,6 +2,13 @@ local commands = {}
 local context_limits = require("agent.context_limits")
 local jobs = require("agent.jobs")
 
+local INSANITYWOLF_PROMPT = table.concat({
+	"Improve this product in insanitywolf mode.",
+	"Understand what it is trying to become, form at least three strong coherent product bets, and choose the one with the greatest user-visible power and compounding leverage.",
+	"Implement the smallest complete vertical slice that proves the capability, verify it, then continue through bounded product-bet cycles while strong reversible bets remain.",
+	"Do not spend a cycle merely on tests, hardening, cleanup, refactoring, documentation, or conventionalization; those may support a product bet but are not the product bet.",
+}, "\n")
+
 local HELP = [[
 /help                 show commands
 /status               show cwd, model, credentials, and turn count
@@ -12,14 +19,15 @@ local HELP = [[
 /job-stop <id>        stop a durable job
 /job-wait <id> [ms]   wait briefly for a durable job
 /job-prune [days]     prune old finished jobs
-/model <id>           change model
-/reasoning <effort>   set reasoning effort: none, low, medium, high, xhigh
+/reasoning <effort>   low, medium, high, xhigh; max on Astra; none maps to low on Astra
 /service-tier <tier>  set service tier: auto, default, flex, priority
-/insanitywolf [on|off] bounded autonomous follow-up cycles after the requested task
+/insanitywolf [on|off] launch bounded autonomous product-bet cycles
+/river               inspect the last turn’s tool activity
+/tools [on|off]       spotlight every tool in the current batch
 /credentials <path>   change credentials file
 /explain [path]       explain a project using read-only inspection
 /save [path]          save session to file (default: .lca-session.json)
-/load [path]          load session from file (default: .lca-session.json)
+/resume [path]        resume the latest project session (default: .lca-session.json)
 /compact              summarize the current transcript now
 /clear                clear session transcript and saved session file
 /exit                 quit and save session
@@ -348,25 +356,13 @@ function commands.dispatch(line, session, ui)
 		ui.block(format_context_report(session, rest))
 	elseif name == "jobs" or name == "job" or name == "job-status" or name == "job-output" or name == "job-stop" or name == "job-wait" or name == "job-prune" then
 		dispatch_job_command(name, rest, session, ui)
-	elseif name == "model" then
-		if rest == "" then
-			ui.error("usage: /model <id>")
-		else
-			session.model = rest
-			if not session.native_tool_calling_explicit then
-				session.native_tool_calling = require("agent.session").native_tools_for_model(rest)
-				session.system_prompt = nil
-				session.system_prompt_version = nil
-			end
-			ui.muted("model: " .. session.model)
-		end
 	elseif name == "reasoning" then
 		if rest == "" then
 			session.reasoning_effort = nil
 			ui.muted("reasoning: default")
 		else
 			local ok, value = pcall(function()
-				return require("agent.session").resolve_reasoning_effort(rest)
+				return require("agent.session").resolve_reasoning_effort(rest, session.model)
 			end)
 			if not ok then
 				ui.error(tostring(value))
@@ -403,14 +399,21 @@ function commands.dispatch(line, session, ui)
 			return
 		end
 		session.flow = value
+		session.insanitywolf_cycle = session.flow == "insanitywolf" and 1 or nil
+		session.wolf_status = nil
+		session.wolf_ledger = session.flow == "insanitywolf" and {} or nil
 		session.system_prompt = nil
 		session.system_prompt_version = nil
 		if session.flow == "insanitywolf" then
-			ui.muted("insanitywolf: on")
-			ui.muted("will continue through bounded follow-up implementation cycles after the first plan completes")
-			ui.muted("press Ctrl-C during a checkpoint if the next direction is not what you want")
+			if ui.insanitywolf then
+				ui.insanitywolf(true)
+			else
+				ui.muted("insanitywolf: loose · bite through the fucking wall")
+			end
+			session:add_user(INSANITYWOLF_PROMPT)
+			return "run"
 		else
-			ui.muted("insanitywolf: off")
+			if ui.insanitywolf then ui.insanitywolf(false) else ui.muted("insanitywolf: caged") end
 		end
 	elseif name == "credentials" then
 		if rest == "" then
@@ -450,7 +453,7 @@ function commands.dispatch(line, session, ui)
 		else
 			ui.error(err)
 		end
-	elseif name == "load" then
+	elseif name == "resume" then
 		local path = rest ~= "" and rest or nil
 		local ok, err = session:load(path)
 		if ok then

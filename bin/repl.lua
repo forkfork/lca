@@ -10,7 +10,7 @@ local uv = require("luv")
 
 local options = {
 	credentials_path = config.default_credentials_path(),
-	model = "gpt-5.5",
+	model = config.default_model(),
 	reasoning_effort = nil,
 	service_tier = nil,
 	mcp_config = "mcp_servers.json",
@@ -19,7 +19,7 @@ local options = {
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/repl.lua [--tui] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools] [--transcript path]
+  lua bin/repl.lua [--model model] [--tui-effect drift|mycelium|cytoplasm|ink|filament|contours|auto] [--tool-stage|--no-tool-stage] [--credentials path] [--reasoning effort] [--service-tier tier] [--transcript path]
 ]])
 	os.exit(2)
 end
@@ -30,7 +30,7 @@ while index <= #arg do
 		options.credentials_path = arg[index + 1]
 		index = index + 2
 	elseif arg[index] == "--model" then
-		options.model = arg[index + 1]
+		options.model = assert(arg[index + 1], "--model requires a model id")
 		index = index + 2
 	elseif arg[index] == "--reasoning" then
 		options.reasoning_effort = arg[index + 1]
@@ -38,26 +38,22 @@ while index <= #arg do
 	elseif arg[index] == "--service-tier" then
 		options.service_tier = arg[index + 1]
 		index = index + 2
-	elseif arg[index] == "--native-tools" then
-		options.native_tool_calling = true
-		index = index + 1
-	elseif arg[index] == "--xml-tools" then
-		options.native_tool_calling = false
-		index = index + 1
 	elseif arg[index] == "--transcript" then
 		options.transcript = arg[index + 1]
 		index = index + 2
 	elseif arg[index] == "--mcp-config" then
 		options.mcp_config = arg[index + 1]
 		index = index + 2
-	elseif arg[index] == "--tui" then
-		options.tui = true
-		index = index + 1
 	elseif arg[index] == "--tui-effect" then
-		options.tui = true
 		options.tui_effect = arg[index + 1]
 		if not options.tui_effect then usage() end
 		index = index + 2
+	elseif arg[index] == "--tool-stage" then
+		options.tool_stage = true
+		index = index + 1
+	elseif arg[index] == "--no-tool-stage" then
+		options.tool_stage = false
+		index = index + 1
 	elseif arg[index] == "--help" then
 		usage()
 	else
@@ -114,6 +110,7 @@ end
 -- with /tmp/lca.log kept as a stable pointer to the latest session log.
 local debug_log = options.transcript or os.getenv("LCA_LOG") or default_transcript_path()
 core.set_transcript(debug_log)
+options.transcript_path = debug_log
 core.debug_log(
 	"[session] pid=%d cwd=%s model=%s transcript=%s argv=%s",
 	uv.getpid(),
@@ -126,17 +123,13 @@ core.debug_log(
 -- Initialize MCP servers
 local mcp_tools = registry.init_mcp(options.mcp_config)
 options.mcp_tool_count = #mcp_tools
-if #mcp_tools > 0 and not options.tui then
-	io.write(string.format("\27[2m  %d MCP tools from %s\27[0m\n",
-		#mcp_tools, table.concat(require("agent.mcp").connected_servers(), ", ")))
-end
-
-local frontend = options.tui and require("agent.tui") or require("agent.repl")
+local frontend = require("agent.tui")
 local ok, result, frontend_err = pcall(function()
 	return frontend.run(options)
 end)
+core.set_transcript(nil)
 
-if not ok or (options.tui and result == nil) then
+if not ok or result == nil then
 	if frontend.cleanup_terminal then pcall(function() frontend.cleanup_terminal() end) end
 	io.stderr:write("error: " .. tostring(ok and frontend_err or result) .. "\n")
 	os.exit(1)

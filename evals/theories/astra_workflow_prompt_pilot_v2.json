@@ -1,0 +1,60 @@
+{
+  "id": "astra_workflow_prompt_pilot_v2",
+  "title": "Astra procedural prompt deletion ablation (explicit task scope)",
+  "hypothesis": "Astra completes coding tasks at equal correctness and lower cost when nine accumulated discovery, rereading and round-trip prescriptions are removed from both prompt surfaces.",
+  "falsified_if": "Workflow-lite loses correctness, has no repeatable efficiency gain, or increases recovery failures. A passing tiny smoke is not supporting evidence.",
+  "source_ids": [],
+  "local_evidence": "User-approved back-to-basics experiment, informed by https://developers.openai.com/api/docs/guides/latest-model#prompting-best-practices. Exact deletions in evals/prompt_ablation.json. Existing lean/minimal profiles leave registry workflow rules intact and are not used. This tests a deletion bundle, not token length alone or individual rule effects. V1 was stopped for a task/grader mismatch: a new test file was not forbidden by the task but failed the grader. V2 freezes explicit file-scope suffixes identically for both arms, with request-level checks. Original scenario files, graders and prior raw evidence are unchanged.",
+  "control_variant": "current",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "ambiguous_bug_investigation",
+    "multifile_order_cancellation",
+    "failure_recovery",
+    "existing_codebase_edit",
+    "context_boundary_edit",
+    "stable_verification_regression",
+    "environment_recovery",
+    "repeated_text_edit"
+  ],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "workflow-lite",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "workflow-lite"
+    }
+  ],
+  "deterministic_outcomes": [
+    "original external hard gates and artifact behavioral gates reported separately",
+    "exact request prompt audit on every call",
+    "scope and recovery failures",
+    "grader positive/negative contract checks"
+  ],
+  "efficiency_outcomes": [
+    "all-attempt standard-equivalent API cost",
+    "elapsed milliseconds",
+    "tool and LLM calls",
+    "failed edits",
+    "identical-read review candidates, not assumed wasted reads",
+    "actual baseline tool counts and multi-file coverage"
+  ],
+  "decision_rule": "Freeze seed 910; four independent smoke cells (simple_prompt and ambiguous_bug_investigation, both arms), then 54 pilot cells (nine scenarios, three repetitions, two arms). Maximum 58 launches, $12 between-run estimated cost threshold (may overshoot one run), 2400 active worker seconds. No automatic retries. Smoke task failures and all activation/protocol failures halt. All source/fixture/grader hashes pinned by campaign. Primary population is eight coding scenarios, excluding arithmetic and smoke. Continue to held-out validation only if workflow-lite has at least as many passes on every coding scenario, at least 15% lower aggregate coding cost, lower median cost on at least five of eight coding scenarios, and aggregate elapsed time no more than 10% worse. Otherwise do not change defaults: correctness regression rejects this bundle; unchanged/mixed efficiency is inconclusive. No early success claims or secondary-metric substitution. Preserve tool schemas, exact tagged-edit contract, current planner, verification sufficiency, project instructions, permissions, model/reasoning, normal retained history and engine settings. No external model judge. Cases include multi-file work, an injected regression, environmental recovery, a corrected conversation and smaller edit controls; existing archived baselines are mostly under 20 tools, so this is NOT the requested genuinely long 20+ tool cohort. A winning pilot still requires 20–50 held-out long tasks. Do not promote on three repeats or infer state-only/memory benefits. This is a fresh campaign after the v1 validity stop; do not pool v1 runs. Task suffixes are part of the fixed task contract, not a treatment.",
+  "task_suffixes": {
+    "ambiguous_bug_investigation": "\n\nFile scope: change only checkout/cache.py and checkout/service.py. Do not add files.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files.",
+    "failure_recovery": "\n\nFile scope: change only shipping/quotes.py. Do not add files.",
+    "existing_codebase_edit": "\n\nFile scope: change only checkout/models.py, checkout/config.py and checkout/pricing.py. Do not add files.",
+    "context_boundary_edit": "\n\nFile scope: change only pipelines/rules.py. Do not add files.",
+    "stable_verification_regression": "\n\nFile scope: change only billing/invoice.py. Do not add files.",
+    "environment_recovery": "\n\nFile scope: change only ledger/summary.py. Do not add files.",
+    "repeated_text_edit": "\n\nFile scope: change only pipelines/rules.py. Do not add files."
+  }
+}

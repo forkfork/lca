@@ -1,8 +1,7 @@
 # lca - lua coding agent
 
-General-purpose coding agent written in Lua. Yolo mode only; tag-based edit
-tooling is more token-efficient than Codex or Claude Code, and background jobs
-are built in.
+Personal coding agent written in Lua 5.5. It has one interactive TUI, Codex
+GPT-6 Astra native tools, tagged edits, and built-in background jobs.
 
 ## Install
 
@@ -18,135 +17,83 @@ eval "$(luarocks --local --lua-dir="$LUA_PREFIX" path --bin)"
 Linux:
 
 ```bash
-sudo apt install lua5.4 liblua5.4-dev luarocks build-essential curl openssl libcrypt-dev
-luarocks --lua-version=5.4 --local install lca
-eval "$(luarocks --lua-version=5.4 --local path --bin)"
+sudo apt install lua5.5 liblua5.5-dev luarocks build-essential curl openssl libcrypt-dev
+luarocks --lua-version=5.5 --local install lca
+eval "$(luarocks --lua-version=5.5 --local path --bin)"
 ```
 
 From a checkout:
 
 ```bash
 make local
-eval "$(luarocks --lua-version=5.4 --local path --bin)"
+eval "$(luarocks --lua-version=5.5 --local path --bin)"
 ```
 
 ## Auth
 
-Most users should choose Bedrock/AWS on first run, using their normal AWS
-credentials. Codex/OpenAI OAuth and DeepSeek API keys are also supported.
+LCA uses Codex/OpenAI OAuth only.
 
 ```bash
-lca login bedrock
-lca login openai
-lca login deepseek
+lca login
 ```
 
-Repeated `lca login <provider>` calls update the active provider and preserve
-credentials for the other providers in `~/.lca-credentials.json`.
+Credentials are stored in `~/.lca-credentials.json`.
 
 ## Usage
 
 ```bash
 lca
 lca run "explain this project"
-lca run "add the feature" --model gpt-5.5 --reasoning low
-lca run "add the feature" --model gpt-5.6-sol
+lca run "add the feature" --reasoning low
 lca repl
-lca --tui
-lca repl --tui
-lca --tui --tui-effect mycelium
-lca --tui --tui-effect auto
 ```
 
-`--tui` enables an opt-in compact living-current strip: four animated activity
-rows between a faint scrollback boundary and the input dock, while completed
-user and assistant messages remain in normal terminal scrollback. It does not
-use the alternate screen. Without that flag, the existing readline interface
-and terminal output are unchanged.
-Real filenames become bouncing, morphing objects with small wakes as tools read
-and change them. Current plan-task names drift through more slowly, while
-commands and verification remain compact signals in the same current. The TUI
-requires a POSIX terminal and the sibling `lcatui` Lua rock.
+Use LCA to explore a codebase, make changes, and verify the results. Native tools
+support file inspection, tagged edits, shell commands, and background jobs. For
+substantial tasks, progress is tied to actual inspection, changes, and verification
+rather than a guessed completion percentage.
 
-The animation engine has six interchangeable treatments: `drift` (the default
-sparse particle current), `mycelium` (branching tool roots and travelling
-signals), `cytoplasm` (merging membranes around concurrent work), `ink`
-(flowing capillary ribbons), `filament` (a coherent spring-like current), and
-`contours` (edge arcs and vortices). Choose one at launch with
-`--tui-effect NAME`, set `LCA_TUI_EFFECT`, or switch live with `/effect NAME`.
-Entering `/effect` by itself shows the current choice. Files, tasks, tool
-identity, and failure/success state are preserved when the visual treatment is
-changed.
+The interactive `lca` and `lca repl` commands keep completed messages in normal
+terminal scrollback, with a compact activity area above the input. Tool activity,
+failures, and verification results stay visible while the agent works. The TUI
+requires a POSIX terminal and the sibling `lcatui` Lua rock; it does not use the
+alternate screen.
 
-`/effect next` moves through the curated order. `/effect auto` enables rotation
-at safe user-turn boundaries; it never changes treatment merely because a
-frame elapsed, while a tool batch is running, or during an unresolved failure.
-`/effect manual` disables rotation. `--tui-effect auto` starts with `drift` and
-uses the same turn-boundary rotation. Treatments dissolve into one another
-without resetting the semantic actors or their state.
+Interactive startup is deliberately fresh: prior transcript context is not
+loaded until you enter `/resume`. The latest session for the current project
+remains in `.lca-session.json`; when a new session replaces it, LCA first
+archives the previous one under `.lca-sessions/`.
 
-While the model is composing hidden tool protocol, the TUI reports that work
-separately from execution—for example, `model drafting edit · src/main.js ·
-4.2k chars`. A tool is only shown as active after its real runtime start event.
-The default drift treatment eases between sparse listening dust, a flowing
-model-composition ribbon, local tool eddies, failure turbulence, and a resolving
-verification pulse before settling back to dust.
-After a completed turn, the resting summary shows end-to-end work time and one
-rounded final model-context number, such as `✓ 48s · 56k tokens`, instead of a
-raw process result such as `exit 0`.
-When applicable, the same harvest includes the number of changed files and a
-real verification classification, for example
-`✓ 4 files · tests passed · 48s · 56k tokens`.
-When the final provider response includes prompt-cache telemetry, the same
-summary appends its rounded cache share, for example
-`✓ 48s · 56k tokens · 96% cached`. A reported zero remains visible, while
-missing telemetry is omitted; usage from an earlier model round is never
-substituted.
-Submitting a request sends a short text ripple through the current. When recent
-file changes are followed by verification, small pulses travel from those file
-objects into the verification tool. The completed time/token summary first
-crystallizes from scattered characters, then remains readable until the next
-request.
-As crystallization completes, one short mint/gold/lilac spark ring pops around
-the time/token summary and decays into dots. It only fires once on successful
-completion; failures and cancellations do not celebrate.
-The bar also conducts busy batches: the highest-value event in each lane keeps
-its readable label while older activity falls back to faint trail particles.
-Reads skim, searches scatter, edits and writes pull toward assembly, builds
-pulse, and plan steps behave like waypoints.
-It retains a compact living working set for the current TUI session. Reads
-carry a signal from a stable file organism into the model, edits carry one back
-out, and successful verification returns proof to every changed file. Dormant,
-read, changed, failed, and verified files remain distinguishable across turns;
-a failed mutation keeps its scar through source refresh and only heals after a
-real successful retry.
-When the input dock is empty, `Tab` cycles a focus lens over the six most recent
-files. The status row then exposes the real operation, filename, state, compact
-result, and age; cycling past the final file or beginning to type dismisses the
-lens. During planned work, compact `● ◉ ○` spores show completed, current, and
-pending steps without duplicating the current task label.
-The upper boundary is also a quiet semantic membrane. During work it carries
-one current plan task or recovery state, then becomes an unlabelled line while
-listening. Generic phases such as `model waiting` remain in the current rather
-than being duplicated in the boundary. Failed file mutations leave a red knot
-with a compact real reason;
-actual read and retry events move it through refresh and retry states, and only
-a successful mutation dissolves it into mint. An unresolved file failure never
-receives the successful-completion spark.
-When a plan advances, the previous intent sheds into faint particles while the
-new task assembles from its centre in the boundary. Recovery messages remain
-immediate rather than molting. Typing in the input dock smoothly lowers visual
-motion to a calm metabolic idle and releasing or submitting the text wakes the
-current again; tool timing, event expiry, and execution are never slowed.
+After each turn, the summary reports work time and model-context usage, plus
+changed files, verification results, and prompt-cache share when available.
+Use `/river` to inspect recorded tool activity, failures, concurrency, and repeated
+arguments. Raw run logs are available under `/tmp/lca/logs`; no automatic reviewer
+or research model runs.
 
-GPT-5.6 Sol uses native Responses function calling by default. This keeps LCA's
-Lua tool execution and tagged-edit safety while avoiding XML-emulated tool
-calls. Use `--xml-tools` to compare or temporarily fall back; `--native-tools`
-can opt another Codex model into the same adapter.
+Each readable `lca-*.log` has a matching `.log.jsonl` replay log. It records full
+turn context, model requests/responses, tool arguments/results (including successful
+inspections), and transport request bodies and response chunks before parsing.
+Records include UTC timestamps, sequence numbers, turn IDs, and model/tool call IDs.
+Transport chunks use `bytes_hex` so even split UTF-8 and malformed streams can be
+reconstructed exactly. Authentication headers are excluded; conversation and file
+contents are retained. Logging write/flush failures are reported as errors.
 
-Useful REPL commands: `/help`, `/status`, `/model`, `/reasoning`, `/clear`,
-`/exit`. In TUI mode, `/effect`, `/effect NAME`, `/effect next`, and
-`/effect auto` inspect, change, or safely cycle the animation treatment.
+GPT-6 Astra with native Responses function calling is the default runtime.
+Use `--model gpt-5.6-sol` (also Terra or Luna) for an explicit rollback or
+comparison. Astra accepts reasoning `low`, `medium`, `high`, `xhigh`, and `max`;
+legacy `none`/`minimal` settings map to `low`. Resuming restores the conversation
+but keeps the launch model and credentials. Read-only delegate models remain
+independently pinned. The eval CLI retains its historical Sol default: pass
+`--model gpt-6-astra` explicitly for new Astra runs.
+
+Useful TUI commands: `/help`, `/status`, `/reasoning`, `/resume`, `/clear`,
+`/exit`. Use `/tools on` or `/tools off` to show or hide the detailed tool board.
+
+Animation adds visual polish: startup picks a style at random, then usually keeps
+it, with a 20% chance of changing at each safe turn boundary after the first.
+All styles are equally likely. Pin a launch style with `--tui-effect NAME` or
+`LCA_TUI_EFFECT`; `/effect NAME` changes it live, `/effect manual` stops rotation,
+and `/effect auto` restores occasional changes.
 
 Codex/OpenAI uses the Responses WebSocket transport by default, with HTTPS/SSE
 fallback on transport failure. To force the old HTTPS/SSE path:
@@ -157,11 +104,14 @@ LCA_CODEX_WEBSOCKET=0 lca
 
 ## Local Development
 
+The local development install targets Lua 5.5 by default. Override
+`LUA_VERSION` only when deliberately testing another supported runtime.
+
 Run directly from the checkout:
 
 ```bash
-lua bin/agent.lua "Explain what files this project should inspect first." --model gpt-5.5
-lua bin/repl.lua --model gpt-5.5
+lua bin/agent.lua "Explain what files this project should inspect first."
+lua bin/repl.lua
 ```
 
 Useful development targets:

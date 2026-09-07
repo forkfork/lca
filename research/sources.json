@@ -285,6 +285,30 @@
       "retrieved_at": "2026-08-22",
       "title": "OpenAI Responses API create response and latest-model guidance",
       "url": "https://developers.openai.com/api/reference/cli/resources/responses/methods/create"
+    },
+    {
+      "id": "harness-token-costs-2026-08",
+      "role": "discovery-feed",
+      "published_at": "2026-08-27",
+      "retrieved_at": "2026-09-03",
+      "title": "Aider, Claude Code, and OpenClaw ran an identical model. Token use varied 70-fold.",
+      "url": "https://thenewstack.io/agent-harness-token-costs/"
+    },
+    {
+      "id": "harnessdev-2609.01437",
+      "role": "mechanism-check",
+      "published_at": "2026-09-01",
+      "retrieved_at": "2026-09-03",
+      "title": "HarnessDev: Can LLMs Create and Evolve Their Own Agent Harness?",
+      "url": "https://arxiv.org/abs/2609.01437"
+    },
+    {
+      "id": "harnessevolve-2609.00829",
+      "role": "mechanism-check",
+      "published_at": "2026-09-01",
+      "retrieved_at": "2026-09-03",
+      "title": "HarnessEvolve: Learning from Reference Trajectories for Reliable Agent Self-Evolution",
+      "url": "https://arxiv.org/abs/2609.00829"
     }
   ]
 }

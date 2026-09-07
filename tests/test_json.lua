@@ -75,6 +75,34 @@ run_test("provider-style body with colored output decodes", function()
 	assert_eq(decoded.content, output)
 end)
 
+run_test("serializers replace invalid UTF-8 and preserve valid Unicode", function()
+	local valid = "ASCII é 中 🌈" .. utf8.char(0x10ffff)
+	local bad = string.char(0x80, 0xff, 0xc0, 0xaf, 0xed, 0xa0, 0x80, 0xf4, 0x90, 0x80, 0x80, 0xe2, 0x82)
+	local value = valid .. bad .. '"\\\n'
+	local expected = valid .. string.rep("�", #bad) .. '"\\\n'
+	assert_eq(json.decode(json.string(value)), expected)
+	local source = { nested = { output = value } }
+	local encoded = json.encode(source)
+	assert(utf8.len(encoded), "encoded JSON must be valid UTF-8")
+	assert_eq(json.decode(encoded).nested.output, expected)
+	assert_eq(source.nested.output, value, "serialization must not change raw tool data")
+	assert_eq(json.decode(json.encode(valid)), valid)
+end)
+
+run_test("captured MIDI tool output produces valid Codex request JSON", function()
+	local codex = require("agent.providers.codex")
+	-- Prefix from the failing 20260906-222146 request (raw MIDI on stdout).
+	local midi = "MThd" .. string.char(0,0,0,6,0,1,0,3,1,0x80) .. "MTrk" .. string.char(0,0,0,0x53,0,0xff,3)
+	local body = codex._request_body({tool_scope="none", messages={
+		{role="assistant",provider_items={{type="function_call",name="run",call_id="midi",arguments="{}"}}},
+		{role="user",native_call_id="midi",text=midi},
+	}})
+	assert(utf8.len(body), "request containing binary tool output must be valid UTF-8")
+	local decoded = json.decode(body)
+	assert_eq(decoded.input[2].output, midi:gsub("[\128\255]", "�"))
+	assert_eq(decoded.input[1].call_id, decoded.input[2].call_id)
+end)
+
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")
 io.write(string.format("  %s passed, %s failed\n\n",
 	green(tostring(passed)), failed > 0 and red(tostring(failed)) or tostring(failed)))

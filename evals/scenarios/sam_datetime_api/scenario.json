@@ -1,0 +1,8 @@
+{
+  "id": "sam_datetime_api",
+  "title": "Build a small AWS SAM datetime API",
+  "prompt": "Implement the datetime API described in README.md. Complete the project and run its local tests.",
+  "timeout_seconds": 480,
+  "grader": "grade.py",
+  "judge": false
+}

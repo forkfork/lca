@@ -1,0 +1,50 @@
+{
+  "id": "astra_planning_clarity_screen",
+  "study_kind": "screen",
+  "title": "Screen: clarify when to skip or batch formal planning",
+  "hypothesis": "One planning clarification reduces standalone plan model rounds on bounded existing-code changes without losing correctness or discovery needed by layered work.",
+  "falsified_if": "Any artifact, scope, verification, or protocol check fails; unchanged planning behavior is nonactivation and mixed efficiency evidence parks the candidate.",
+  "source_ids": [],
+  "local_evidence": "In the SAM screen LCA generated a standalone update_plan response taking 14.612 seconds before a response containing all four mutations. The user authorized a six-run test on existing-code fixtures. Both arms include the current realistic-test guidance; no runtime-selection or tool changes are mixed in.",
+  "control_variant": "current",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "existing_codebase_edit",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "current",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "all"
+    },
+    {
+      "id": "planning-clarity",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "planning-clarity",
+      "tool_scope": "all"
+    }
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "existing_codebase_edit": "\n\nFile scope: change only checkout/models.py, checkout/config.py and checkout/pricing.py. Do not add files. This task is self-contained; do not browse or use external network services.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": [
+    "public and hidden artifact correctness",
+    "scope and verification evidence",
+    "required architecture inspection",
+    "exact additional planning instruction with baseline/project instructions and tools preserved"
+  ],
+  "efficiency_outcomes": [
+    "standalone plan model rounds: a response containing update_plan and no other tool calls",
+    "total coding model rounds",
+    "paired coding elapsed time",
+    "output tokens and all-attempt estimated cost"
+  ],
+  "decision_rule": "Seed 920. Six serial screen-only runs, one per arm on simple_prompt and two coding tasks; simple control first, randomized coding-task and within-pair arm order. Maximum six launches, $2.50 between-run standard-equivalent cost threshold (one-run overshoot possible), 600 active worker seconds. Stop after a task or protocol/activation failure and preserve all usage. Advance only if all six pass, treatment has at least one fewer aggregate standalone coding plan round, aggregate coding latency is at least 10% lower, neither coding task is more than 10% slower, and aggregate coding output tokens do not rise more than 10%. Otherwise park and describe nonactivation/tradeoffs. No standalone plans in either arm makes this cohort uninformative about that mechanism, regardless of timing. A positive screen justifies fresh replication only, not production promotion. Original grades remain unchanged; inspect plan batches and raw provider instructions after the run. No defaults change."
+}

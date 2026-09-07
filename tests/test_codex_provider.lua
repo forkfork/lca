@@ -35,150 +35,6 @@ end
 
 io.write("\n" .. dim("═══ Codex Provider Tests ═══") .. "\n\n")
 
-test("canonical tool text strips stray close tag and prose", function()
-	local raw = table.concat({
-		'<tool_call name="read">',
-		'{"path":"fake_tmux.py","offset":1,"limit":260}',
-		"</tool_call>",
-		"</tool_call>I hit a malformed tool-call message, so nothing ran.",
-	}, "\n")
-	local expected = table.concat({
-		'<tool_call name="read">',
-		'{"path":"fake_tmux.py","offset":1,"limit":260}',
-		"</tool_call>",
-	}, "\n")
-	assert_eq(codex._canonical_tool_text(raw), expected)
-end)
-
-test("canonical tool text keeps multiple complete tool calls", function()
-	local raw = table.concat({
-		'<tool_call name="read">',
-		'{"path":"fake_tmux.py","offset":1,"limit":260}',
-		"</tool_call>",
-		'<tool_call name="read">',
-		'{"path":"README.md","offset":1,"limit":170}',
-		"</tool_call>",
-		"Trailing speculation should not enter history.",
-	}, "\n")
-	local canonical = codex._canonical_tool_text(raw)
-	if canonical:find("Trailing speculation", 1, true) then
-		error("canonical tool text retained trailing prose: " .. canonical)
-	end
-	assert(canonical:find('"path":"fake_tmux.py"', 1, true), "missing first call")
-	assert(canonical:find('"path":"README.md"', 1, true), "missing second call")
-end)
-
-test("canonical debug summary records raw and canonical tool signatures", function()
-	local raw = table.concat({
-		'<tool_call name="ls">',
-		'{"path":"/tmp/project"}',
-		"</tool_call>",
-		'<tool_call name="ls">',
-		'{"path":"/tmp/project"}',
-		"</tool_call>",
-		"Trailing prose",
-	}, "\n")
-	local canonical = codex._canonical_tool_text(raw)
-	local summary = codex._canonical_tool_debug_summary(raw, canonical)
-	if not summary:find('raw_calls="2 calls: ls%(/tmp/project%), ls%(/tmp/project%)"') then
-		error("raw duplicate signatures missing from summary: " .. summary)
-	end
-	if not summary:find('canonical_calls="2 calls: ls%(/tmp/project%), ls%(/tmp/project%)"') then
-		error("canonical duplicate signatures missing from summary: " .. summary)
-	end
-	if not summary:find('raw_sample="', 1, true) or not summary:find('canonical_sample="', 1, true) then
-		error("summary should include bounded raw and canonical samples: " .. summary)
-	end
-end)
-
-test("partial salvage keeps only fully closed tool calls", function()
-	local partial = table.concat({
-		'<tool_call name="ls">',
-		'{"path":"."}',
-		"</tool_call>",
-		'<tool_call name="write">',
-		'{"path":"agent_flow_tui.py"}',
-		"#!/usr/bin/env python3",
-		"print('still streaming')",
-	}, "\n")
-	local salvaged = codex._complete_tool_calls_prefix(partial)
-	assert(salvaged:find('<tool_call name="ls">', 1, true), "missing complete ls call")
-	if salvaged:find("agent_flow_tui.py", 1, true) then
-		error("salvage kept incomplete write call: " .. salvaged)
-	end
-	if salvaged:find("</tool_call>%s*$") == nil then
-		error("salvage should end at a real close tag: " .. salvaged)
-	end
-end)
-
-test("partial salvage does not synthesize close tags", function()
-	local partial = table.concat({
-		'<tool_call name="write">',
-		'{"path":"agent_flow_tui.py"}',
-		"print('unterminated')",
-	}, "\n")
-	local salvaged = codex._complete_tool_calls_prefix(partial)
-	assert_eq(salvaged, "")
-end)
-
-test("partial salvage does not truncate raw content at literal close text", function()
-	local partial = table.concat({
-		'<tool_call name="write">',
-		'{"path":"agent_flow_tui.py"}',
-		'print("</tool_call>")',
-		"print('after literal close')",
-	}, "\n")
-	local salvaged = codex._complete_tool_calls_prefix(partial)
-	assert_eq(salvaged, "")
-end)
-
-test("partial salvage rejects literal tool markup in raw content", function()
-	local partial = table.concat({
-		'<tool_call name="write">',
-		'{"path":"agent_flow_tui.py"}',
-		"print('bad')",
-		'<tool_call name="run">',
-		'{"command":"echo nested"}',
-		"</tool_call>",
-		"</tool_call>",
-	}, "\n")
-	local salvaged = codex._salvage_partial_tool_response({ partial }, { kind = "timeout", phase = "chunk_size" })
-	assert_eq(salvaged, nil)
-end)
-
-test("post-tool tail classifier cuts prose after extra close", function()
-	assert_eq(codex._post_tool_tail_kind(" \n"), "whitespace")
-	assert_eq(codex._post_tool_tail_kind("</tool_call>\n"), "extra_close")
-	assert_eq(codex._post_tool_tail_kind("</tool_call>I hit a malformed message"), "extra_close_then_prose")
-	assert_eq(codex._post_tool_tail_kind("I will explain now"), "prose")
-	assert_eq(codex._post_tool_tail_kind("<tool_call"), "partial_next_tool")
-	assert_eq(codex._post_tool_tail_kind('<tool_call name="read">'), "next_tool")
-end)
-
-test("early cutoff tolerates small post-tool prose to preserve usage", function()
-	assert_eq(codex._should_cut_after_tool("prose", 4), false)
-	assert_eq(codex._should_cut_after_tool("extra_close_then_prose", 4), false)
-	assert_eq(codex._should_cut_after_tool("next_tool", 1000), false)
-	assert_eq(codex._should_cut_after_tool("prose", 801), true)
-end)
-
-test("stream cap counts only unique complete valid tool calls", function()
-	local text = table.concat({
-		'<tool_call name="ls">', '{"path":"."}', '</tool_call>',
-		'<tool_call name="ls">', '{"path":"."}', '</tool_call>',
-		'<tool_call name="not_a_tool">', '{}', '</tool_call>',
-		'<tool_call name="read">', '{"path":"README.md"}', '</tool_call>',
-		'<tool_call name="run">', '{"command":"true"}', '</tool_call>',
-		'<tool_call name="write">', '{"path":"a.txt"}', 'one', '</tool_call>',
-		'<tool_call name="write">', '{"path":"a.txt"}', 'two', '</tool_call>',
-	}, "\n")
-	assert_eq(codex._unique_complete_valid_tool_call_count(text), 5)
-	local stats = codex._complete_valid_tool_call_stats(text)
-	assert_eq(stats.total, 6)
-	assert_eq(stats.unique, 5)
-	assert_eq(stats.duplicates, 1)
-end)
-
 test("request body uses session-specific prompt cache key", function()
 	local body = codex._request_body({
 		session_id = "lca-session-123",
@@ -212,6 +68,53 @@ test("native request body declares function tools", function()
 	assert(by_type.web_search, "missing hosted web search tool")
 end)
 
+test("request body can isolate a background reviewer to hosted search", function()
+	local json = require("agent.util.json")
+	local web_only = json.decode(codex._request_body({
+		tool_scope = "web_only",
+		messages = { { role = "user", text = "research this mechanism" } },
+	}))
+	assert_eq(#web_only.tools, 1)
+	assert_eq(web_only.tools[1].type, "web_search")
+	assert_eq(web_only.tool_choice, "auto")
+	local no_tools = json.decode(codex._request_body({
+		tool_scope = "none",
+		messages = { { role = "user", text = "review this packet" } },
+	}))
+	assert_eq(no_tools.tools, nil)
+	assert_eq(no_tools.tool_choice, nil)
+end)
+
+test("local-only removes exactly hosted search and preserves every native tool", function()
+	local json = require("agent.util.json")
+	local request = { model = "gpt-6-astra", messages = { { role = "user", text = "local task" } } }
+	local normal = json.decode(codex._request_body(request))
+	request.tool_scope = "local_only"
+	local offline = json.decode(codex._request_body(request))
+	assert_eq(normal.tools[#normal.tools].type, "web_search")
+	table.remove(normal.tools)
+	assert_eq(json.encode(offline), json.encode(normal), "unexpected payload difference")
+	for _, tool in ipairs(offline.tools) do assert_eq(tool.type, "function") end
+end)
+
+test("retired tools and scheduler fields are absent from native schemas", function()
+	local registry = require("agent.tool_registry")
+	assert_eq(registry.get("delegate_readonly"), nil)
+	assert_eq(registry.is_valid("delegate_readonly"), false)
+	for _, tool in ipairs(registry.native_tools()) do
+		assert(tool.name ~= "delegate_readonly")
+		assert_eq(tool.parameters.properties.node_id, nil)
+		assert_eq(tool.parameters.properties.depends_on, nil)
+	end
+	assert_eq(registry.execute("delegate_readonly", {}, {}).is_error, true)
+end)
+
+test("request body defaults to GPT-6 Astra", function()
+	local json = require("agent.util.json")
+	local body = json.decode(codex._request_body({ messages = { { role = "user", text = "hello" } } }))
+	assert_eq(body.model, "gpt-6-astra")
+end)
+
 test("native input replays calls and correlated outputs", function()
 	local json = require("agent.util.json")
 	local input = json.decode(codex._input_json({
@@ -227,6 +130,43 @@ test("native input replays calls and correlated outputs", function()
 	assert_eq(input[4].type, "function_call_output")
 	assert_eq(input[4].call_id, "call_1")
 	assert_eq(input[4].output, "file contents")
+end)
+
+test("native input omits function calls whose output was never recorded", function()
+	local json = require("agent.util.json")
+	local input = json.decode(codex._input_json({
+		{ role = "assistant", text = "", provider_items = {
+			{ type = "reasoning", id = "rs_1", encrypted_content = "opaque" },
+			{ type = "function_call", id = "fc_ok", call_id = "call_ok", name = "read", arguments = '{"path":"README.md"}' },
+			{ type = "function_call", id = "fc_orphan", call_id = "call_orphan", name = "read", arguments = '{"path":"missing.md"}' },
+		} },
+		{ role = "user", text = "file contents", tool_name = "read", native_call_id = "call_ok" },
+	}, true))
+	local calls = {}
+	for _, item in ipairs(input) do
+		if item.type == "function_call" then calls[#calls + 1] = item.call_id end
+	end
+	assert_eq(#calls, 1)
+	assert_eq(calls[1], "call_ok")
+end)
+
+test("native input drops orphan outputs and preserves exactly paired history", function()
+	local json = require("agent.util.json")
+	local input = json.decode(codex._input_json({
+		{ role = "assistant", text = "", provider_items = {
+			{ type = "function_call", id = "fc_ok", call_id = "call_ok", name = "read", arguments = '{"path":"README.md"}' },
+		} },
+		{ role = "user", text = "ok", tool_name = "read", native_call_id = "call_ok" },
+		{ role = "user", text = "orphan", tool_name = "read", native_call_id = "call_missing" },
+	}, true))
+	local calls, outputs = {}, {}
+	for _, item in ipairs(input) do
+		if item.type == "function_call" then calls[item.call_id] = true end
+		if item.type == "function_call_output" then outputs[item.call_id] = true end
+	end
+	assert_eq(calls.call_ok, true)
+	assert_eq(outputs.call_ok, true)
+	assert_eq(outputs.call_missing, nil)
 end)
 
 test("native output items become executable calls", function()
@@ -254,6 +194,67 @@ test("native reasoning replay preserves empty array fields", function()
 	end
 end)
 
+test("native input repairs legacy object-shaped empty response arrays", function()
+	local json = require("agent.util.json")
+	local reasoning = json.decode('{"type":"reasoning","id":"rs_legacy","summary":{},"content":{}}')
+	local message = json.decode('{"type":"message","id":"msg_legacy","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":{},"logprobs":{}}]}')
+	local encoded = codex._input_json({
+		{ role = "assistant", text = "", provider_items = { reasoning, message } },
+	}, true)
+	if not encoded:find('"summary":%[%]') then
+		error("legacy reasoning summary was not repaired as an array: " .. encoded)
+	end
+	if not encoded:find('"content":%[%]') then
+		error("legacy reasoning content was not repaired as an array: " .. encoded)
+	end
+	if not encoded:find('"annotations":%[%]') then
+		error("legacy output annotations were not repaired as an array: " .. encoded)
+	end
+	if not encoded:find('"logprobs":%[%]') then
+		error("legacy output logprobs were not repaired as an array: " .. encoded)
+	end
+end)
+
+test("native web citations become usable markdown links", function()
+	local text = "AWS documents this. citeturn0search0turn0search1"
+	local items = {
+		{
+			type = "message",
+			content = {
+				{
+					type = "output_text",
+					text = text,
+					annotations = {
+						{ type = "url_citation", start_index = 20, end_index = 55, title = "AWS documentation", url = "https://docs.aws.amazon.com/example" },
+						{ type = "url_citation", start_index = 20, end_index = 55, title = "AWS sample", url = "https://github.com/aws-samples/example" },
+					},
+				},
+			},
+		},
+	}
+	local rendered = codex._materialize_citations(text, items)
+	if rendered:find("cite", 1, true) then error("raw citation marker leaked: " .. rendered) end
+	if not rendered:find("[AWS documentation](<https://docs.aws.amazon.com/example>)", 1, true) then error("missing first citation: " .. rendered) end
+	if not rendered:find("[AWS sample](<https://github.com/aws-samples/example>)", 1, true) then error("missing grouped citation: " .. rendered) end
+end)
+
+test("citation annotations without markers receive a compact source footer", function()
+	local rendered = codex._materialize_citations("Grounded answer.", {
+		{ type = "message", content = { { type = "output_text", text = "Grounded answer.", annotations = {
+			{ type = "url_citation", start_index = 0, end_index = 8, title = "Primary source", url = "https://example.com/source" },
+		} } } },
+	})
+	if not rendered:find("Sources: [Primary source](<https://example.com/source>)", 1, true) then error("missing source footer: " .. rendered) end
+end)
+
+test("provider empty-array sentinels do not break citation rendering", function()
+	local cjson = require("cjson")
+	local rendered = codex._materialize_citations("Plain answer.", {
+		{ type = "message", content = { { type = "output_text", text = "Plain answer.", annotations = cjson.empty_array } } },
+	})
+	assert_eq(rendered, "Plain answer.")
+end)
+
 test("codex timeout defaults allow long active streams", function()
 	local deadlines = codex._default_deadlines({})
 	assert_eq(deadlines.first_byte, 25)
@@ -271,11 +272,6 @@ end)
 test("websocket response deadline preserves a stricter caller override", function()
 	local deadlines = codex._websocket_deadlines({ deadlines = { total = 45 } })
 	assert_eq(deadlines.total, 45)
-end)
-
-test("codex defaults streaming to the core execution batch size", function()
-	assert_eq(codex._default_stream_tool_call_cap, 10)
-	assert_eq(codex._default_stream_duplicate_call_cap, 3)
 end)
 
 test("codex first byte timeout stays long for large context", function()
@@ -373,6 +369,25 @@ test("usage parser accepts prompt token details cache shape", function()
 	assert_eq(usage.cache_write_tokens, 0)
 	assert_eq(usage.output_tokens, 90)
 	assert_eq(usage.total_tokens, 1290)
+end)
+
+test("hosted web search events report model activity", function()
+	local activities = {}
+	local stats = codex._new_sse_stats()
+	local event_type = codex._process_event_payload(
+		[[{"type":"response.web_search_call.searching","item_id":"ws_123","output_index":2}]],
+		function() end,
+		nil,
+		stats,
+		nil,
+		function(activity) activities[#activities + 1] = activity end
+	)
+	assert_eq(event_type, "response.web_search_call.searching")
+	assert_eq(#activities, 1)
+	assert_eq(activities[1].type, "web_search")
+	assert_eq(activities[1].phase, "searching")
+	assert_eq(activities[1].id, "ws_123")
+	assert_eq(activities[1].output_index, 2)
 end)
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")

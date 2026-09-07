@@ -6,23 +6,20 @@ local protocol = require("agent.tool_protocol")
 local system_prompt = require("agent.system_prompt")
 local path_util = require("agent.util.path")
 local json = require("agent.util.json")
+local uv = require("luv")
 
 local core = {}
 
 local MAX_TOOL_STEPS = 40
 local INSANITYWOLF_MAX_TOOL_STEPS = 80
+local INSANITYWOLF_MAX_CYCLES = 3
 local MAX_BATCH_SIZE = 10
-local MAX_READ_ONLY_BATCH_SIZE = 6
+local MAX_READ_ONLY_BATCH_SIZE = 7
 local SLIM_CONTEXT_TOKENS = 60000
-local MAX_CONSECUTIVE_READ_ONLY_BATCHES = 5
+local MAX_CONSECUTIVE_READ_ONLY_BATCHES = 4
+local NORMAL_TOOL_RESERVE = 12
+local NORMAL_FAILURE_RECOVERY_STEPS = 12
 local INSANITYWOLF_TOOL_RESERVE = 8
-
-local DIRECT_RETURN_TOOLS = {
-	job_output = true,
-	job_status = true,
-	job_stop = true,
-	job_wait = true,
-}
 
 local function last_user_text(session)
 	for i = #session.messages, 1, -1 do
@@ -33,22 +30,20 @@ local function last_user_text(session)
 	return ""
 end
 
-local function direct_tool_result_text(session, batch, batch_results)
-	if #batch ~= 1 then return nil end
-	local tc = batch[1]
-	local result = batch_results[1]
-	if not result or result.is_error then return nil end
-	if DIRECT_RETURN_TOOLS[tc.name] then
-		return result.content or ""
-	end
-	if tc.name == "run" then
-		local command = (tc.args and tc.args.command) or ""
-		local prompt = last_user_text(session):lower()
-		if command:match("^%s*curl%s") or prompt:match("^%s*curl%s") or prompt:find("curl it", 1, true) then
-			return result.content or ""
-		end
-	end
-	return nil
+local function research_build_request(text)
+	text = tostring(text or ""):lower()
+	local asks_for_research = text:find("search", 1, true)
+		or text:find("research", 1, true)
+		or text:find("look up", 1, true)
+		or text:find("current docs", 1, true)
+		or text:find("documentation", 1, true)
+	local asks_for_build = text:find("build", 1, true)
+		or text:find("create", 1, true)
+		or text:find("implement", 1, true)
+		or text:find("setup", 1, true)
+		or text:find("set up", 1, true)
+		or text:find("demo", 1, true)
+	return asks_for_research ~= nil and asks_for_build ~= nil
 end
 
 local READ_ONLY_TOOLS = {
@@ -102,6 +97,26 @@ local function batch_is_read_only(batch)
 	return true
 end
 
+local function batch_is_workspace_inventory(batch)
+	if #batch == 0 then return false end
+	for _, tc in ipairs(batch) do
+		if tc.name ~= "ls" and tc.name ~= "find" and tc.name ~= "grep" then
+			return false
+		end
+	end
+	return true
+end
+
+local function workspace_is_blank(cwd)
+	local scan = uv.fs_scandir(cwd or ".")
+	if not scan then return false end
+	while true do
+		local name = uv.fs_scandir_next(scan)
+		if not name then return true end
+		if name ~= ".git" and name ~= ".gitkeep" then return false end
+	end
+end
+
 local function plan_is_complete(plan)
 	if type(plan) ~= "table" or #plan == 0 then
 		return false
@@ -123,6 +138,44 @@ local function batch_updates_plan(batch)
 	return false
 end
 
+local function insanitywolf_receipt(session)
+	if type(session) ~= "table" or session.flow ~= "insanitywolf" then return "" end
+	local ledger = type(session.wolf_ledger) == "table" and session.wolf_ledger or {}
+	local current = session.wolf_status
+	if #ledger == 0 and type(current) ~= "table" then return "" end
+	local lines = { "## Insanity Wolf run" }
+	local shipped_cycles = {}
+	for _, item in ipairs(ledger) do
+		local cycle = tonumber(item.cycle) or (#shipped_cycles + 1)
+		shipped_cycles[cycle] = true
+		lines[#lines + 1] = "- ✅ **" .. tostring(cycle) .. "/3 — " .. tostring(item.title or "Unnamed mutation") .. " — shipped.**"
+		if item.payoff and item.payoff ~= "" then lines[#lines + 1] = "  Payoff: " .. tostring(item.payoff) end
+		if item.proof and item.proof ~= "" then lines[#lines + 1] = "  Proof: " .. tostring(item.proof) end
+	end
+	if type(current) == "table" and current.phase ~= "shipped" and not shipped_cycles[tonumber(current.cycle)] then
+		local plan = type(session.plan) == "table" and session.plan or {}
+		local completed, stopped_at = 0, nil
+		for _, item in ipairs(plan) do
+			if item.status == "completed" then completed = completed + 1
+			elseif not stopped_at then stopped_at = item.step end
+		end
+		local progress = #plan > 0 and (" (" .. tostring(completed) .. "/" .. tostring(#plan) .. " plan steps complete)") or ""
+		lines[#lines + 1] = "- ⚠️ **" .. tostring(tonumber(current.cycle) or (#ledger + 1)) .. "/3 — "
+			.. tostring(current.title or "Unnamed mutation") .. " — incomplete" .. progress .. ".**"
+		if current.payoff and current.payoff ~= "" then lines[#lines + 1] = "  Intended payoff: " .. tostring(current.payoff) end
+		if stopped_at and stopped_at ~= "" then lines[#lines + 1] = "  Stopped at: " .. tostring(stopped_at) end
+	end
+	return table.concat(lines, "\n")
+end
+
+local function with_insanitywolf_receipt(session, text)
+	local receipt = insanitywolf_receipt(session)
+	text = tostring(text or "")
+	if receipt == "" then return text end
+	if text == "" then return receipt end
+	return receipt .. "\n\n" .. text
+end
+
 local function get_provider(credentials_path)
 	local provider = providers.load(credentials_path)
 	return provider
@@ -130,22 +183,46 @@ end
 
 -- Transcript logging
 local transcript_file = nil
+local structured_file = nil
+local trace_sequence, trace_turn = 0, 0
+
+local function checked_log_write(file, text)
+	assert(file:write(text))
+	assert(file:flush())
+end
+
+local function trace(kind, data)
+	if not structured_file then return end
+	trace_sequence = trace_sequence + 1
+	local seconds, micros = uv.gettimeofday()
+	checked_log_write(structured_file, json.encode({
+		version = 1, sequence = trace_sequence, event = kind,
+		timestamp = os.date("!%Y-%m-%dT%H:%M:%S", seconds) .. string.format(".%06dZ", micros),
+		monotonic_ms = uv.hrtime() / 1000000, turn_id = trace_turn, data = data,
+	}) .. "\n")
+end
 
 function core.set_transcript(path)
+	local old_text, old_structured = transcript_file, structured_file
+	transcript_file, structured_file = nil, nil
+	local text_ok, text_err, structured_ok, structured_err = true, nil, true, nil
+	if old_text then text_ok, text_err = old_text:close() end
+	if old_structured then structured_ok, structured_err = old_structured:close() end
+	assert(text_ok, text_err)
+	assert(structured_ok, structured_err)
 	if path then
-		transcript_file = io.open(path, "w")
-	else
-		if transcript_file then
-			transcript_file:close()
-		end
-		transcript_file = nil
+		local file = assert(io.open(path, "w"))
+		local sidecar, err = io.open(path .. ".jsonl", "w")
+		if not sidecar then file:close(); error(err) end
+		transcript_file, structured_file = file, sidecar
+		trace_sequence, trace_turn = 0, 0
+		trace("log_open", { readable_path = path, pid = uv.getpid(), cwd = uv.cwd() })
 	end
 end
 
 local function log(fmt, ...)
 	if not transcript_file then return end
-	transcript_file:write(string.format(fmt, ...) .. "\n")
-	transcript_file:flush()
+	checked_log_write(transcript_file, string.format(fmt, ...) .. "\n")
 end
 
 function core.debug_log(fmt, ...)
@@ -156,6 +233,29 @@ local function log_separator(label)
 	log("\n" .. string.rep("=", 70))
 	log("  %s", label)
 	log(string.rep("=", 70))
+end
+
+-- Shared by the tool loop and context summarization so both are replayable.
+function core.complete_logged(provider, request, on_token, model_call_id)
+	model_call_id = model_call_id or (tostring(trace_turn) .. ":summary:" .. tostring(trace_sequence + 1))
+	trace("model_request", { model_call_id = model_call_id, session_id = request.session_id,
+		model = request.model, reasoning_effort = request.reasoning_effort, service_tier = request.service_tier,
+		tool_scope = request.tool_scope, system_prompt = request.system_prompt, messages = request.messages,
+		native_tool_pair_closure = request.native_tool_pair_closure })
+	local previous_protocol = request.on_protocol
+	if structured_file then
+		request.on_protocol = function(kind, data)
+			trace(kind, { model_call_id = model_call_id, payload = data })
+			if previous_protocol then previous_protocol(kind, data) end
+		end
+	end
+	local response_ok, response = pcall(provider.complete, request, on_token)
+	if not response_ok then
+		trace("model_error", { model_call_id = model_call_id, error = tostring(response) })
+		error(response, 0)
+	end
+	trace("model_response", { model_call_id = model_call_id, response = response })
+	return response
 end
 
 local function sorted_count_string(counts)
@@ -225,7 +325,7 @@ local function tool_call_key(tc)
 	local args = tc.args or {}
 	local encoded_args = {}
 	for key, value in pairs(args) do
-		if key ~= "_raw_content" then
+		if key ~= "_raw_content" and key ~= "node_id" and key ~= "depends_on" then
 			encoded_args[key] = value
 		end
 	end
@@ -310,34 +410,13 @@ local function recent_read_keys(session)
 	return keys
 end
 
-function core.run_once(prompt, options)
-	if not prompt or prompt == "" then
-		error("prompt is required")
-	end
-
-	local provider = get_provider(options.credentials_path)
-	local response = provider.complete({
-		credentials_path = options.credentials_path,
-		session_id = options.session_id,
-		model = options.model,
-		reasoning_effort = options.reasoning_effort,
-		service_tier = options.service_tier,
-		system_prompt = options.system_prompt or system_prompt.build({ cwd = options.cwd or "." }),
-		messages = {
-			{
-				role = "user",
-				text = prompt,
-			},
-		},
-	}, options.on_token)
-
-	return response.text
-end
-
 function core.run_session(session, on_token, on_tool, on_thinking, on_wait, control)
 	local provider = get_provider(session.credentials_path)
 	local events = {}
+	local turn_clock_ns = uv.hrtime()
 	control = control or {}
+	trace_turn = trace_turn + 1
+	trace("turn_start", { session_id = session.id, cwd = session.cwd, messages = session.messages })
 
 	log_separator("SESSION START")
 	log("Messages in context: %d", #session.messages)
@@ -349,17 +428,51 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 	local last_response_meta = nil
 	local insanitywolf_checkpoints = 0
 	local insanitywolf_budget_warned = false
+	local normal_budget_warned = false
+	local normal_recovery_activated = false
+	local normal_closure_activated = false
 	local false_protocol_apology_retries = 0
-	local repl_ok, repl_mod = pcall(require, "agent.repl")
+	local requested_task = last_user_text(session)
+	local completion_audit_used = false
+	local completion_audit_active = false
+	local had_successful_file_mutation = false
+	local blank_workspace = workspace_is_blank(session.cwd)
 	local function is_cancelled()
 		if type(control.cancelled) == "function" then
 			return control.cancelled() == true
 		end
-		return repl_ok and repl_mod.cancelled == true
+		return false
 	end
 	local tool_call_sequence = 0
 	local max_tool_steps = session.flow == "insanitywolf" and INSANITYWOLF_MAX_TOOL_STEPS or MAX_TOOL_STEPS
 	local intra_turn_compactions = 0
+	local turn_usage = {
+		prompt_tokens = 0,
+		cached_tokens = 0,
+		cache_write_tokens = 0,
+		output_tokens = 0,
+		total_tokens = 0,
+		model_calls = 0,
+		usage_calls = 0,
+		cache_available = true,
+	}
+
+	local function track_response_usage(response)
+		turn_usage.model_calls = turn_usage.model_calls + 1
+		local usage = response and response._usage
+		if type(usage) ~= "table" then
+			turn_usage.cache_available = false
+			return
+		end
+		turn_usage.usage_calls = turn_usage.usage_calls + 1
+		turn_usage.prompt_tokens = turn_usage.prompt_tokens + (tonumber(usage.prompt_tokens) or 0)
+		turn_usage.cached_tokens = turn_usage.cached_tokens + (tonumber(usage.cached_tokens) or 0)
+		turn_usage.cache_write_tokens = turn_usage.cache_write_tokens + (tonumber(usage.cache_write_tokens) or 0)
+		turn_usage.output_tokens = turn_usage.output_tokens + (tonumber(usage.output_tokens) or 0)
+		turn_usage.total_tokens = turn_usage.total_tokens + (tonumber(usage.total_tokens)
+			or ((tonumber(usage.prompt_tokens) or 0) + (tonumber(usage.output_tokens) or 0)))
+		if usage.cache_available ~= true then turn_usage.cache_available = false end
+	end
 
 	local function response_meta(response)
 		if not response then return last_response_meta end
@@ -427,7 +540,10 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 		return true
 	end
 
-	for step = 1, MAX_TOOL_STEPS do
+	local step = 0
+	while step < max_tool_steps do
+		step = step + 1
+		if control.before_step then control.before_step(session) end
 		-- Check for cancellation
 		if is_cancelled() then
 			log_separator("CANCELLED BY USER")
@@ -525,20 +641,26 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			log_separator(string.format("LLM CALL #%d", step))
 		log("Sending %d messages to model", #session.messages)
 
-		local response = provider.complete({
+		local request = {
 			credentials_path = session.credentials_path,
 			session_id = session.id,
 			model = session.model,
 			reasoning_effort = session.reasoning_effort,
 			service_tier = session.service_tier,
-			system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
+			tool_scope = session.tool_scope,
+			system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd, model = session.model }),
 			messages = session.messages,
-			stream_tool_call_cap = session.stream_tool_call_cap,
-			stream_duplicate_call_cap = session.stream_duplicate_call_cap,
-			native_tool_calling = session.native_tool_calling,
+			native_tool_calling = true,
+			native_tool_pair_closure = session.native_tool_pair_closure ~= false,
 			cancelled = is_cancelled,
 			on_wait = on_wait,
-		}, on_token)
+			on_activity = control.on_model_activity,
+		}
+		if control.on_request then control.on_request(request) end
+		local model_call_id = tostring(trace_turn) .. ":" .. tostring(step)
+		local response = core.complete_logged(provider, request, on_token, model_call_id)
+		track_response_usage(response)
+		if control.on_response then control.on_response(response) end
 		last_response_meta = response_meta(response)
 
 		-- Check for cancellation after LLM call
@@ -550,33 +672,14 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				_response_meta = last_response_meta,
 				_cancelled = true,
 				_cancelled_after_response = true,
-				_partial_salvage = response._partial_salvage,
-				_partial_salvaged_calls = response._partial_salvaged_calls,
 				_response_bytes = response._response_bytes,
 			}
 		end
 
 		log("\n--- ASSISTANT RESPONSE ---")
 		log("%s", response.text)
-		if response._partial_salvage then
-			local salvaged_calls = tonumber(response._partial_salvaged_calls) or 0
-			log("[codex] using salvaged partial response tool_calls=%d response_bytes=%d",
-				salvaged_calls,
-				tonumber(response._response_bytes) or 0
-			)
-			if on_thinking then
-				on_thinking({
-					step = step,
-					messages = #session.messages,
-					tools = last_batch_tool_executions,
-					total_tools = total_tool_executions,
-					status = "salvaged partial response  " .. tostring(salvaged_calls) .. " tools",
-				})
-			end
-		end
 
-		local raw_tool_calls = session.native_tool_calling and (response._native_tool_calls or {})
-			or protocol.extract_all_tool_calls(response.text)
+		local raw_tool_calls = response._native_tool_calls or {}
 		-- Filter out tool calls with invalid names (e.g. examples in prose)
 		local registry = require("agent.tool_registry")
 		local tool_calls = {}
@@ -588,40 +691,42 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				invalid_tool_names[#invalid_tool_names + 1] = tostring(tc.name)
 			end
 		end
-		if session.native_tool_calling then
-			log("[tool-protocol] native_calls=%d valid_calls=%d invalid_names=%s output_items=%d",
-				#raw_tool_calls, #tool_calls,
-				#invalid_tool_names > 0 and table.concat(invalid_tool_names, ",") or "(none)",
-				#(response._output_items or {}))
-		elseif #raw_tool_calls > 0 or (response.text or ""):find("<tool_call", 1, true) then
-			log("[tool-protocol] raw_calls=%d valid_calls=%d invalid_names=%s contains_open=%s contains_close=%s response_sample=%s",
-				#raw_tool_calls,
-				#tool_calls,
-				#invalid_tool_names > 0 and table.concat(invalid_tool_names, ",") or "(none)",
-				tostring((response.text or ""):find("<tool_call", 1, true) ~= nil),
-				tostring((response.text or ""):find("</tool_call>", 1, true) ~= nil),
-				compact_log_text(response.text, 1200)
-			)
-		elseif #raw_tool_calls == 0 then
-			log("[tool-protocol] no tool calls response_sample=%s", compact_log_text(response.text, 1200))
+		if completion_audit_active then
+			local retained = {}
+			local dropped_inventory = 0
+			for _, tc in ipairs(tool_calls) do
+				if tc.name == "ls" or tc.name == "find" then
+					dropped_inventory = dropped_inventory + 1
+				else
+					retained[#retained + 1] = tc
+				end
+			end
+			if dropped_inventory > 0 then
+				tool_calls = retained
+				session:add_user(table.concat({
+					"Completion-audit inventory guard: redundant ls/find calls were not executed.",
+					"Do not reconfirm filenames or workspace contents already established by mutation results. Use the existing evidence and finish the audit, or run only a specific missing validation.",
+				}, "\n"))
+				if #tool_calls == 0 then
+					if on_thinking then
+						on_thinking({
+							step = step,
+							messages = #session.messages,
+							tools = 0,
+							total_tools = total_tool_executions,
+							status = "completion inventory blocked",
+						})
+					end
+					goto continue_session_loop
+				end
+			end
 		end
-		local protocol_ok, protocol_err = protocol.validate_tool_calls(tool_calls)
-		if not protocol_ok then
-			local text = "Tool call blocked: " .. protocol_err
-			log_separator("TOOL PROTOCOL VIOLATION")
-			log("[tool-protocol] violation=%s response_sample=%s",
-				tostring(protocol_err),
-				compact_log_text(response.text, 2000)
-			)
-			log("%s", text)
-			return {
-				text = text,
-				events = events,
-				_output_items = response._output_items,
-				_usage = response._usage,
-				_response_meta = last_response_meta,
-			}
-		end
+		log("[tool-protocol] native_calls=%d valid_calls=%d invalid_names=%s output_items=%d",
+			#raw_tool_calls, #tool_calls,
+			#invalid_tool_names > 0 and table.concat(invalid_tool_names, ",") or "(none)",
+			#(response._output_items or {}))
+		-- Native calls are already framed by the provider. XML inside arguments is data.
+
 		if #tool_calls == 0 then
 			local text = clean_assistant_text(response.text)
 			if total_tool_executions > 0 and false_protocol_apology_retries < 2 and is_false_tool_protocol_apology(text) then
@@ -644,15 +749,56 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				end
 				goto continue_session_loop
 			end
+			if session.flow ~= "insanitywolf"
+				and session.completion_audit ~= false
+				and not completion_audit_used
+				and had_successful_file_mutation
+				and research_build_request(requested_task)
+			then
+				completion_audit_used = true
+				completion_audit_active = true
+				-- The audit needs one bounded round even when implementation consumed the
+				-- final ordinary round; it may spend that allowance on one narrow check.
+				max_tool_steps = max_tool_steps + 1
+				log_separator("RESEARCH BUILD COMPLETION AUDIT")
+				session:add_user(table.concat({
+					"Harness completion audit: do not return the previous completion summary yet.",
+					"Compare the original request, primary-source requirements discovered during research, implementation, and actual tool evidence.",
+					"Check that mandatory current platform/API requirements became acceptance criteria and that each completion claim has matching evidence.",
+					"Use tools now only for a safe, specific missing check or narrow fix. Otherwise give the final answer, clearly separating what was written, locally executed, statically checked, and externally deployed or invoked.",
+					"Do not use ls or find to reconfirm filenames or workspace contents already established by successful mutation results.",
+					"Do not describe the result as complete when a required external path was not exercised; lead with what is actually proven and name the exact unverified boundary.",
+				}, "\n"))
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "completion evidence audit",
+					})
+				end
+				goto continue_session_loop
+			end
 			if session.record_usage then
 				session:record_usage(response._usage, #session.messages)
 			end
+			-- A normal plan is transient progress UI, not a second workflow the model
+			-- must administer. Reaching a final answer closes it automatically. Wolf
+			-- cycles deliberately keep explicit completion semantics because the plan
+			-- controls checkpointing and subsequent autonomous cycles.
+			if session.flow ~= "insanitywolf" then
+				session.plan = nil
+				session.journey = nil
+			end
 			log_separator("NO TOOL CALL - RETURNING TEXT")
 			return {
-				text = text,
+				text = with_insanitywolf_receipt(session, text),
 				events = events,
 				_usage = response._usage,
+				_turn_usage = turn_usage,
 				_response_meta = last_response_meta,
+				_context_compactions = intra_turn_compactions,
 			}
 		end
 
@@ -669,12 +815,18 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 		end
 
 		local raw_read_only_batch = batch_is_read_only(tool_calls)
+		local guard_blank_inventory = session.blank_workspace_inventory_guard ~= false
+			and blank_workspace
+			and total_tool_executions == 0
+			and #tool_calls > 1
+			and batch_is_workspace_inventory(tool_calls)
 		local read_only_batch_cap = tonumber(session.read_only_batch_cap)
 		if read_only_batch_cap == nil then read_only_batch_cap = MAX_READ_ONLY_BATCH_SIZE end
 		read_only_batch_cap = math.max(0, math.floor(read_only_batch_cap))
 		local effective_batch_cap = raw_read_only_batch and read_only_batch_cap > 0
 			and math.min(MAX_BATCH_SIZE, read_only_batch_cap)
 			or MAX_BATCH_SIZE
+		if guard_blank_inventory then effective_batch_cap = 1 end
 
 		-- Enforce tool budget and per-batch cap
 		local batch = {}
@@ -698,11 +850,11 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				log("BATCH CAP reached (%d), dropping remaining %d calls", effective_batch_cap, dropped_for_batch_cap)
 				break
 			end
-			total_tool_executions = total_tool_executions + 1
-			if total_tool_executions > max_tool_steps then
+			if total_tool_executions >= max_tool_steps then
 				log("TOOL BUDGET HIT mid-batch at call %d/%d", i, #tool_calls)
 				break
 			end
+			total_tool_executions = total_tool_executions + 1
 			tool_call_sequence = tool_call_sequence + 1
 			tc.runtime_call_id = tc.native_call_id or ("tool-" .. tostring(tool_call_sequence))
 			batch[#batch + 1] = tc
@@ -757,6 +909,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					text = text,
 					events = events,
 					_response_meta = last_response_meta,
+					_context_compactions = intra_turn_compactions,
 				}
 			end
 			read_only_guard_used = true
@@ -789,8 +942,16 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 
 			local MUTATING_TOOLS = { edit = true, multi_edit = true, write = true, run = true }
 
+			local tool_started_ns = {}
 			local function batch_on_tool(event)
+				local observed_ns = uv.hrtime()
+				event.phase = event.phase or "finish"
+				event.model_call_id = step
+				event.batch_id = step
+				event.observed_at_ms = math.floor((observed_ns - turn_clock_ns) / 1000000)
+				local event_id = tostring(event.call_id or (event.name .. ":" .. tostring(event.model_index or "?")))
 				if event.phase == "start" then
+					tool_started_ns[event_id] = observed_ns
 					log("\n--- TOOL START: %s ---", event.name)
 					if event.args then
 						for k, v in pairs(event.args) do
@@ -799,41 +960,87 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 							log("      %s = %s", k, vs)
 						end
 					end
-				elseif MUTATING_TOOLS[event.name] or (event.result and event.result.is_error) then
-					log("\n--- TOOL RESULT: %s ---", event.name)
-					log("is_error: %s", tostring(event.result and event.result.is_error))
-					log("summary: %s", tostring(event.result and event.result.summary))
-					local content_str = (event.result and event.result.content) or ""
-					if #content_str > 500 then
-						log("content: %s... [%d chars total]", content_str:sub(1, 500), #content_str)
-					else
-						log("content: %s", content_str)
+				elseif event.phase == "progress" then
+					local progress = type(event.progress) == "table" and event.progress or {}
+					log("--- TOOL PROGRESS: %s elapsed_ms=%s output_bytes=%s output_chunks=%s ---",
+						event.name, tostring(progress.elapsed_ms), tostring(progress.output_bytes), tostring(progress.output_chunks))
+				else
+					local started_ns = tool_started_ns[event_id]
+					if started_ns then event.duration_ms = math.floor((observed_ns - started_ns) / 1000000) end
+					tool_started_ns[event_id] = nil
+					if MUTATING_TOOLS[event.name] or (event.result and event.result.is_error) then
+						log("\n--- TOOL RESULT: %s ---", event.name)
+						log("is_error: %s", tostring(event.result and event.result.is_error))
+						log("summary: %s", tostring(event.result and event.result.summary))
+						local content_str = (event.result and event.result.content) or ""
+						if #content_str > 500 then
+							log("content: %s... [%d chars total]", content_str:sub(1, 500), #content_str)
+						else
+							log("content: %s", content_str)
+						end
 					end
 				end
 				events[#events + 1] = event
+				trace("tool_event", { model_call_id = model_call_id, event = event })
 				if on_tool then
 					on_tool(event)
 				end
 			end
 
+			trace("tool_batch", { model_call_id = model_call_id, calls = batch })
 			local batch_results = parallel.execute_batch(batch, {
 				cwd = session.cwd,
 				session = session,
 				recent_read_keys = recent_read_keys(session),
 				cancelled = is_cancelled,
+				on_wait = on_wait,
 			}, batch_on_tool)
 			last_batch_tool_executions = #batch
 
+			local batch_failed = false
 			for i, tc in ipairs(batch) do
 				local result = batch_results[i]
 				if result then
+					if result.is_error then batch_failed = true end
+					if FILE_MUTATION_TOOLS[tc.name] and not result.is_error then
+						had_successful_file_mutation = true
+					end
 					local msg = protocol.tool_result_message(tc.name, result, tc.args)
+					trace("tool_result", { model_call_id = model_call_id, call_id = tc.runtime_call_id,
+						model_index = i, name = tc.name, args = tc.args, result = result, model_message = msg })
 					session:add_tool_result(tc.name, msg, tc.native_call_id)
+				end
+			end
+			if session.flow ~= "insanitywolf"
+				and batch_failed
+				and not normal_recovery_activated
+				and total_tool_executions >= (MAX_TOOL_STEPS - NORMAL_TOOL_RESERVE)
+			then
+				normal_recovery_activated = true
+				max_tool_steps = MAX_TOOL_STEPS + NORMAL_FAILURE_RECOVERY_STEPS
+				session:add_user(table.concat({
+					"Recovery tool budget activated after a late tool or verification failure.",
+					"Stop broad research and scope expansion. Diagnose the observed failure, apply the smallest coherent fix, rerun the narrow verification, then finish the requested validation or documentation.",
+					"You have up to " .. tostring(NORMAL_FAILURE_RECOVERY_STEPS) .. " additional tool calls. Do not claim completion unless the relevant check passes.",
+				}, "\n"))
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "late failure recovery budget",
+					})
 				end
 			end
 			if dropped_for_batch_cap > 0 and dropped_for_dependency == 0 then
 				local cap_message
-				if raw_read_only_batch and effective_batch_cap < MAX_BATCH_SIZE then
+				if guard_blank_inventory then
+					cap_message = table.concat({
+						"Blank-workspace inventory guard: only the first inspection call ran; " .. tostring(dropped_for_batch_cap) .. " redundant inventory calls were deferred.",
+						"The workspace has no project files. Do not repeat ls, find, or grep against the root; begin the requested research, plan, or implementation.",
+					}, "\n")
+				elseif raw_read_only_batch and effective_batch_cap < MAX_BATCH_SIZE then
 					cap_message = table.concat({
 						"Read-only batch cap reached: only the first " .. tostring(effective_batch_cap) .. " inspection calls ran; " .. tostring(dropped_for_batch_cap) .. " later calls were deferred.",
 						"Stop broad workspace inventory. Use the context already gathered and make the next concrete edit/write/run action, or explain the specific blocker.",
@@ -869,35 +1076,9 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					})
 				end
 			end
-			if response._stream_tool_cap_reached and dropped_for_batch_cap == 0 and dropped_for_dependency == 0 then
-				session:add_user(table.concat({
-					"Streaming tool-call cap reached: only the first " .. tostring(#batch) .. " unique complete tool calls were accepted.",
-					"Continue from their results. Emit another bounded batch only if more work remains.",
-				}, "\n"))
-				log("[tool-protocol] provider stream cap surfaced accepted_calls=%d", #batch)
-			end
-			if response._stream_duplicate_cap_reached and dropped_for_batch_cap == 0 and dropped_for_dependency == 0 then
-				session:add_user(table.concat({
-					"Streaming duplicate-call cap reached: repeated copies of tool calls were cut off after the unique calls shown above were accepted.",
-					"Continue from their results. Do not repeat identical calls unless a result explicitly requires a retry.",
-				}, "\n"))
-				log("[tool-protocol] provider duplicate stream cap surfaced accepted_calls=%d", #batch)
-			end
-
-			local direct_text = direct_tool_result_text(session, batch, batch_results)
-			if direct_text then
-				log_separator("DIRECT TOOL RESULT - RETURNING TEXT")
-				log("%s", direct_text)
-				return {
-					text = direct_text,
-					events = events,
-					_usage = response._usage,
-					_response_meta = last_response_meta,
-				}
-			end
 
 			if session.flow == "insanitywolf"
-				and insanitywolf_checkpoints < 5
+				and insanitywolf_checkpoints < INSANITYWOLF_MAX_CYCLES - 1
 				and batch_updates_plan(batch)
 				and plan_is_complete(session.plan)
 			then
@@ -908,7 +1089,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 						messages = #session.messages,
 						tools = last_batch_tool_executions,
 						total_tools = total_tool_executions,
-						status = "checkpointing insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/5",
+						status = "checkpointing insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/" .. tostring(INSANITYWOLF_MAX_CYCLES),
 					})
 				end
 				local ok, compacted, msgs_removed, new_tokens = pcall(function()
@@ -930,16 +1111,14 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					session:add_user(table.concat({
 						"Insanitywolf checkpoint complete.",
 						"Before continuing, write a short visible transition note for the user.",
-						"The transition note must explain what completed, the next autonomous direction, why it is directly related and evidence-backed, and why it does not require user/product judgment.",
-						"Continue only if the checkpoint summary's Next Steps contain a concrete high-impact implementation improvement.",
-						"Do not start a new cycle for inventory checks, rereads, final tree listings, optional lint probes, or verification that already passed.",
-						"Local hardening, including security hardening, may be a valid next cycle when it is evidence-backed and preserves the user's requested shape.",
-						"For authentication, authorization, admin portal, or session/cookie apps, local security hardening such as CSRF tokens, stronger session IDs, safer cookie flags, request caps, basic login throttling, and safer defaults is valid autonomous next-cycle work when it avoids new external services.",
-						"Do not treat that local auth/admin hardening as a user-directed offer; treat larger choices like SQLite persistence, Docker/systemd packaging, dependency swaps, or framework restructures as user-directed offers.",
+						"The transition note must name the capability that shipped, the next product bet, its user-visible payoff, and why it coheres with the product direction.",
+						"Continue only if the checkpoint summary's Next Steps contain a strong product bet that adds power, removes substantial central-workflow friction, or makes the product noticeably more intelligent or expressive.",
+						"Do not start a cycle merely for tests, hardening, cleanup, refactoring, documentation, inventory checks, rereads, optional probes, or verification that already passed. Those are supporting work only.",
+						"Prefer the smallest complete vertical slice that proves the next capability. Be bold about reversible local product choices instead of retreating to maintenance.",
 						"If continuing, write the transition note first, then immediately call update_plan for the next implementation cycle, then implement and verify it.",
 						"Do not ask permission, say you can continue, or wait for the user when a valid next cycle is present.",
-						"If the checkpoint says no further autonomous cycle is warranted, or the next work is ambiguous, blocked, destructive, requires external secrets or dependencies, broadens scope, or requires user/product judgment, stop and explain that blocker instead of continuing.",
-						"When stopping, also offer concise concrete directions the user may explicitly choose next, without starting them.",
+						"Stop if no candidate has a concrete user-visible payoff, or if the next work is destructive, difficult to reverse, requires external services or secrets, paid resources, or an incompatible architecture migration.",
+						"When stopping, report the strongest remaining product bets without beginning them.",
 					}, "\n"))
 					if on_thinking then
 						on_thinking({
@@ -947,12 +1126,13 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 							messages = #session.messages,
 							tools = last_batch_tool_executions,
 							total_tools = total_tool_executions,
-							status = "checkpointed insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/5",
+							status = "checkpointed insanitywolf cycle  " .. tostring(insanitywolf_checkpoints) .. "/" .. tostring(INSANITYWOLF_MAX_CYCLES),
 							checkpoint_summary = session.compaction_summary,
 							checkpoint_cycle = insanitywolf_checkpoints,
 							checkpoint_tokens = new_tokens,
 						})
 					end
+					session.insanitywolf_cycle = insanitywolf_checkpoints + 1
 					if is_cancelled() then
 						log_separator("CANCELLED BY USER")
 						return {
@@ -975,11 +1155,26 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			end
 		end
 
-		if total_tool_executions >= max_tool_steps then
-			break
-		end
-
-		if session.flow == "insanitywolf"
+		if session.flow ~= "insanitywolf"
+			and not normal_budget_warned
+			and total_tool_executions >= (MAX_TOOL_STEPS - NORMAL_TOOL_RESERVE)
+		then
+			normal_budget_warned = true
+			session:add_user(table.concat({
+				"Normal-mode tool budget reserve reached.",
+				"Do not begin broad research, inventory, or scope expansion. Use the remaining base budget for the shortest complete closure path: implement the essential slice, run the narrowest relevant check, fix observed failures, rerun that check, and finish required documentation.",
+				"A late tool or verification failure can activate a bounded recovery allowance, but unused base budget is not evidence that the task is complete.",
+			}, "\n"))
+			if on_thinking then
+				on_thinking({
+					step = step,
+					messages = #session.messages,
+					tools = last_batch_tool_executions,
+					total_tools = total_tool_executions,
+					status = "normal tool reserve",
+				})
+			end
+		elseif session.flow == "insanitywolf"
 			and not insanitywolf_budget_warned
 			and total_tool_executions >= (max_tool_steps - INSANITYWOLF_TOOL_RESERVE)
 		then
@@ -1000,6 +1195,33 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				})
 			end
 		end
+
+		if total_tool_executions >= max_tool_steps then
+			if session.flow ~= "insanitywolf"
+				and not normal_closure_activated
+				and not normal_recovery_activated
+			then
+				normal_closure_activated = true
+				max_tool_steps = MAX_TOOL_STEPS + NORMAL_FAILURE_RECOVERY_STEPS
+				session:add_user(table.concat({
+					"Base tool budget reached with an implementation still in progress.",
+					"A bounded closure allowance is now active. Use it only to finish already-started essential files, generate required build artifacts or lockfiles, run the narrowest relevant validation, fix observed failures, and rerun that validation.",
+					"Do not start new research, optional features, examples, or documentation expansion. Do not hand verification commands back to the user when they can be run here.",
+					"You have up to " .. tostring(NORMAL_FAILURE_RECOVERY_STEPS) .. " additional tool calls. Completion requires validation evidence, not merely written files.",
+				}, "\n"))
+				if on_thinking then
+					on_thinking({
+						step = step,
+						messages = #session.messages,
+						tools = last_batch_tool_executions,
+						total_tools = total_tool_executions,
+						status = "implementation closure allowance",
+					})
+				end
+			else
+				break
+			end
+		end
 		::continue_session_loop::
 	end
 
@@ -1010,10 +1232,21 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			"Stop using tools now and answer from the information already gathered.",
 			"Report exactly which verification or documentation work remains incomplete, and do not imply the active cycle is complete unless the plan was verified and marked completed.",
 		}, "\n"))
+	elseif normal_recovery_activated then
+		session:add_user(table.concat({
+			"Recovery tool budget exhausted.",
+			"Stop using tools now and report the exact failing or incomplete verification without implying completion.",
+		}, "\n"))
+	elseif normal_closure_activated then
+		session:add_user(table.concat({
+			"Implementation closure allowance exhausted.",
+			"Stop using tools now and report the exact incomplete artifact or validation without implying completion.",
+		}, "\n"))
 	else
 		session:add_user("Tool budget reached. Stop using tools now and answer from the information already gathered.")
 	end
-	local final_context_ok, final_context_error = prepare_model_context(MAX_TOOL_STEPS + 1)
+	if control.before_step then control.before_step(session) end
+	local final_context_ok, final_context_error = prepare_model_context(max_tool_steps + 1)
 	if not final_context_ok then
 		return {
 			text = final_context_error,
@@ -1022,20 +1255,26 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			_context_compactions = intra_turn_compactions,
 		}
 	end
-	local response = provider.complete({
+	local request = {
 		credentials_path = session.credentials_path,
 		session_id = session.id,
 		model = session.model,
 		reasoning_effort = session.reasoning_effort,
 		service_tier = session.service_tier,
-		native_tool_calling = session.native_tool_calling,
-		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd }),
+		tool_scope = session.tool_scope,
+		native_tool_calling = true,
+		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd, model = session.model }),
 		messages = session.messages,
 		cancelled = is_cancelled,
 		on_wait = on_wait,
-	}, on_token)
+		on_activity = control.on_model_activity,
+	}
+	if control.on_request then control.on_request(request) end
+	local response = provider.complete(request, on_token)
+	track_response_usage(response)
+	if control.on_response then control.on_response(response) end
 	last_response_meta = response_meta(response)
-	local text = clean_assistant_text(response.text)
+	local text = with_insanitywolf_receipt(session, clean_assistant_text(response.text))
 	if session.record_usage then
 		session:record_usage(response._usage, #session.messages)
 	end
@@ -1048,10 +1287,13 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 		events = events,
 		_output_items = response._output_items,
 		_usage = response._usage,
+		_turn_usage = turn_usage,
 		_response_meta = last_response_meta,
+		_context_compactions = intra_turn_compactions,
 	}
 end
 
 core._dependency_safe_prefix = dependency_safe_prefix
+core._insanitywolf_receipt = insanitywolf_receipt
 
 return core

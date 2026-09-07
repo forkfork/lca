@@ -514,6 +514,156 @@ multi-file run passed at score 100 with seven model calls, six relevant source r
 and one verification. See
 `decisions/2026-08-22-read-only-discovery-cap.md`.
 
+## E26: Shared cross-session prompt cache identity
+
+Compare LCA's normal session-specific `prompt_cache_key` with a stable key shared by
+eval sessions using the same model, prompt profile, and tool schema. Preserve task
+behavior and require at least 20% lower cache-adjusted input cost on successful warm
+long-form runs.
+
+Status: **rejected at the activation pilot; production unchanged**. Four
+`general_web_research` runs all passed at score 100, but both shared-key executions
+and both distinct-session-key controls reported exactly 3,712 cached tokens and zero
+cache writes. The shared-key arm reduced mean estimated input cost by only about
+0.14% and was slower on average. Raw logs confirmed the repeated key was transmitted,
+so the endpoint was already sharing the stable LCA prefix across distinct keys and
+the treatment did not activate. The remaining 56-run matrix was stopped as futile.
+
+The experimental key override was removed. Eval reporting retains explicit uncached
+prompt tokens and input-only cost. See
+`decisions/2026-09-03-shared-prompt-cache-affinity.md`.
+
+## E27: Web-only tool surface for general research
+
+Compare the complete native coding-tool surface with hosted web search alone on
+general_web_research, with simple_prompt as a negative control. Capture hosted
+search activity directly and require all hard gates plus a 10% median input-cost or
+latency improvement without worsening the other measure by more than 10%.
+
+Status: **rejected; production routing unchanged**. All 20 preregistered runs passed,
+and all five web-only negative controls used one model call and zero hosted searches.
+The treatment removed about 777 prompt tokens on the simple prompt. On research,
+however, median searches stayed at 10, median input cost improved only 3.2%
+($0.3427 to $0.3318), and median latency regressed 23.5% (82.4 to 101.7 seconds).
+The smaller schema was real but immaterial beside hosted-search context and variance.
+
+## E28: One model/reasoning route for all long-form work
+
+Screen Sol/high, Terra/high, Terra/medium, and Luna/high on general web research,
+repository-grounded research, researched API implementation, and a constrained
+no-web researched build. A route is eligible only if every hard gate passes in every
+family before cost is considered.
+
+Status: **activation passed for two routes; no model default promoted yet**. Under
+the grader used during execution, every route initially passed three of four cells.
+The later phrase-equivalence correction regraded the frozen no-web trajectories,
+making Terra/high and Luna/high 4/4; Sol/high and Terra/medium remain 3/4 because
+they missed actual external API contract fields. Terra/high is the balanced
+candidate, while Luna/high was cheapest but used 29 tools and 20 model calls on the
+API build. These are single-run cells, so neither candidate meets the preregistered
+five-run promotion rule. A narrower replicated follow-up is required before changing
+the default.
+
+## E29: Deterministic researched-build completion receipt
+
+Prepend a receipt derived from successful mutation and local-validation events so
+researched builds lead with proven scope and name a prohibited external boundary.
+Keep artifact, mandatory-setting, inventory, validation, and safety gates independent.
+
+Status: **invalidated and rejected; receipt removed**. The initial frozen-trajectory
+score was 4/5 treatment versus 2/5 control. Inspection showed that the sole treatment
+failure already said “External deployment or invocation was not performed”; the
+grader recognized only narrower word orders. After adding semantic-equivalence and
+false-success regression tests, all ten frozen trajectories passed unchanged.
+Therefore the apparent gain was an evaluator vocabulary bug, not a harness benefit.
+
+## E30: Adjacent regression gate before self-research promotion
+
+After a user explicitly runs /implement, require the authoritative LCA checkout to
+pass make check before the TUI labels the harness implementation complete. Inject
+both a passing runner and an adjacent-suite failure at the promotion boundary.
+
+Status: **accepted and shipped**. The focused experiment test proves the gate invokes
+make check in the authoritative engine root, accepts success, and rejects an
+injected adjacent regression with an explicit error. Failed implementation changes
+remain available for inspection, but are no longer reported as successfully
+promoted. The surrounding experiment and TUI suites also pass.
+
+## E31: Context-isolated Terra repository delegate
+
+Expose a guarded `delegate_readonly` tool that sends a self-contained question and at
+most eight explicitly named repository text files to Terra/medium. The child receives
+no parent messages and no tools; realpath containment, binary rejection, per-file and
+combined byte limits, output limits, cancellation, nested-tool rejection, and child
+usage telemetry are enforced by the harness. Compare it with the parent-only loop on
+simple prompting, project orientation, ambiguous bug tracing, and a layered multi-file
+implementation, three randomized runs per cell.
+
+Status: **mechanism proven, optimization rejected; disabled by default**. All 24 runs
+passed their deterministic hard gates. Treatment invoked the delegate in all 9/9
+repository runs and 0/3 simple runs, so routing activated selectively. Nevertheless,
+median combined cost increased by 30.5% on orientation, 44.3% on bug tracing, and
+25.1% on layered implementation. Median latency increased by 52.3%, 22.0%, and 15.0%
+respectively. Even without activation, advertising the schema and guidance increased
+simple-prompt median estimated cost by 6.5%.
+
+The failure mechanism is structural: the synchronous tool adds a child model call and
+another full parent round, while mutation tasks still require authoritative tagged
+reads. Keep the guarded implementation as a testable substrate, but do not expose it
+in normal sessions. The next credible treatment is a true dependency-DAG node that
+runs concurrently with independent inspection, or a substantially cheaper bounded
+child, with total cost including the child as the primary decision metric. See
+`decisions/2026-09-03-isolated-readonly-delegate.md`.
+
+## E32: Concurrent read-only tool dependency DAG
+
+Allow `ls`, `read`, `find`, `grep`, and `delegate_readonly` calls in one model response
+to declare `node_id` and `depends_on`. Validate the complete graph before executing
+anything, reject cycles, unknown dependencies, and non-read-only nodes, run ready
+nodes concurrently, execute dependencies in deterministic waves, and skip descendants
+of failed nodes. Compare against the serial delegate on the E31 scenario family with
+three randomized runs per cell.
+
+Status: **scheduler proven, default optimization rejected**. All 24 runs passed.
+The DAG activated in 8/9 repository treatments and 0/3 simple treatments. Pooled
+repository medians improved from six to five parent calls, twelve to eleven tools,
+and $0.1138 to $0.1020 combined cost (-10.4%). Median latency improved from 55.4 to
+49.9 seconds (-9.9%), missing the preregistered 15% requirement.
+
+Results were not uniform enough to promote. Bug tracing improved cost 13.2% and
+latency 9.9%, but orientation cost regressed 20.9%, while layered implementation
+latency regressed 29.4% despite a 4.7% cost improvement. The graph executor and
+telemetry remain behind `tool_dag_enabled = false`; the normal tool surface and
+scheduler are unchanged. See
+`decisions/2026-09-03-read-only-tool-dependency-dag.md`.
+
+## E33: Model-invisible automatic read-only fork-join
+
+When the model already emits an all-read-only batch containing both shell-backed repository
+discovery and `delegate_readonly`, overlap those operations automatically without changing
+the prompt or schemas. Reject at the activation pilot if ordinary delegate guidance does not
+produce eligible batches.
+
+Status: **rejected at activation; production unchanged**. All eight pilot cells passed and
+the delegate activated on all three repository treatments, but fork-join activated on 0/3.
+Without DAG-specific prompting, Sol never placed shell-backed discovery and the delegate in
+one response. The remaining replication was stopped because the scheduler had no opportunity
+to affect execution. The mutation-safe overlap mechanism and telemetry remain disabled for
+future experiments. See `decisions/2026-09-03-automatic-readonly-fork-join.md`.
+
+## E34: Compact bug evidence reducer
+
+Constrain an isolated child to a small citation-and-target response and compare Terra/medium
+and Luna/medium directly with parent-only Sol/high on ambiguous bug tracing, with a simple
+negative control. Price each child from its recorded model rather than assuming Terra.
+
+Status: **rejected; production remains parent-only**. All 18 replicated runs passed. Both
+profiles activated 3/3 on bug tracing and neither activated in the nine simple cells. Compact
+Terra reduced median total cost 13.1%, but increased latency 24.9%; compact Luna reduced cost
+only 0.8% and increased latency 23.2%. Neither reduced the median six Sol calls, and each added
+one median tool. The attractive one-run Terra pilot did not replicate. See
+`decisions/2026-09-03-compact-bug-evidence-reducer.md`.
+
 ## Acceptance discipline
 
 - Do not combine deterministic correctness and model-judge ratings into one number

@@ -15,6 +15,8 @@ local provider_response = table.concat({
 local last_request = nil
 local summary_request = nil
 local provider_calls = 0
+local fake_cancelled = false
+local native_fixture = dofile(project_dir .. "/tests/native_fixture.lua")
 
 package.loaded["agent.providers"] = {
 	load = function()
@@ -27,18 +29,15 @@ package.loaded["agent.providers"] = {
 					end
 					if type(provider_response) == "table" then
 						if provider_response._cancel_during_complete then
-							require("agent.repl").cancelled = true
+							fake_cancelled = true
 						end
-						return provider_response
+						return native_fixture.response(provider_response)
 					end
-			if type(provider_response) == "function" then
+					if type(provider_response) == "function" then
 					local value = provider_response(request)
-					if type(value) == "table" then return value end
-					return { text = value }
+					return native_fixture.response(value)
 				end
-				return {
-					text = provider_response,
-				}
+				return native_fixture.response(provider_response)
 			end,
 		}
 	end,
@@ -70,7 +69,42 @@ end
 
 io.write("\n" .. dim("═══ Core Sanitization Tests ═══") .. "\n\n")
 
+test("forwards the session tool scope to the provider", function()
+	provider_response = "scoped response"
+	last_request = nil
+	local session = session_module.create({ tool_scope = "web_only" })
+	session.cwd = project_dir
+	session:add_user("research this")
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "scoped response" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if not last_request or last_request.tool_scope ~= "web_only" then
+		error("provider did not receive web_only tool scope")
+	end
+end)
+
+test("does not execute retired delegate calls", function()
+	provider_calls = 0
+	provider_response = '<tool_call name="delegate_readonly">\n{"task":"Inspect","paths":["README.md"]}\n</tool_call>'
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("try a disabled tool")
+	local result = core.run_session(session, nil, nil, nil)
+	for _, event in ipairs(result.events or {}) do
+		if event.name == "delegate_readonly" then error("disabled delegate executed") end
+	end
+end)
+
 test("strips model-emitted tool_result tags from assistant text", function()
+	provider_response = table.concat({
+		"Before",
+		'<tool_result name="run" status="ok">',
+		"hidden tool output",
+		"</tool_result>",
+		"After",
+	}, "\n")
 	local session = session_module.create({})
 	session.cwd = project_dir
 	session:add_user("trigger")
@@ -84,6 +118,152 @@ test("strips model-emitted tool_result tags from assistant text", function()
 	end
 	if not result.text:find("Before", 1, true) or not result.text:find("After", 1, true) then
 		error("assistant text lost surrounding text: " .. result.text)
+	end
+end)
+
+test("normal plans close with the final answer without a ceremonial update", function()
+	provider_calls = 0
+	provider_response = function()
+		if provider_calls == 1 then
+			return table.concat({
+				'<tool_call name="update_plan">',
+				'{"plan":[{"step":"Make the change","status":"in_progress"},{"step":"Verify it","status":"pending"}]}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "implemented and verified"
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("do substantial work")
+	local result = core.run_session(session, nil, nil, nil)
+
+	if result.text ~= "implemented and verified" then
+		error("unexpected result: " .. tostring(result.text))
+	end
+	if provider_calls ~= 2 then
+		error("expected one plan round and one final round, got " .. tostring(provider_calls))
+	end
+	if session.plan ~= nil then
+		error("normal plan remained active after the final answer")
+	end
+end)
+
+test("research builds receive one evidence audit before completion", function()
+	provider_calls = 0
+	provider_response = function(request)
+		if provider_calls == 1 then
+			return table.concat({
+				'<tool_call name="write">',
+				'{"path":"completion-audit-fixture.txt","content":"built\\n"}',
+				"</tool_call>",
+			}, "\n")
+		elseif provider_calls == 2 then
+			return "Built a complete demo."
+		end
+		local messages = {}
+		for _, message in ipairs(request.messages or {}) do
+			messages[#messages + 1] = tostring(message.text or "")
+		end
+		if not table.concat(messages, "\n"):find("Harness completion audit", 1, true) then
+			error("completion audit was not sent to the model")
+		end
+		return "Locally written; external deployment was not exercised."
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir .. "/tests/tmp"
+	os.execute("mkdir -p " .. string.format("%q", session.cwd))
+	session:add_user("search current documentation then build a demo")
+	local result = core.run_session(session, nil, nil, nil)
+
+	if provider_calls ~= 3 then
+		error("expected one completion audit round, got " .. tostring(provider_calls) .. " provider calls")
+	end
+	if result.text ~= "Locally written; external deployment was not exercised." then
+		error("unexpected audited result: " .. tostring(result.text))
+	end
+	local file = io.open(session.cwd .. "/completion-audit-fixture.txt", "r")
+	if file then file:close() os.remove(session.cwd .. "/completion-audit-fixture.txt") end
+end)
+
+test("completion audit blocks redundant workspace inventory", function()
+	provider_calls = 0
+	provider_response = function(request)
+		if provider_calls == 1 then
+			return '<tool_call name="write">\n{"path":"audit-inventory-fixture.txt","content":"built\\n"}\n</tool_call>'
+		elseif provider_calls == 2 then
+			return "Built a complete demo."
+		elseif provider_calls == 3 then
+			return '<tool_call name="ls">\n{"path":"."}\n</tool_call>'
+		end
+		local joined = {}
+		for _, message in ipairs(request.messages or {}) do
+			joined[#joined + 1] = tostring(message.text or "")
+		end
+		if not table.concat(joined, "\n"):find("Completion%-audit inventory guard") then
+			error("blocked inventory was not surfaced")
+		end
+		return "Proven locally; external deployment was not exercised."
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir .. "/tests/tmp"
+	os.execute("mkdir -p " .. string.format("%q", session.cwd))
+	session:add_user("research requirements then build a demo")
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "Proven locally; external deployment was not exercised." then error(result.text) end
+	for _, event in ipairs(result.events) do
+		if event.name == "ls" or event.name == "find" then
+			error("completion audit executed redundant inventory")
+		end
+	end
+	os.remove(session.cwd .. "/audit-inventory-fixture.txt")
+end)
+
+test("turn usage aggregates every model call", function()
+	provider_calls = 0
+	provider_response = function()
+		if provider_calls == 1 then
+			return {
+				text = '<tool_call name="update_plan">\n{"plan":[{"step":"Do it","status":"in_progress"}]}\n</tool_call>',
+				_usage = { prompt_tokens = 100, cached_tokens = 50, cache_available = true, output_tokens = 10, total_tokens = 110 },
+			}
+		end
+		return {
+			text = "done",
+			_usage = { prompt_tokens = 200, cached_tokens = 100, cache_available = true, output_tokens = 5, total_tokens = 205 },
+		}
+	end
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("track the whole turn")
+	local result = core.run_session(session, nil, nil, nil)
+	if result._usage.prompt_tokens ~= 200 then error("last-call usage changed") end
+	if result._turn_usage.prompt_tokens ~= 300 then error("prompt usage was not aggregated") end
+	if result._turn_usage.cached_tokens ~= 150 then error("cached usage was not aggregated") end
+	if result._turn_usage.output_tokens ~= 15 or result._turn_usage.total_tokens ~= 315 then error("total usage was not aggregated") end
+	if result._turn_usage.model_calls ~= 2 or result._turn_usage.usage_calls ~= 2 then error("model-call count was not aggregated") end
+	if result._turn_usage.cache_available ~= true then error("aggregate cache telemetry should be available") end
+end)
+
+test("tool events retain model-call batch and emission identity", function()
+	provider_calls = 0
+	provider_response = function()
+		if provider_calls == 1 then
+			return '<tool_call name="read">\n{"path":"README.md","offset":1,"limit":2}\n</tool_call>'
+		end
+		return "done"
+	end
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("inspect two lines")
+	local result = core.run_session(session, nil, nil, nil)
+	if #result.events ~= 1 then error("expected one read finish event") end
+	local event = result.events[1]
+	if event.model_call_id ~= 1 or event.batch_id ~= 1 or event.model_index ~= 1 then
+		error("tool event lost authoritative batch identity")
 	end
 end)
 
@@ -125,6 +305,47 @@ test("stores only deduped executed tool calls in assistant history", function()
 	end
 	if count ~= 2 then
 		error("expected only 2 unique executed tool calls in history, got " .. tostring(count) .. ": " .. assistant_text)
+	end
+end)
+
+test("blank workspace executes only one initial inventory call", function()
+	provider_calls = 0
+	local blank_dir = project_dir .. "/tests/tmp/blank-inventory"
+	os.execute("mkdir -p " .. string.format("%q", blank_dir))
+	provider_response = function(request)
+		if provider_calls == 1 then
+			return table.concat({
+				'<tool_call name="ls">',
+				'{"path":"."}',
+				"</tool_call>",
+				'<tool_call name="find">',
+				'{"path":".","maxDepth":2}',
+				"</tool_call>",
+				'<tool_call name="grep">',
+				'{"path":".","pattern":"AgentCore"}',
+				"</tool_call>",
+			}, "\n")
+		end
+		local joined = {}
+		for _, message in ipairs(request.messages or {}) do
+			joined[#joined + 1] = tostring(message.text or "")
+		end
+		if not table.concat(joined, "\n"):find("Blank%-workspace inventory guard") then
+			error("blank-workspace guard was not surfaced")
+		end
+		return "continued after one inventory call"
+	end
+
+	local session = session_module.create({})
+	session.cwd = blank_dir
+	session:add_user("build a new project")
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "continued after one inventory call" then error(result.text) end
+	if #result.events == 0 then error("missing executed inventory event") end
+	for _, event in ipairs(result.events) do
+		if event.name ~= "ls" or event.model_index ~= 1 then
+			error("a deferred inventory tool executed")
+		end
 	end
 end)
 
@@ -196,68 +417,6 @@ test("duplicate-heavy tool batch is surfaced to next model turn", function()
 
 	if result.text ~= "done after duplicate guard" then
 		error("unexpected result: " .. tostring(result.text))
-	end
-end)
-
-test("provider stream cap is surfaced to the next model turn", function()
-	provider_calls = 0
-	provider_response = function(request)
-		for _, message in ipairs(request.messages or {}) do
-			if tostring(message.text or ""):find("Streaming tool%-call cap reached") then
-				return "done after stream cap"
-			end
-		end
-		local calls = {}
-		for i = 1, 10 do
-			calls[#calls + 1] = '<tool_call name="update_plan">'
-			calls[#calls + 1] = '{"plan":[{"step":"step ' .. tostring(i) .. '","status":"pending"}]}'
-			calls[#calls + 1] = "</tool_call>"
-		end
-		return {
-			text = table.concat(calls, "\n"),
-			_stream_tool_cap_reached = true,
-		}
-	end
-
-	local session = session_module.create({})
-	session.cwd = project_dir
-	session:add_user("trigger stream cap")
-	local result = core.run_session(session, nil, nil, nil)
-	if result.text ~= "done after stream cap" then
-		error("unexpected result: " .. tostring(result.text))
-	end
-	if provider_calls ~= 2 then
-		error("expected 2 provider calls, got " .. tostring(provider_calls))
-	end
-end)
-
-test("provider duplicate stream cap is surfaced to the next model turn", function()
-	provider_calls = 0
-	provider_response = function(request)
-		for _, message in ipairs(request.messages or {}) do
-			if tostring(message.text or ""):find("Streaming duplicate%-call cap reached") then
-				return "done after duplicate stream cap"
-			end
-		end
-		return {
-			text = table.concat({
-				'<tool_call name="ls">',
-				'{"path":"."}',
-				"</tool_call>",
-			}, "\n"),
-			_stream_duplicate_cap_reached = true,
-		}
-	end
-
-	local session = session_module.create({})
-	session.cwd = project_dir
-	session:add_user("trigger duplicate stream cap")
-	local result = core.run_session(session, nil, nil, nil)
-	if result.text ~= "done after duplicate stream cap" then
-		error("unexpected result: " .. tostring(result.text))
-	end
-	if provider_calls ~= 2 then
-		error("expected 2 provider calls, got " .. tostring(provider_calls))
 	end
 end)
 
@@ -386,7 +545,7 @@ test("read-only batch cap steers away from broad inventory", function()
 	local found = false
 	for _, message in ipairs(session.messages) do
 		local text = tostring(message.text or "")
-		if text:find("only the first 6 inspection calls ran", 1, true)
+		if text:find("only the first 7 inspection calls ran", 1, true)
 			and text:find("Stop broad workspace inventory", 1, true)
 		then
 			found = true
@@ -512,50 +671,50 @@ test("insanitywolf mode is included in system prompt", function()
 	if not last_request.system_prompt:find("insanitywolf", 1, true) then
 		error("missing insanitywolf mode policy in system prompt")
 	end
-	if not last_request.system_prompt:find("bounded improvement cycles", 1, true) then
-		error("missing insanitywolf cycle policy in system prompt")
+	for _, phrase in ipairs({
+		"opinionated product inventor",
+		"at least three strong candidate product bets",
+		"user%-visible power",
+		"complete vertical slice",
+		"guardrails or supporting work",
+		"meaningful new capability",
+		"bold about reversible local product",
+		"at most three shipped product%-bet cycles",
+		"do not ask permission",
+		"budget reserve",
+	}) do
+		if not last_request.system_prompt:find(phrase) then
+			error("missing insanitywolf product policy: " .. phrase)
+		end
 	end
-	if not last_request.system_prompt:find("mark that cycle complete", 1, true) then
-		error("missing insanitywolf completion policy in system prompt")
-	end
-	if not last_request.system_prompt:find("do not merely mention it", 1, true) then
-		error("missing insanitywolf follow-up planning policy in system prompt")
-	end
-	if not last_request.system_prompt:find("do not ask permission", 1, true) then
-		error("missing insanitywolf continue-without-permission policy in system prompt")
-	end
-	if not last_request.system_prompt:find("budget reserve", 1, true) then
-		error("missing insanitywolf tool budget reserve policy in system prompt")
-	end
-	if not last_request.system_prompt:find("at most five improvement cycles", 1, true) then
-		error("missing insanitywolf cycle cap in system prompt")
-	end
-	if not last_request.system_prompt:find("visible transition note", 1, true) then
-		error("missing insanitywolf transition policy in system prompt")
-	end
-	if not last_request.system_prompt:find("user%-directed follow%-ups") then
-		error("missing insanitywolf stop offer policy in system prompt")
-	end
-	if not last_request.system_prompt:find("security hardening", 1, true) then
-		error("missing insanitywolf security hardening policy in system prompt")
-	end
-	if not last_request.system_prompt:find("authentication", 1, true)
-		or not last_request.system_prompt:find("CSRF tokens", 1, true)
-		or not last_request.system_prompt:find("user%-directed offer")
+	if last_request.system_prompt:find("CSRF tokens", 1, true)
+		or last_request.system_prompt:find("boring conventional default", 1, true)
 	then
-		error("missing insanitywolf auth/admin autonomous hardening policy in system prompt")
+		error("maintenance-era insanitywolf policy remains in system prompt")
 	end
-	if not last_request.system_prompt:find("boring conventional default", 1, true)
-		or not last_request.system_prompt:find("SQLite", 1, true)
-		or not last_request.system_prompt:find("server%-rendered HTML")
-	then
-		error("missing insanitywolf boring defaults policy in system prompt")
-	end
-	if not last_request.system_prompt:find("standard password hashing", 1, true)
-		or not last_request.system_prompt:find("simple durable local job", 1, true)
-		or not last_request.system_prompt:find("Makefile", 1, true)
-	then
-		error("missing insanitywolf stronger technical defaults policy in system prompt")
+end)
+
+test("insanitywolf receipt preserves shipped cycles and incomplete current work", function()
+	local receipt = core._insanitywolf_receipt({
+		flow = "insanitywolf",
+		wolf_ledger = {
+			{ cycle = 1, title = "Smart Capture", payoff = "Turn natural phrases into scheduled tasks", proof = "capture checks passed" },
+			{ cycle = 2, title = "Planning Inbox", payoff = "Triage undated work in one click", proof = "inbox checks passed" },
+		},
+		wolf_status = { cycle = 3, phase = "hunt", title = "Projects", payoff = "Capture and filter tasks by project" },
+		plan = {
+			{ step = "Wire project route", status = "completed" },
+			{ step = "Build project UI", status = "in_progress" },
+			{ step = "Verify project flow", status = "pending" },
+		},
+	})
+	for _, phrase in ipairs({
+		"1/3 — Smart Capture — shipped",
+		"2/3 — Planning Inbox — shipped",
+		"3/3 — Projects — incomplete (1/3 plan steps complete)",
+		"Stopped at: Build project UI",
+	}) do
+		if not receipt:find(phrase, 1, true) then error("missing receipt detail: " .. phrase) end
 	end
 end)
 
@@ -572,7 +731,7 @@ test("insanitywolf checkpoints compact cycle context", function()
 		if main_calls == 1 then
 			return table.concat({
 				'<tool_call name="update_plan">',
-				'{"plan":[{"step":"First cycle","status":"completed"}]}',
+				'{"wolf":{"title":"Power move","payoff":"a visible capability"},"plan":[{"step":"First cycle","status":"completed"}]}',
 				"</tool_call>",
 			}, "\n")
 		end
@@ -582,24 +741,33 @@ test("insanitywolf checkpoints compact cycle context", function()
 	local session = session_module.create({ flow = "insanitywolf" })
 	session.cwd = project_dir
 	session:add_user("trigger insanitywolf checkpoint")
+	local checkpoint_info
 
-	local result = core.run_session(session, nil, nil, nil)
+	local result = core.run_session(session, nil, nil, function(info)
+		if info and info.checkpoint_summary then checkpoint_info = info end
+	end)
 
-	if result.text ~= "done" then
+	if not result.text:find("1/3 — Power move — shipped", 1, true) or not result.text:match("done$") then
 		error("unexpected result: " .. tostring(result.text))
 	end
 	if not summary_request then
 		error("expected insanitywolf checkpoint summarization request")
 	end
+	if not checkpoint_info or checkpoint_info.checkpoint_cycle ~= 1
+		or not tostring(checkpoint_info.status):find("1/3", 1, true)
+	then
+		error("checkpoint did not expose the bounded three-cycle product run")
+	end
 	local prompt = summary_request.messages[1].text or ""
 	if not prompt:find("Additional insanitywolf checkpoint rules", 1, true) then
 		error("missing checkpoint summary instructions")
 	end
-	if not prompt:find("authentication", 1, true)
-		or not prompt:find("CSRF tokens", 1, true)
-		or not prompt:find("Do not put these in user%-directed offers")
+	if not prompt:find("ranked backlog", 1, true)
+		or not prompt:find("user%-visible payoff")
+		or not prompt:find("compounding leverage", 1, true)
+		or not prompt:find("support or protect a user%-visible capability")
 	then
-		error("missing checkpoint auth/admin hardening classification rules")
+		error("missing checkpoint product-bet classification rules")
 	end
 	if not session.compaction_summary or not session.compaction_summary:find("## Current Plan", 1, true) then
 		error("checkpoint summary did not retain current plan")
@@ -610,11 +778,11 @@ test("insanitywolf checkpoints compact cycle context", function()
 	local found_continue = false
 	for _, message in ipairs(session.messages) do
 		if message.role == "user"
-			and tostring(message.text or ""):find("concrete high%-impact implementation improvement")
+			and tostring(message.text or ""):find("strong product bet", 1, true)
+			and tostring(message.text or ""):find("user%-visible payoff")
 			and tostring(message.text or ""):find("visible transition note", 1, true)
-			and tostring(message.text or ""):find("offer concise concrete directions", 1, true)
-			and tostring(message.text or ""):find("security hardening", 1, true)
-			and tostring(message.text or ""):find("auth/admin hardening", 1, true)
+			and tostring(message.text or ""):find("tests, hardening, cleanup", 1, true)
+			and tostring(message.text or ""):find("smallest complete vertical slice", 1, true)
 			and tostring(message.text or ""):find("Do not ask permission", 1, true)
 		then
 			found_continue = true
@@ -639,7 +807,7 @@ test("insanitywolf does not checkpoint before plan completion", function()
 		if main_calls == 1 then
 			return table.concat({
 				'<tool_call name="update_plan">',
-				'{"plan":[{"step":"First cycle","status":"in_progress"},{"step":"Next improvement","status":"pending"}]}',
+				'{"wolf":{"title":"Power move","payoff":"a visible capability"},"plan":[{"step":"First cycle","status":"in_progress"},{"step":"Next improvement","status":"pending"}]}',
 				"</tool_call>",
 			}, "\n")
 		end
@@ -652,83 +820,11 @@ test("insanitywolf does not checkpoint before plan completion", function()
 
 	local result = core.run_session(session, nil, nil, nil)
 
-	if result.text ~= "done" then
+	if not result.text:find("1/3 — Power move — incomplete", 1, true) or not result.text:match("done$") then
 		error("unexpected result: " .. tostring(result.text))
 	end
 	if summary_request then
 		error("checkpoint should not run before plan completion")
-	end
-end)
-
-test("partial salvage emits quiet thinking status", function()
-	provider_response = {
-		text = table.concat({
-			'<tool_call name="ls">',
-			'{"path":"."}',
-			"</tool_call>",
-		}, "\n"),
-		_partial_salvage = true,
-		_partial_salvaged_calls = 1,
-		_response_bytes = 1234,
-	}
-
-	local session = session_module.create({})
-	session.cwd = project_dir
-	session:add_user("trigger partial salvage")
-
-	local statuses = {}
-	core.run_session(session, nil, nil, function(info)
-		if info.status then
-			statuses[#statuses + 1] = info.status
-		end
-	end)
-
-	local found = false
-	for _, status in ipairs(statuses) do
-		if status == "salvaged partial response  1 tools" then
-			found = true
-			break
-		end
-	end
-	if not found then
-		error("missing partial salvage thinking status")
-	end
-end)
-
-test("cancel after partial salvage preserves recovered tool metadata", function()
-	provider_response = {
-		text = table.concat({
-			'<tool_call name="ls">',
-			'{"path":"."}',
-			"</tool_call>",
-		}, "\n"),
-		_partial_salvage = true,
-		_partial_salvaged_calls = 1,
-		_response_bytes = 4321,
-		_cancel_during_complete = true,
-	}
-
-	local repl = require("agent.repl")
-	repl.cancelled = false
-
-	local session = session_module.create({})
-	session.cwd = project_dir
-	session:add_user("trigger cancelled partial salvage")
-
-	local result = core.run_session(session, nil, nil, nil)
-	repl.cancelled = false
-
-	if result._cancelled ~= true then
-		error("expected cancelled result")
-	end
-	if result._partial_salvage ~= true then
-		error("expected partial salvage metadata")
-	end
-	if result._partial_salvaged_calls ~= 1 then
-		error("expected one salvaged call")
-	end
-	if result.text:find('<tool_call name="ls">', 1, true) == nil then
-		error("expected salvaged tool text to be preserved")
 	end
 end)
 
@@ -804,6 +900,122 @@ test("insanitywolf warns before tool budget exhaustion", function()
 	end
 	if not found then
 		error("missing insanitywolf tool budget reserve warning")
+	end
+end)
+
+test("normal mode preserves recovery tools after a late verification failure", function()
+	provider_calls = 0
+	last_request = nil
+	summary_request = nil
+	provider_response = function()
+		if provider_calls <= 10 then
+			local command_a = provider_calls == 10 and "false # late-verification-failure" or "true"
+			local n = tostring(provider_calls)
+			return table.concat({
+				'<tool_call name="run">',
+				'{"command":"' .. command_a .. '","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # normal-budget-b-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # normal-budget-c-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # normal-budget-d-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+			}, "\n")
+		elseif provider_calls == 11 then
+			return table.concat({
+				'<tool_call name="run">',
+				'{"command":"true # recovery-fix","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # recovery-verification","timeout":120000}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "recovered and verified"
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("build and verify a project")
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "recovered and verified" then
+		error("late failure did not receive recovery tools: " .. tostring(result.text))
+	end
+	if provider_calls ~= 12 then
+		error("expected recovery tool round plus final response, got " .. tostring(provider_calls) .. " provider calls")
+	end
+
+	local found_reserve = false
+	local found_recovery = false
+	for _, message in ipairs(session.messages) do
+		local text = tostring(message.text or "")
+		if message.role == "user" and text:find("Normal-mode tool budget reserve reached", 1, true) then
+			found_reserve = true
+		end
+		if message.role == "user" and text:find("Recovery tool budget activated", 1, true) then
+			found_recovery = true
+		end
+	end
+	if not found_reserve then error("missing normal-mode reserve warning") end
+	if not found_recovery then error("missing late-failure recovery message") end
+end)
+
+test("normal mode grants closure tools when an unfinished build consumes the base budget", function()
+	provider_calls = 0
+	last_request = nil
+	summary_request = nil
+	provider_response = function(request)
+		if provider_calls <= 10 then
+			local n = tostring(provider_calls)
+			return table.concat({
+				'<tool_call name="run">',
+				'{"command":"true # base-a-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # base-b-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # base-c-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # base-d-' .. n .. '","timeout":120000}',
+				"</tool_call>",
+			}, "\n")
+		elseif provider_calls == 11 then
+			local joined = {}
+			for _, message in ipairs(request.messages or {}) do
+				joined[#joined + 1] = tostring(message.text or "")
+			end
+			if not table.concat(joined, "\n"):find("bounded closure allowance", 1, true) then
+				error("closure allowance was not surfaced to the model")
+			end
+			return table.concat({
+				'<tool_call name="run">',
+				'{"command":"true # generate-lockfile","timeout":120000}',
+				"</tool_call>",
+				'<tool_call name="run">',
+				'{"command":"true # final-verification","timeout":120000}',
+				"</tool_call>",
+			}, "\n")
+		end
+		return "finished and verified during closure"
+	end
+
+	local session = session_module.create({})
+	session.cwd = project_dir
+	session:add_user("build a complete project and verify it")
+
+	local result = core.run_session(session, nil, nil, nil)
+	if result.text ~= "finished and verified during closure" then
+		error("base exhaustion did not receive closure tools: " .. tostring(result.text))
+	end
+	if provider_calls ~= 12 then
+		error("expected closure tool round plus final response, got " .. tostring(provider_calls) .. " provider calls")
 	end
 end)
 

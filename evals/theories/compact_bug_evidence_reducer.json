@@ -1,0 +1,50 @@
+{
+  "id": "compact_bug_evidence_reducer",
+  "title": "Compact isolated evidence reducer for ambiguous bug tracing",
+  "hypothesis": "On ambiguous repository bug tracing, a no-tool child constrained to a small citation-and-target envelope can give Sol enough navigation evidence to preserve correctness while reducing total cost; Luna can perform this bounded extraction more cheaply than Terra.",
+  "falsified_if": "Any delegate treatment loses a deterministic hard gate, activates on simple_prompt, fails to activate on at least two of three bug runs, costs at least as much as parent-only Sol, or increases median bug latency by more than 10%.",
+  "source_ids": ["harnessdev-2609.01437", "harnessevolve-2609.00829"],
+  "control_variant": "parent_only",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["simple_prompt", "ambiguous_bug_investigation"],
+  "variants": [
+    {
+      "id": "parent_only",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": false
+    },
+    {
+      "id": "compact_terra",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true,
+      "delegate_readonly_profile": "compact_terra"
+    },
+    {
+      "id": "compact_luna",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "delegate_readonly_enabled": true,
+      "delegate_readonly_profile": "compact_luna"
+    }
+  ],
+  "deterministic_outcomes": [
+    "all existing bug-investigation hard gates remain authoritative",
+    "the child receives only the explicit bounded file packet and has no tools",
+    "compact output is capped at 3000 bytes and retains cited navigation targets",
+    "simple_prompt completes without tools or delegation"
+  ],
+  "efficiency_outcomes": [
+    "delegate activation and child prompt and output tokens",
+    "parent model and tool calls",
+    "elapsed time and parent-plus-child estimated API cost"
+  ],
+  "decision_rule": "Reject a profile for any correctness or isolation regression. Otherwise require zero simple_prompt delegate calls, delegate activation in at least two of three ambiguous_bug_investigation runs, lower median estimated_total_api_cost_usd than parent_only, and no more than 10% higher median elapsed_ms. Promote at most the cheaper passing compact profile, only for a subsequent targeted routing experiment; do not enable general delegation from this result."
+}

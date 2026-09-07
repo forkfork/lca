@@ -205,29 +205,6 @@ local function extract_json_body(text, start_pos, tool_name)
 	return json_body, first_close, raw_content, close_tag
 end
 
-function protocol.extract_tool_call(text)
-	local _, tag_end, name = find_tool_open(text, 1)
-	if not name then
-		return nil
-	end
-
-	local body, _, raw_content = extract_json_body(text, tag_end + 1, name)
-	if not body then
-		return nil
-	end
-
-	local args = json.object_fields(body)
-	if raw_content then
-		args._raw_content = raw_content
-	end
-
-	return {
-		name = name,
-		args = args,
-		raw = body,
-	}
-end
-
 function protocol.extract_all_tool_calls(text)
 	local calls = {}
 	local search_from = 1
@@ -257,7 +234,8 @@ end
 
 function protocol.validate_tool_calls(calls)
 	for _, tc in ipairs(calls or {}) do
-		local raw_content = tc.args and tc.args._raw_content
+		local raw_content = tc.args and (tc.args._raw_content
+			or (RAW_CONTENT_TOOLS[tc.name] and tc.args.content))
 		if raw_content and not RAW_CONTENT_TOOLS[tc.name] then
 			return false, "tool call " .. tostring(tc.name) .. " contains raw content, but only edit/write support raw content"
 		end
@@ -314,31 +292,6 @@ end
 
 function protocol.strip_tool_results(text)
 	return (text:gsub('%s*<tool_result[^>]*>.-</tool_result>%s*', ""))
-end
-
-function protocol.extract_only_tool_calls_text(text)
-	local parts = {}
-	local search_from = 1
-
-	while true do
-		local tag_start, tag_end, name = find_tool_open(text, search_from)
-		if not tag_start then break end
-
-		local body, body_end = extract_json_body(text, tag_end + 1, name)
-		if body then
-			local close = find_close_tag(text, body_end + 1)
-			if close then
-				parts[#parts + 1] = text:sub(tag_start, close + 11)
-				search_from = close + 12
-			else
-				parts[#parts + 1] = text:sub(tag_start, body_end) .. "\n</tool_call>"
-				search_from = body_end + 1
-			end
-		else
-			search_from = tag_end + 1
-		end
-	end
-	return table.concat(parts, "\n")
 end
 
 function protocol.tool_result_message(name, result, args)

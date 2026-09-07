@@ -6,6 +6,9 @@ local jobs = require("agent.jobs")
 local protocol = require("agent.tool_protocol")
 local session_module = require("agent.session")
 local tui_effects = require("agent.tui_effects")
+local river_divider = require("agent.river_divider")
+local RiverTrace = require("agent.river_trace")
+local json = require("agent.util.json")
 local socket = require("socket")
 local uv = require("luv")
 local lcatui = require("lcatui")
@@ -115,15 +118,17 @@ end
 local function snippet_line(value, limit)
 	value = response_text(value, 1200)
 	for line in (value .. "\n"):gmatch("(.-)\n") do
-		line = line:gsub("^%s*%d+:[%w]+:%s*", ""):gsub("^%s+", ""):gsub("%s+$", "")
-		if line ~= "" then
-			line = line:gsub("%s+", " ")
-			local clipped = lcatui.width.truncate(line, limit or 48)
+		local cleaned = line:gsub("^%s*%d+:[%w]+:%s*", ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if cleaned ~= "" then
+			cleaned = cleaned:gsub("%s+", " ")
+			local clipped = lcatui.width.truncate(cleaned, limit or 48)
 			return clipped
 		end
 	end
 	return ""
 end
+
+local format_duration
 
 local State = {}
 State.__index = State
@@ -136,13 +141,17 @@ function State.new(opts)
 		prompt = "",
 		assistant = "",
 		assistant_stream = "",
-		assistant_started_at = nil,
-		assistant_updated_at = nil,
 		assistant_completed_at = nil,
 		turn_started_at = nil,
 		completion_summary = nil,
+		web_search_started_at = nil,
+		web_search_seen = {},
+		web_search_completed = {},
 		notices = {},
 		plan = nil,
+		journey = nil,
+		journey_phase = nil,
+		journey_detail = nil,
 		tools = {},
 		tools_by_id = {},
 		tool_queues = {},
@@ -166,10 +175,62 @@ function State.new(opts)
 		disturbance = 0,
 		proof = 0,
 		cancelled = false,
+		flywheel = nil,
+		wolf_effect = nil,
+		wolf_enabled = false,
+		wolf_status = nil,
 		input = "",
 		cursor = 0,
 		clock = opts.clock or socket.gettime,
 	}, State)
+end
+
+local FLYWHEEL_RELEASE_SECONDS = {
+	harvest = 3.0,
+	release_cancelled = 2.2,
+}
+
+function State:_set_flywheel(phase, detail)
+	local previous = self.flywheel
+	self.flywheel = {
+		phase = phase,
+		detail = detail,
+		started_at = self.clock(),
+		seed = previous and previous.seed or (self.turn_sequence * 97 + 19),
+	}
+end
+
+function State:flywheel_visual(now)
+	local wheel = self.flywheel
+	if not wheel then return nil end
+	now = tonumber(now) or self.clock()
+	local age = math.max(0, now - (wheel.started_at or now))
+	local release = 0
+	if FLYWHEEL_RELEASE_SECONDS[wheel.phase] then
+		local duration = FLYWHEEL_RELEASE_SECONDS[wheel.phase]
+		release = clamp(age / duration, 0, 1)
+		if age >= duration then self.flywheel = nil; return nil end
+	end
+	return {
+		phase = wheel.phase,
+		detail = wheel.detail,
+		seed = wheel.seed,
+		age = age,
+		birth = clamp(age / 0.85, 0, 1),
+		release = release,
+	}
+end
+
+function State:insanitywolf(active, cycle)
+	self.wolf_enabled = active == true
+	if not active then self.wolf_status = nil end
+	self.wolf_effect = {
+		kind = active and (cycle and "cycle" or "awake") or "caged",
+		cycle = tonumber(cycle),
+		started_at = self.clock(),
+		duration = active and 5.2 or 2.2,
+	}
+	self:notice(active and "insanitywolf · bite through the fucking wall" or "insanitywolf · caged")
 end
 
 function State:_stream(text, kind, tool, duration, meta)
@@ -234,12 +295,60 @@ local function focused_plan_step(plan)
 	return nil
 end
 
+local function valid_journey(value)
+	return type(value) == "table"
+		and tostring(value.destination or "") ~= ""
+		and tostring(value.approach or "") ~= ""
+		and tostring(value.proof or "") ~= ""
+end
+
+function State:_set_journey(value, phase, detail)
+	if valid_journey(value) then
+		self.journey = {
+			destination = compact_text(value.destination, 72),
+			approach = compact_text(value.approach, 72),
+			proof = compact_text(value.proof, 72),
+		}
+	end
+	if self.journey then
+		self.journey_phase = phase or self.journey_phase or "direction"
+		self.journey_detail = detail and compact_text(detail, 72) or self.journey_detail
+	end
+end
+
+local JOURNEY_GLYPHS = {
+	direction = "··◉╮··◇",
+	understanding = "···◌··◇",
+	forming = "····◉━━◆",
+	reconsidering = "··◉╮···◆",
+	rethink = "··◌╯···◆",
+	proving = "······◉━◆",
+	proven = "········✦",
+	landed = "········✦",
+}
+
+function State:journey_label()
+	local journey = self.journey
+	if not journey then return nil end
+	local phase = self.journey_phase or "direction"
+	local detail = self.journey_detail
+	local movement
+	if phase == "understanding" then movement = detail and ("reading " .. detail) or "finding the grain"
+	elseif phase == "forming" then movement = detail and ("forming " .. detail) or "the implementation is taking shape"
+	elseif phase == "reconsidering" then movement = detail and ("following the evidence into " .. detail) or "the evidence bends the route"
+	elseif phase == "rethink" then movement = detail and ("reworking after " .. detail) or "the route needs another shape"
+	elseif phase == "proving" then movement = "asking it to prove itself"
+	elseif phase == "proven" or phase == "landed" then movement = detail or journey.proof
+	else movement = "the shape appears · " .. journey.approach end
+	return table.concat({ JOURNEY_GLYPHS[phase] or JOURNEY_GLYPHS.direction, journey.destination, "·", movement }, " ")
+end
+
 local function verification_label(command)
 	command = tostring(command or ""):lower()
 	if command:find("build", 1, true) then return "build passed" end
 	if command:find("test", 1, true) or command:find("spec", 1, true) then return "tests passed" end
 	if command:find("lint", 1, true) or command:find("check", 1, true) then return "checks passed" end
-	return "verified"
+	return "command exited 0"
 end
 
 function State:_remember_file(path, update)
@@ -349,9 +458,18 @@ function State:divider_status(now)
 	if self.resolved_recovery and (tonumber(now) or 0) <= self.resolved_recovery.expires_at then
 		return "◆ " .. self.resolved_recovery.filename .. " · recovered", "resolved"
 	end
-	if self.mode ~= "listening" and self.mode ~= "complete" and self.mode ~= "cancelled" then
-		local item = focused_plan_step(self.plan)
-		if item then return "◉ " .. compact_text(item.step, 64), "task" end
+	if self.wolf_enabled and type(self.wolf_status) == "table" then
+		local wolf = self.wolf_status
+		local shipped = wolf.phase == "shipped"
+		local phase = shipped and "SHIPPED" or "HUNT"
+		local cycle = tostring(tonumber(wolf.cycle) or 1) .. "/3"
+		local detail_kind = shipped and wolf.proof and "proof" or "payoff"
+		local detail = shipped and wolf.proof or wolf.payoff
+		return "🐺 " .. phase .. " " .. cycle .. " · " .. compact_text(wolf.title, 34)
+			.. " · " .. detail_kind .. ": " .. compact_text(detail, 54), "wolf"
+	end
+	if self.journey and self.mode ~= "listening" and self.mode ~= "cancelled" then
+		return self:journey_label(), "journey"
 	end
 	return nil, "quiet"
 end
@@ -407,8 +525,11 @@ function State:_finish_streams(tool, event)
 			self:_stream(filename, kind, tool, 5.2, { file = true, verb = name, personality = tool_personality(name) })
 		end
 	elseif name == "update_plan" and not failed then
+		local journey = valid_journey(result.journey) and result.journey or valid_journey(args.journey) and args.journey or nil
 		local item = focused_plan_step(result.plan or args.plan)
-		if item then
+		if journey then
+			self:_stream(journey.destination, "journey", tool, 6.2, { task = true, personality = "waypoint" })
+		elseif item then
 			self:_stream(item.step, "task", tool, 6.2, { task = true, status = item.status, personality = "waypoint" })
 		end
 	elseif name == "run" or name == "shell" then
@@ -436,6 +557,9 @@ end
 
 function State:submit(text)
 	self.turn_sequence = self.turn_sequence + 1
+	self.river_trace = RiverTrace.new()
+	local river_designs = river_divider.names()
+	self.river_design = river_designs[math.random(#river_designs)]
 	self.prompt = compact_text(text, 240)
 	self.assistant_stream = ""
 	self.failure = nil
@@ -444,7 +568,15 @@ function State:submit(text)
 	self.proof = 0
 	self.cancelled = false
 	self.turn_started_at = self.clock()
+	self:_set_flywheel("task", { prompt = self.prompt })
 	self.completion_summary = nil
+	self.plan = nil
+	self.journey = nil
+	self.journey_phase = nil
+	self.journey_detail = nil
+	self.web_search_started_at = nil
+	self.web_search_seen = {}
+	self.web_search_completed = {}
 	self.handoffs = {}
 	self.transfers = {}
 	self.turn_touched_paths = {}
@@ -476,9 +608,6 @@ end
 
 function State:model_stream(text)
 	if not text or text == "" then return end
-	local now = self.clock()
-	if self.assistant_stream == "" then self.assistant_started_at = now end
-	self.assistant_updated_at = now
 	self.assistant_completed_at = nil
 	self.mode = "streaming"
 	self.model_phase = "assistant streaming"
@@ -488,12 +617,56 @@ end
 function State:reviewing(info)
 	self.mode = "reviewing"
 	self.model_phase = compact_text(info and info.status or "model continuing after tools", 80)
+	if info and info.checkpoint_cycle then
+		self:insanitywolf(true, info.checkpoint_cycle)
+	end
+end
+
+local WEB_SEARCH_EYES = {
+	"( o  o )",
+	"(o  o  )",
+	"( o  o )",
+	"(  o  o)",
+	"(  oo  )",
+	"( -  - )",
+}
+
+local function web_search_counts(state)
+	local opened, returned = 0, 0
+	for _ in pairs(state.web_search_seen) do opened = opened + 1 end
+	for _ in pairs(state.web_search_completed) do returned = returned + 1 end
+	return opened, returned
+end
+
+function State:_web_search_label(now)
+	now = tonumber(now) or self.clock()
+	local opened, returned = web_search_counts(self)
+	local age = math.max(0, now - (self.web_search_started_at or now))
+	local eye_index = math.floor(age * 2.5) % #WEB_SEARCH_EYES + 1
+	local count = string.format("%d opened so far", opened)
+	if returned > 0 then count = count .. string.format(" · %d back", returned) end
+	return string.format("web search %s · %s · %s", WEB_SEARCH_EYES[eye_index], count, format_duration(age))
 end
 
 function State:model_activity(activity)
-	if not activity or not activity.status then return end
+	if not activity then return end
+	if activity.type == "web_search" then
+		local key = tostring(activity.id or activity.output_index or "search")
+		if not self.web_search_started_at then self.web_search_started_at = self.clock() end
+		self.web_search_seen[key] = true
+		if activity.phase == "completed" then self.web_search_completed[key] = true end
+		self.model_phase = self:_web_search_label()
+		self.mode = "composing"
+		return
+	end
+	if not activity.status then return end
 	self.mode = "composing"
 	self.model_phase = compact_text(activity.status, 80)
+end
+
+function State:display_model_phase()
+	if self.mode ~= "composing" or not self.web_search_started_at then return self.model_phase end
+	return self:_web_search_label()
 end
 
 function State:_resolve_tool(event)
@@ -505,6 +678,7 @@ function State:_resolve_tool(event)
 end
 
 function State:tool_event(event)
+	if self.river_trace then self.river_trace:event(event, self.clock()) end
 	if not event or not event.name then return nil end
 	local tool
 	if event.phase == "start" then
@@ -516,14 +690,36 @@ function State:tool_event(event)
 			args = compact_args(event.name, event.args),
 			status = "active",
 			started_at = self.clock(),
+			batch_id = event.batch_id,
+			model_index = tonumber(event.model_index),
+			sequence = self.tool_sequence,
 			lane = ((self.tool_sequence - 1) % 6) + 1,
 		}
 		self.tools[#self.tools + 1] = tool
 		self.tools_by_id[id] = tool
-		local key = event_key(event)
-		self.tool_queues[key] = self.tool_queues[key] or {}
-		self.tool_queues[key][#self.tool_queues[key] + 1] = tool
+		local queue_key = event_key(event)
+		self.tool_queues[queue_key] = self.tool_queues[queue_key] or {}
+		self.tool_queues[queue_key][#self.tool_queues[queue_key] + 1] = tool
 		local event_args = event.args or {}
+		if event.name == "update_plan" and valid_journey(event_args.journey) then
+			self:_set_journey(event_args.journey, "direction", event_args.journey.approach)
+		end
+		if event.name == "update_plan" and type(event_args.wolf) == "table" then
+			self.wolf_status = {
+				phase = "hunt", cycle = self.wolf_status and self.wolf_status.cycle or 1,
+				title = event_args.wolf.title, payoff = event_args.wolf.payoff, proof = event_args.wolf.proof,
+			}
+		end
+		if self.journey then
+			if FILE_MUTATION_TOOLS[event.name] and event_args.path then
+				self:_set_journey(nil, "forming", basename(event_args.path))
+			elseif event.name == "read" or event.name == "grep" or event.name == "find" or event.name == "ls" then
+				local detail = event_args.path and basename(event_args.path) or event_args.pattern
+				self:_set_journey(nil, self.proof > 0 and "reconsidering" or "understanding", detail)
+			elseif (event.name == "run" or event.name == "shell") and next(self.turn_changed_paths) ~= nil then
+				self:_set_journey(nil, "proving", self.journey.proof)
+			end
+		end
 		if FILE_TOOLS[event.name] and event_args.path then
 			local mutation = FILE_MUTATION_TOOLS[event.name]
 			self:_remember_file(event_args.path, {
@@ -537,7 +733,10 @@ function State:tool_event(event)
 		local key = recovery_key(event_args)
 		local recovery = key and self.recoveries[key]
 		local plan_item = event.name == "update_plan" and focused_plan_step(event_args.plan)
-		if plan_item then
+		if event.name == "update_plan" and valid_journey(event_args.journey) then
+			self.plan = event_args.plan
+			self:_stream(event_args.journey.destination, "journey", tool, nil, { task = true, personality = "waypoint" })
+		elseif plan_item then
 			self.plan = event_args.plan
 			self:_stream(plan_item.step, "task_active", tool, nil, { task = true, status = plan_item.status, personality = "waypoint" })
 		elseif recovery and event.name == "read" then
@@ -572,6 +771,18 @@ function State:tool_event(event)
 				end
 			end
 		end
+	elseif event.phase == "progress" then
+		tool = self:_resolve_tool(event)
+		if not tool then return nil end
+		local progress = type(event.progress) == "table" and event.progress or {}
+		tool.elapsed_ms = tonumber(progress.elapsed_ms)
+		tool.output_bytes = tonumber(progress.output_bytes) or 0
+		tool.output_chunks = tonumber(progress.output_chunks) or 0
+		tool.result = format_duration((tool.elapsed_ms or 0) / 1000)
+		if self.journey and (event.name == "run" or event.name == "shell") then
+			local pulse = tool.output_chunks > 0 and "results arriving" or "still running"
+			self:_set_journey(nil, "proving", pulse .. " · " .. tool.result)
+		end
 	else
 		tool = self:_resolve_tool(event)
 		if not tool then
@@ -579,7 +790,9 @@ function State:tool_event(event)
 			local id = tostring(event.call_id or ("tool-" .. tostring(self.tool_sequence)))
 			tool = {
 				id = id, name = tostring(event.name), args = compact_args(event.name, event.args),
-				started_at = self.clock(), lane = ((self.tool_sequence - 1) % 6) + 1,
+				started_at = self.clock(), batch_id = event.batch_id,
+				model_index = tonumber(event.model_index), sequence = self.tool_sequence,
+				lane = ((self.tool_sequence - 1) % 6) + 1,
 			}
 			self.tools[#self.tools + 1] = tool
 			self.tools_by_id[id] = tool
@@ -588,6 +801,7 @@ function State:tool_event(event)
 		tool.status = event.result and event.result.is_error and "error"
 			or (event.result and event.result.ui_state == "deferred" and "deferred" or "ok")
 		tool.finished_at = self.clock()
+		tool.duration_ms = tonumber(event.duration_ms)
 		self:_finish_streams(tool, event)
 		local args, result = event.args or {}, event.result or {}
 		if FILE_TOOLS[event.name] and args.path then
@@ -604,7 +818,17 @@ function State:tool_event(event)
 				self.turn_changed_paths[tostring(args.path)] = true
 				-- A later mutation invalidates earlier proof from the same turn.
 				self.verification_label, self.verification, self.proof = nil, nil, 0
+				if self.journey then
+					local changed = 0
+					for _ in pairs(self.turn_changed_paths) do changed = changed + 1 end
+					local detail = basename(args.path) .. (changed > 1 and (" +" .. tostring(changed - 1)) or "")
+					self:_set_journey(nil, "forming", detail)
+				end
 			end
+		end
+		if self.journey and (event.name == "read" or event.name == "grep" or event.name == "find" or event.name == "ls") then
+			local detail = args.path and basename(args.path) or args.pattern
+			self:_set_journey(nil, self.proof > 0 and "reconsidering" or "understanding", detail)
 		end
 		local queue = self.tool_queues[event_key(event)]
 		if queue then
@@ -614,6 +838,12 @@ function State:tool_event(event)
 		end
 		if event.name == "update_plan" and event.result and type(event.result.plan) == "table" then
 			self.plan = event.result.plan
+			if valid_journey(event.result.journey) then
+				self:_set_journey(event.result.journey, "direction", event.result.journey.approach)
+			end
+		end
+		if event.name == "update_plan" and event.result and type(event.result.wolf_status) == "table" then
+			self.wolf_status = event.result.wolf_status
 		end
 		if event.name == "run" or event.name == "shell" then
 			if event.result and event.result.is_error then
@@ -623,6 +853,9 @@ function State:tool_event(event)
 				self.disturbance = 1
 				self.proof = 0
 				self.mode = "failed"
+				if self.journey and next(self.turn_changed_paths) ~= nil then
+					self:_set_journey(nil, "rethink", result.summary or "verification failed")
+				end
 			else
 				self.verification = tool.result ~= "" and tool.result or "verification passed"
 				self.verification_label = verification_label((event.args or {}).command)
@@ -630,6 +863,9 @@ function State:tool_event(event)
 				self.disturbance = 0
 				self.proof = 1
 				self.mode = "verified"
+				if self.journey and next(self.turn_changed_paths) ~= nil then
+					self:_set_journey(nil, "proven", self.verification_label)
+				end
 				for path in pairs(self.turn_changed_paths) do
 					local memory = self.file_memory[path]
 					if memory then
@@ -642,7 +878,9 @@ function State:tool_event(event)
 		end
 	end
 	if event.phase == "start" then self.mode = "tools" end
-	self.model_phase = event.phase == "start" and "tools active" or "reviewing results"
+	self.model_phase = event.phase == "start" and "tools active"
+		or event.phase == "progress" and "tools active · " .. (tool and tool.result or "working")
+		or "reviewing results"
 	while #self.tools > 18 do
 		local removed = table.remove(self.tools, 1)
 		if removed.status ~= "active" then self.tools_by_id[removed.id] = nil end
@@ -650,7 +888,7 @@ function State:tool_event(event)
 	return tool
 end
 
-local function format_duration(seconds)
+format_duration = function(seconds)
 	seconds = math.max(0, tonumber(seconds) or 0)
 	if seconds < 60 then return tostring(math.floor(seconds + 0.5)) .. "s" end
 	local minutes = math.floor(seconds / 60)
@@ -669,6 +907,8 @@ function State:assistant_complete(text, metrics)
 	self.assistant = response_text(text, 6000)
 	self.assistant_stream = ""
 	self.assistant_completed_at = self.clock()
+	if self.journey then self:_set_journey(nil, "landed", self.verification_label or self.journey.proof) end
+	self:_set_flywheel("harvest", { verification = self.verification_label })
 	metrics = metrics or {}
 	local started_at = tonumber(metrics.started_at) or self.turn_started_at
 	local elapsed = tonumber(metrics.elapsed) or (started_at and self.assistant_completed_at - started_at)
@@ -694,6 +934,7 @@ function State:cancel(reason)
 	self.cancelled = true
 	self.mode = "cancelled"
 	self.model_phase = compact_text(reason or "cancelled", 80)
+	self:_set_flywheel("release_cancelled", { reason = reason })
 	for _, tool in ipairs(self.tools) do
 		if tool.status == "active" then tool.status = "cancelled" end
 	end
@@ -727,6 +968,31 @@ function Editor:display_cursor()
 	local prefix = {}
 	for i = 1, self.cursor do prefix[#prefix + 1] = self.chars[i] end
 	return lcatui.width.string(table.concat(prefix))
+end
+function Editor:layout(columns, max_rows)
+	local lines, row, col = { {} }, 1, 0
+	local cursor_row, cursor_col
+	for index = 1, #self.chars + 1 do
+		local char = self.chars[index]
+		local char_width = char and lcatui.width.string(char) or 1
+		if col + char_width > columns then
+			row, col = row + 1, 0
+			lines[row] = {}
+		end
+		if index == self.cursor + 1 then cursor_row, cursor_col = row, col end
+		if char == "\n" then
+			row, col = row + 1, 0
+			lines[row] = {}
+		elseif char then
+			lines[row][#lines[row] + 1] = char
+			col = col + char_width
+		end
+	end
+	local count = math.min(#lines, max_rows)
+	local first = math.max(1, math.min(cursor_row - count + 1, #lines - count + 1))
+	local visible = {}
+	for index = first, first + count - 1 do visible[#visible + 1] = table.concat(lines[index]) end
+	return visible, cursor_row - first + 1, cursor_col
 end
 function Editor:set(value)
 	self.chars = lcatui.width.chars(value or "")
@@ -788,7 +1054,7 @@ function Input.new(editor)
 	return setmetatable({ editor = editor, buffer = "", paste = false, paste_buffer = "" }, Input)
 end
 
-function Input:_action(name, busy)
+function Input:_action(name)
 	local editor = self.editor
 	if name == "up" then editor:history_move(-1)
 	elseif name == "down" then editor:history_move(1)
@@ -817,7 +1083,7 @@ function Input:feed(byte, busy)
 	self.buffer = self.buffer .. byte
 	if self.buffer:sub(1, 1) == "\27" then
 		local action = ESCAPES[self.buffer]
-		if action then self.buffer = ""; return self:_action(action, busy) end
+		if action then self.buffer = ""; return self:_action(action) end
 		if escape_prefix(self.buffer) and #self.buffer < 8 then return nil end
 		self.buffer = ""
 		return nil
@@ -1036,13 +1302,15 @@ local function living_divider(buffer, row, width, label, kind, time, previous_la
 		retry = rgb(190, 142, 231, { "bold" }),
 		resolved = rgb(91, 224, 169, { "bold" }),
 		task = rgb(194, 158, 224),
+		journey = rgb(118, 189, 214, { "bold" }),
 		active = rgb(105, 180, 184),
+		wolf = rgb(255, 74, 126, { "bold" }),
 	}
 	local text = " " .. lcatui.width.truncate(label, math.max(12, width - 16)) .. " "
 	local text_width = lcatui.width.string(text)
 	local start = math.max(2, math.floor((width - text_width) / 2) + 1)
 	local cell_style = styles[kind] or styles.active
-	if previous_label and kind == "task" and (molt_progress or 1) < 1 then
+	if previous_label and (kind == "task" or kind == "journey") and (molt_progress or 1) < 1 then
 		local progress = clamp(tonumber(molt_progress) or 0, 0, 1)
 		local chars = lcatui.width.chars(text)
 		local centre = (#chars + 1) / 2
@@ -1216,19 +1484,233 @@ local function conduct_streams(streams, world_rows)
 	return foreground, selected, ordered, rows
 end
 
+local TOOL_STAGE_SPINNERS = { "◐", "◓", "◑", "◒" }
+
+local function tool_stage_batch(tools, now)
+	local latest_batch
+	for index = #tools, 1, -1 do
+		if tools[index].batch_id ~= nil then latest_batch = tools[index].batch_id; break end
+	end
+	local staged = {}
+	for _, tool in ipairs(tools) do
+		local same_batch = latest_batch == nil or tool.batch_id == latest_batch
+		local recent = tool.status == "active" or (tool.finished_at and now - tool.finished_at < 6)
+		if same_batch and recent then staged[#staged + 1] = tool end
+	end
+	table.sort(staged, function(a, b)
+		local ai, bi = a.model_index or a.sequence or 0, b.model_index or b.sequence or 0
+		if ai == bi then return (a.sequence or 0) < (b.sequence or 0) end
+		return ai < bi
+	end)
+	return staged, latest_batch
+end
+
+local function tool_stage_label(tool, index, width, now, time)
+	local active = tool.status == "active"
+	local glyph = active and TOOL_STAGE_SPINNERS[(math.floor(time * 8 + index) % #TOOL_STAGE_SPINNERS) + 1]
+		or tool.status == "error" and "×"
+		or tool.status == "cancelled" and "■"
+		or tool.status == "deferred" and "↷" or "✓"
+	local elapsed_ms = tool.duration_ms
+	if active then elapsed_ms = math.max(0, (now - (tool.started_at or now)) * 1000) end
+	local timing = elapsed_ms and (elapsed_ms < 1000 and (tostring(math.floor(elapsed_ms + 0.5)) .. "ms")
+		or string.format("%.1fs", elapsed_ms / 1000)) or nil
+	local identity = string.format("%02d %s %s", tool.model_index or index, glyph, tool.name)
+	local room = math.max(0, width - lcatui.width.string(identity) - (timing and lcatui.width.string(timing) + 3 or 2))
+	local detail = room > 3 and lcatui.width.truncate(tool.args or "", room) or ""
+	local body = identity .. (detail ~= "" and (" · " .. detail) or "")
+	if timing then body = body .. " · " .. timing end
+	return lcatui.width.truncate(body, math.max(1, width))
+end
+
+local function draw_tool_stage(buffer, tools, time, now)
+	if #tools == 0 then return false end
+	local rows = math.min(buffer.height, #tools)
+	local columns = math.ceil(#tools / rows)
+	local cell_width = math.max(8, math.floor(buffer.width / columns))
+	for index, tool in ipairs(tools) do
+		local column = math.floor((index - 1) / rows)
+		local row = (index - 1) % rows + 1
+		local left = column * cell_width + 1
+		local right = column == columns - 1 and buffer.width or math.min(buffer.width, left + cell_width - 2)
+		local inner_width = math.max(1, right - left - 2)
+		local age = math.max(0, now - (tool.started_at or now))
+		local arrival = clamp(age / 0.38, 0, 1)
+		local eased = 1 - (1 - arrival) ^ 3
+		local offset = math.floor((1 - eased) * math.min(6, inner_width / 3))
+		local label = tool_stage_label(tool, index, inner_width, now, time)
+		local active = tool.status == "active"
+		local style = tool.status == "error" and rgb(241, 79, 115, { "bold" })
+			or tool.status == "deferred" and rgb(218, 158, 93, { "bold" })
+			or active and rgb(91, 224, 231, { "bold" })
+			or rgb(91, 224, 169, { "bold" })
+		local quiet = tool.status == "error" and rgb(151, 48, 79, { "dim" })
+			or active and rgb(55, 136, 148, { "dim" }) or rgb(47, 129, 99, { "dim" })
+		local x = clamp(left + 1 + offset, left + 1, math.max(left + 1, right - lcatui.width.string(label)))
+		buffer:set(row, left, active and "⟪" or "[", quiet)
+		buffer:write(row, x, label, style, math.max(1, right - x))
+		buffer:set(row, right, active and "⟫" or "]", quiet)
+		if active and right - left > 8 then
+			local spark = math.floor(time * 6 + index) % 2 == 0 and left or right
+			buffer:set(row, spark, "✦", rgb(238, 190, 91, { "bold" }))
+		elseif tool.finished_at and now - tool.finished_at < 0.9 then
+			local burst = math.floor((now - tool.finished_at) * 10)
+			for direction = -1, 1, 2 do
+				local spark = clamp((direction < 0 and left or right) + direction * burst, 1, buffer.width)
+				buffer:set(row, spark, burst < 5 and "✦" or "·", style)
+			end
+		end
+	end
+	return true
+end
+
+tui._draw_tool_stage = draw_tool_stage
+
 local App = {}
 App.__index = App
 
 local STRIP_FLOW_ROWS = 4
 local STRIP_ROWS = STRIP_FLOW_ROWS + 4
 
+local WOLF_PHRASES = {
+	"BITE THROUGH THE FUCKING WALL.",
+	"NO TINY SAFE SHIT. MUTATE THE PRODUCT.",
+	"RIP OUT FRICTION. MAKE IT HOWL.",
+	"STOP POLISHING. UNLEASH THE FUCKING MONSTER.",
+}
+
+local function draw_insanitywolf(buffer, width, rows, effect, now)
+	local age = math.max(0, now - (effect.started_at or now))
+	if age > (effect.duration or 0) then return false end
+	local frame = math.floor(age * 7)
+	local caged = effect.kind == "caged"
+	local eyes = { "@", "#", "X", "*", "0" }
+	local eye = caged and "-" or eyes[(frame % #eyes) + 1]
+	local phrase = caged and "WOLF CAGED. NORMAL MODE."
+		or WOLF_PHRASES[(math.floor(age / 0.42) % #WOLF_PHRASES) + 1]
+	local howl = ({ "A W O", "A W O O", "A W O O O", "A W O O O O O" })[(math.floor(age * 5) % 4) + 1]
+	local cycle = caged and "  TEETH SHEATHED"
+		or effect.cycle and (frame % 6 < 3 and ("  RAMPAGE " .. tostring(effect.cycle) .. "/3") or ("  " .. howl))
+		or "  THE WOLF IS FUCKING LOOSE"
+	local lines = {
+		"          / \\__" .. (frame % 3 == 0 and "  !!!" or ""),
+		"   ______/ " .. eye .. "  \\___   " .. phrase,
+		"  /  _          _  O   " .. cycle,
+		" /__/ \\________/ \\_\\  " .. (caged and "BACK TO THE QUIET CURRENT." or "WEAK SHIT DIES HERE. UNLEASH THE MONSTER."),
+	}
+	local backgrounds = {
+		rgb(82, 17, 45),
+		rgb(45, 8, 68),
+		rgb(103, 20, 25),
+		rgb(28, 7, 44),
+	}
+	buffer:fill(1, 1, rows, width, " ", backgrounds[(frame % #backgrounds) + 1])
+	if not caged then
+		local scars = { "/", "\\", "X", "!", "#", "<", ">" }
+		local scar_count = math.min(34, math.max(12, math.floor(width / 4)))
+		for index = 1, scar_count do
+			local x = 1 + ((index * 19 + frame * 13 + index * frame) % math.max(1, width - 1))
+			local y = 1 + ((index * 7 + frame * 3) % rows)
+			local glyph = scars[((index + frame * 2) % #scars) + 1]
+			buffer:set(y, x, glyph, rgb(126 + (frame * 17 % 80), 22, 74 + (index * 11 % 90), { "bold" }))
+		end
+	end
+	local shake = caged and 0 or ((frame * 3) % 5) - 2
+	for row = 1, math.min(rows, #lines) do
+		local text = lcatui.width.truncate(lines[row], math.max(1, width - 4))
+		local text_width = lcatui.width.string(text)
+		local row_shake = row % 2 == 0 and shake or -shake
+		local col = clamp(math.floor((width - text_width) / 2) + 1 + row_shake, 2, math.max(2, width - text_width))
+		local hot = frame % 2 == 0
+		local style = row == 2 and rgb(255, hot and 55 or 112, hot and 126 or 55, { "bold" })
+			or row == 3 and rgb(255, hot and 179 or 82, hot and 71 or 145, { "bold" })
+			or rgb(hot and 232 or 178, hot and 55 or 92, hot and 201 or 244, { "bold" })
+		if not caged and text_width < width - 8 then
+			buffer:write(row, clamp(col - row_shake * 2, 2, width - text_width), text,
+				rgb(78, 23, 102, { "dim" }), math.max(1, width - col + 1))
+		end
+		buffer:write(row, col, text, style, math.max(1, width - col + 1))
+		if width > 20 then
+			local fang_col = (frame + row) % 2 == 0 and 2 or width - 1
+			buffer:set(row, fang_col, frame % 2 == 0 and "/" or "\\", rgb(150, 31, 78, { "bold" }))
+		end
+	end
+	return true
+end
+
+local function flywheel_anchor(width, rows, wheel, time)
+	local compact = width < 72
+	local margin = compact and 5 or 11
+	local seed_phase = (tonumber(wheel and wheel.seed) or 0) * 0.013
+	local release = tonumber(wheel and wheel.release) or 0
+	local x = width - margin + math.sin(time * 0.73 + seed_phase) * (compact and 0.45 or 0.85) + release * (compact and 2 or 5)
+	local y = (rows + 1) / 2 + math.sin(time * 0.91 + seed_phase * 1.7) * 0.32
+	return x, y, compact
+end
+
+local function flywheel_style(phase, quiet)
+	local attrs = quiet and { "dim" } or { "bold" }
+	if phase == "release_cancelled" then return rgb(76, 119, 129, attrs) end
+	if phase == "harvest" then return rgb(91, 205, 201, attrs) end
+	return rgb(181, 137, 218, attrs)
+end
+
+local function draw_flywheel(buffer, width, rows, wheel, time)
+	if not wheel or rows < 3 then return false end
+	local centre_x, centre_y, compact = flywheel_anchor(width, rows, wheel, time)
+	local seed = tonumber(wheel.seed) or 0
+	local release = clamp(tonumber(wheel.release) or 0, 0, 1)
+	local birth = clamp(tonumber(wheel.birth) or 0, 0, 1)
+	local eased_birth = 1 - (1 - birth) ^ 3
+	local radius_x = (compact and 3.6 or 8.2) * eased_birth * (1 + release * 0.7)
+	local radius_y = 1.3 * eased_birth * (1 + release * 0.35)
+	local speed = 1.25
+	local rotation = time * speed + seed * 0.021
+	local glyphs = { "·", "⠁", "⠂", "⠄", "⡀", "⠐" }
+	local points = compact and 8 or 13
+	local pulse = math.floor((time * 4 + seed) % points) + 1
+	for index = 1, points do
+		local missing = (index * 11 + seed) % 7 == 0
+		local shed_threshold = ((index * 29 + seed * 7) % 101) / 100
+		if not missing and shed_threshold >= release * 0.88 then
+			local angle = rotation + (index - 1) / points * math.pi * 2
+			local individual = math.sin(time * (0.43 + index * 0.017) + seed + index) * 0.34
+			local x = clamp(math.floor(centre_x + math.cos(angle) * (radius_x + individual) + 0.5), 1, width)
+			local y = clamp(math.floor(centre_y + math.sin(angle) * radius_y + 0.5), 1, rows)
+			local bright = index == pulse and release < 0.72
+			local glyph = bright and "◇"
+				or glyphs[(index + seed) % #glyphs + 1]
+			buffer:set(y, x, glyph, flywheel_style(wheel.phase, not bright))
+		end
+	end
+
+	local centre_row = clamp(math.floor(centre_y + 0.5), 1, rows)
+	local centre_col = clamp(math.floor(centre_x + 0.5), 1, width)
+	if release < 0.8 then
+		local core_glyph = wheel.phase == "release_cancelled" and "·" or "◇"
+		buffer:set(centre_row, centre_col, core_glyph, flywheel_style(wheel.phase, false))
+	end
+	if not compact and release < 0.48 then
+		local labels = { task = "task", harvest = "evidence" }
+		local label = labels[wheel.phase]
+		if label then
+			local label_width = lcatui.width.string(label)
+			local label_col = clamp(math.floor(centre_x - label_width / 2 + 0.5), 1, width - label_width + 1)
+			buffer:write(centre_row, label_col, label, flywheel_style(wheel.phase, false), label_width)
+		end
+	end
+	return true
+end
+
+tui._draw_flywheel = draw_flywheel
+
 function App.new(opts)
 	opts = opts or {}
-	local owns_backend = opts.backend == nil
 	local backend = opts.backend or lcatui.backends.posix.new()
-	local requested_effect = opts.effect or "drift"
+	local effect_random = opts.effect_random or math.random
+	local requested_effect = opts.effect or "auto"
 	local effect_auto = requested_effect == "auto"
-	local effect = effect_auto and "drift" or requested_effect
+	local effect = effect_auto and EFFECT_NAMES[effect_random(#EFFECT_NAMES)] or requested_effect
 	if not tui_effects.known(effect) then
 		error("unknown TUI effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")")
 	end
@@ -1246,6 +1728,7 @@ function App.new(opts)
 		effect = effect,
 		effect_auto = effect_auto,
 		effect_auto_turns = 0,
+		effect_random = effect_random,
 		effect_transition_from = nil,
 		effect_transition_age = 0,
 		flow_width = nil,
@@ -1260,7 +1743,6 @@ function App.new(opts)
 		frame_timer = nil,
 		stdin_poll = nil,
 		input_reader = opts.input_reader,
-		owns_backend = owns_backend,
 		exit_requested = false,
 		cancel_requested = false,
 		submitted = {},
@@ -1274,6 +1756,9 @@ function App.new(opts)
 		divider_previous_label = nil,
 		divider_molt_started = 0,
 		focus_path = nil,
+		tool_stage = opts.tool_stage == true,
+		staged_tools = {},
+		staged_batch_id = nil,
 	}, App)
 end
 
@@ -1337,13 +1822,22 @@ function App:set_effect_auto(enabled)
 	return true
 end
 
+function App:set_tool_stage(enabled)
+	self.tool_stage = enabled == true
+	self.state:notice("tool stage · " .. (self.tool_stage and "on" or "off"))
+	return true
+end
+
 function App:auto_advance_effect()
 	if not self.effect_auto then return false end
 	if #self.state:active_tools() > 0 or self.state.failure or next(self.state.recoveries) ~= nil then return false end
 	self.effect_auto_turns = self.effect_auto_turns + 1
-	if self.effect_auto_turns == 1 then return false end
-	self:next_effect()
-	return true
+	if self.effect_auto_turns == 1 or self.effect_random() >= 0.2 then return false end
+	local alternatives = {}
+	for _, name in ipairs(EFFECT_NAMES) do
+		if name ~= self.effect then alternatives[#alternatives + 1] = name end
+	end
+	return self:set_effect(alternatives[self.effect_random(#alternatives)])
 end
 
 function App:focus_next()
@@ -1371,7 +1865,8 @@ end
 function App:_divider_transition(label, kind)
 	kind = kind or "quiet"
 	if label ~= self.divider_label or kind ~= self.divider_kind then
-		self.divider_previous_label = self.divider_kind == "task" and kind == "task"
+		self.divider_previous_label = (self.divider_kind == "task" and kind == "task"
+			or self.divider_kind == "journey" and kind == "journey")
 			and self.divider_label and label and self.divider_label ~= label and self.divider_label or nil
 		self.divider_label, self.divider_kind = label, kind
 		self.divider_molt_started = self.flow_time
@@ -1388,10 +1883,17 @@ function App:render(frame_dt)
 	local width, terminal_height = self:_size()
 	local height = math.min(STRIP_ROWS, terminal_height)
 	local world_rows = math.max(3, height - 4)
+	local input_lines, editor_row, editor_col = self.editor:layout(width - 10,
+		math.max(1, math.min(5, terminal_height - height + 1)))
+	height = height + #input_lines - 1
 	local top_divider_row, flow_top = 1, 2
-	local divider_row, input_row, status_row = world_rows + 2, world_rows + 3, world_rows + 4
+	local divider_row, input_row, status_row = world_rows + 2, world_rows + 3, height
 	local notice = self.state.notices[#self.state.notices]
 	local state_now = self.state.clock()
+	local flywheel = self.state:flywheel_visual(state_now)
+	local wolf_active = self.state.wolf_effect
+		and state_now - (self.state.wolf_effect.started_at or state_now) <= (self.state.wolf_effect.duration or 0)
+	if self.state.wolf_effect and not wolf_active then self.state.wolf_effect = nil end
 	if notice and notice.created_at and state_now - notice.created_at > 8 then notice = nil end
 	local flow = self:_flow_for(width, world_rows)
 	local now = socket.gettime()
@@ -1437,6 +1939,9 @@ function App:render(frame_dt)
 			if #visible_tools >= world_rows then break end
 		end
 	end
+	local staged_tools, staged_batch_id = {}, nil
+	if self.tool_stage then staged_tools, staged_batch_id = tool_stage_batch(self.state.tools, state_now) end
+	self.staged_tools, self.staged_batch_id = staged_tools, staged_batch_id
 	local vortices = {}
 	local tool_positions = {}
 	for _, tool in ipairs(visible_tools) do
@@ -1471,6 +1976,16 @@ function App:render(frame_dt)
 			resolved = memory.state == "verified", memory = true,
 		}
 	end
+	if flywheel then
+		local wheel_x, wheel_y = flywheel_anchor(width, world_rows, flywheel, self.flow_time)
+		vortices[#vortices + 1] = {
+			id = "flywheel:" .. tostring(flywheel.seed),
+			x = wheel_x, y = wheel_y,
+			radius = 5 + flywheel.birth * 4,
+			strength = 0.55 * (1 - flywheel.release),
+			direction = 1,
+		}
+	end
 	if failed then
 		vortices[#vortices + 1] = { id = "failure", x = width * 0.5, y = world_rows * 0.5, radius = 15, strength = 1.7, direction = -1, failed = true }
 	end
@@ -1487,7 +2002,8 @@ function App:render(frame_dt)
 	}
 	flow:step(visual_dt, scene)
 
-	local target_palette = listening and { r = 55, g = 151, b = 157 }
+	local target_palette = wolf_active and { r = 205, g = 28, b = 101 }
+		or listening and { r = 55, g = 151, b = 157 }
 		or self.state.proof > 0 and { r = 62, g = 205, b = 153 }
 		or failed and { r = 205, g = 66, b = 101 }
 		or active and { r = 132, g = 69, b = 171 }
@@ -1650,8 +2166,14 @@ function App:render(frame_dt)
 		end
 		buffer:write(row, x, display, stream_style, math.max(1, width - x))
 	end
+	if self.tool_stage and #staged_tools > 0 then
+		draw_tool_stage(buffer, staged_tools, self.flow_time, state_now)
+	end
 
-	if self.state.failure then
+	if wolf_active and not self.state.failure then
+		self.celebration_active = false
+		draw_insanitywolf(buffer, width, world_rows, self.state.wolf_effect, state_now)
+	elseif self.state.failure then
 		self.celebration_active = false
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "× " .. compact_text(self.state.failure, width - 12), rgb(241, 79, 115, { "bold" }))
 	elseif self.state.completion_summary then
@@ -1668,9 +2190,12 @@ function App:render(frame_dt)
 		center(buffer, math.max(1, math.floor(world_rows * 0.5)), "cancelled", rgb(218, 158, 93, { "bold" }))
 	elseif #visible_tools == 0 and active then
 		self.celebration_active = false
-		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state.model_phase, rgb(178, 157, 199, { "bold" }))
+		center(buffer, math.max(1, math.floor(world_rows * 0.5)), self.state:display_model_phase(), rgb(178, 157, 199, { "bold" }))
 	else
 		self.celebration_active = false
+	end
+	if flywheel and not wolf_active and not self.state.failure then
+		draw_flywheel(buffer, width, world_rows, flywheel, self.flow_time)
 	end
 
 	local divider_label, divider_kind = self.state:divider_status(state_now)
@@ -1679,18 +2204,26 @@ function App:render(frame_dt)
 		previous_label, molt_progress, self.state.plan)
 	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
 	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
-	screen:write(input_row, 10, self.editor:text(), rgb(224, 219, 229), width - 10)
+	for index, line in ipairs(input_lines) do
+		screen:write(input_row + index - 1, 10, line, rgb(224, 219, 229), width - 10)
+	end
+	local displayed_phase = self.state:display_model_phase()
 	local status = self.busy and "working · Ctrl-C cancels · input may be queued"
 		or "listening · Enter submits · Ctrl-D exits"
 	local active_count = #self.state:active_tools()
 	if active_count > 0 then status = status .. " · " .. tostring(active_count) .. " tools active" end
+	if self.tool_stage and #staged_tools > 0 then
+		local resolved = 0
+		for _, tool in ipairs(staged_tools) do if tool.status ~= "active" then resolved = resolved + 1 end end
+		status = status .. " · stage " .. tostring(resolved) .. "/" .. tostring(#staged_tools)
+	end
 	local focus_status = self:_focus_status(state_now)
 	if focus_status then status = compact_text(focus_status, width - 18) .. " · Tab next"
 	elseif notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
-	screen:write(status_row, 2, "LCA · " .. self.state.model_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
+	screen:write(status_row, 2, "LCA · " .. displayed_phase .. " · " .. status, rgb(74, 93, 105), width - 2)
 	self.state:set_input(self.editor:text(), self.editor:display_cursor())
-	local cursor_col = math.min(width, 10 + self.editor:display_cursor())
-	local cursor_cell = screen.rows[input_row][cursor_col]
+	local cursor_col = 10 + editor_col
+	local cursor_cell = screen.rows[input_row + editor_row - 1][cursor_col]
 	local cursor_style = cursor_cell.style or rgb(224, 219, 229)
 	cursor_cell.style = { fg = cursor_style.fg, bg = cursor_style.bg, attrs = { "reverse" } }
 	local layout_key = table.concat({ width, height, world_rows, top_divider_row, divider_row, input_row, status_row }, ":")
@@ -1708,17 +2241,286 @@ function App:commit_lines(lines)
 end
 
 function App:commit_user(text)
-	return self:commit_lines({ "you › " .. response_text(text, 6000) })
+	return self:commit_lines({ "", "you › " .. response_text(text, 6000), "" })
+end
+
+local TRANSCRIPT_STYLES = {
+	gutter = rgb(72, 151, 153, { "dim" }),
+	label = rgb(190, 142, 231, { "bold" }),
+	heading = rgb(238, 190, 91, { "bold" }),
+	body = rgb(211, 208, 216),
+	strong = rgb(246, 238, 250, { "bold" }),
+	code = rgb(102, 211, 205, { "bold" }),
+	marker = rgb(176, 128, 219, { "bold" }),
+}
+
+local function transcript_paint(text, transcript_style, color)
+	return lcatui.style.paint(text, transcript_style, color)
+end
+
+local function transcript_inline(text, color)
+	if not color then return text end
+	local parts, position = {}, 1
+	while position <= #text do
+		local bold_at = text:find("**", position, true)
+		local code_at = text:find("`", position, true)
+		local opening, kind
+		if bold_at and (not code_at or bold_at < code_at) then opening, kind = bold_at, "bold"
+		elseif code_at then opening, kind = code_at, "code" end
+		if not opening then
+			parts[#parts + 1] = transcript_paint(text:sub(position), TRANSCRIPT_STYLES.body, true)
+			break
+		end
+		if opening > position then
+			parts[#parts + 1] = transcript_paint(text:sub(position, opening - 1), TRANSCRIPT_STYLES.body, true)
+		end
+		local marker_length = kind == "bold" and 2 or 1
+		local marker = kind == "bold" and "**" or "`"
+		local closing = text:find(marker, opening + marker_length, true)
+		if not closing then
+			parts[#parts + 1] = transcript_paint(text:sub(opening), TRANSCRIPT_STYLES.body, true)
+			break
+		end
+		parts[#parts + 1] = transcript_paint(text:sub(opening + marker_length, closing - 1),
+			kind == "bold" and TRANSCRIPT_STYLES.strong or TRANSCRIPT_STYLES.code, true)
+		position = closing + marker_length
+	end
+	return table.concat(parts)
+end
+
+local function wrap_transcript_text(value, columns)
+	columns = math.max(1, math.floor(tonumber(columns) or 1))
+	local chars = lcatui.width.chars(value)
+	if #chars == 0 then return { "" } end
+	local wrapped, first = {}, 1
+	while first <= #chars do
+		local used, last, last_space = 0, first - 1, nil
+		for index = first, #chars do
+			local char_width = lcatui.width.string(chars[index])
+			if used + char_width > columns then break end
+			used, last = used + char_width, index
+			if chars[index]:match("%s") then last_space = index end
+		end
+		if last < first then last = first end
+		if last == #chars then
+			wrapped[#wrapped + 1] = table.concat(chars, "", first, last)
+			break
+		end
+		if last_space and last_space > first then
+			wrapped[#wrapped + 1] = table.concat(chars, "", first, last_space - 1)
+			first = last_space + 1
+			while first <= #chars and chars[first]:match("%s") do first = first + 1 end
+		else
+			wrapped[#wrapped + 1] = table.concat(chars, "", first, last)
+			first = last + 1
+		end
+	end
+	return wrapped
+end
+
+-- Recognize tables only when a header is followed by a matching delimiter row.
+-- Stack records instead of squeezing prose into terminal-width columns.
+local function transcript_table_cells(line)
+	line = line:match("^%s*(.-)%s*$")
+	if not line:find("|", 1, true) then return nil end
+	if line:sub(1, 1) == "|" then line = line:sub(2) end
+	local cells, cell, index = {}, {}, 1
+	while index <= #line do
+		local char = line:sub(index, index)
+		if char == "\\" and line:sub(index + 1, index + 1) == "|" then
+			cell[#cell + 1] = "|"
+			index = index + 2
+		elseif char == "|" then
+			cells[#cells + 1] = table.concat(cell):match("^%s*(.-)%s*$")
+			cell = {}
+			index = index + 1
+		else
+			cell[#cell + 1] = char
+			index = index + 1
+		end
+	end
+	if #cell > 0 or line:sub(-1) ~= "|" then
+		cells[#cells + 1] = table.concat(cell):match("^%s*(.-)%s*$")
+	end
+	return cells
+end
+
+local function transcript_tables(raw_lines)
+	local result, index, fence_char, fence_length = {}, 1, nil, nil
+	while index <= #raw_lines do
+		local line = raw_lines[index]
+		local fence = line:match("^%s*(```+)") or line:match("^%s*(~~~+)")
+		if fence then
+			if not fence_char then fence_char, fence_length = fence:sub(1, 1), #fence
+			elseif fence:sub(1, 1) == fence_char and #fence >= fence_length
+				and line:match("^%s*[`~]+%s*$") then fence_char, fence_length = nil, nil end
+		end
+		local header = not fence_char and not fence and transcript_table_cells(line)
+		local separator = header and transcript_table_cells(raw_lines[index + 1] or "")
+		local valid = separator and #header >= 2 and #separator == #header
+		if valid then
+			for _, cell in ipairs(separator) do
+				if not cell:match("^:?%-%-%-+:?$") then valid = false end
+			end
+		end
+		local first_row = valid and transcript_table_cells(raw_lines[index + 2] or "")
+		if valid and first_row and #first_row == #header then
+			result[#result + 1] = "### " .. table.concat(header, " → ")
+			index = index + 2
+			while index <= #raw_lines do
+				local row = transcript_table_cells(raw_lines[index])
+				if not row or #row ~= #header then break end
+				result[#result + 1] = "- " .. row[1]
+				for column = 2, #header do
+					local label = #header > 2 and (header[column] .. ": ") or ""
+					result[#result + 1] = "  " .. label .. row[column]
+				end
+				result[#result + 1] = ""
+				index = index + 1
+			end
+		else
+			result[#result + 1] = line
+			index = index + 1
+		end
+	end
+	return result
+end
+
+local function assistant_transcript_lines(text, color, terminal_width)
+	terminal_width = math.max(12, math.floor(tonumber(terminal_width) or 80))
+	local source, raw_lines = response_text(text, 12000), {}
+	for line in (source .. "\n"):gmatch("(.-)\n") do raw_lines[#raw_lines + 1] = line end
+	while #raw_lines > 0 and raw_lines[#raw_lines] == "" do table.remove(raw_lines) end
+	raw_lines = transcript_tables(raw_lines)
+	local lines, first_content = {}, true
+	local function gutter(glyph)
+		return transcript_paint(glyph, TRANSCRIPT_STYLES.gutter, color)
+	end
+	for _, line in ipairs(raw_lines) do
+		local heading = line:match("^%s*#+%s+(.+)$")
+		if first_content and line ~= "" then
+			local opening = heading or line
+			local pieces = wrap_transcript_text(opening, terminal_width - lcatui.width.string("╭ lca › "))
+			for index, piece in ipairs(pieces) do
+				local content = heading and transcript_paint(piece, TRANSCRIPT_STYLES.heading, color)
+					or transcript_inline(piece, color)
+				if index == 1 then
+					lines[#lines + 1] = gutter("╭") .. " "
+						.. transcript_paint("lca ›", TRANSCRIPT_STYLES.label, color) .. " " .. content
+				else
+					lines[#lines + 1] = gutter("│") .. " " .. content
+				end
+			end
+			first_content = false
+		elseif line == "" then
+			lines[#lines + 1] = gutter("│")
+		elseif heading then
+			for index, piece in ipairs(wrap_transcript_text(heading, terminal_width - lcatui.width.string("├─ "))) do
+				lines[#lines + 1] = gutter(index == 1 and "├─" or "│ ") .. " "
+					.. transcript_paint(piece, TRANSCRIPT_STYLES.heading, color)
+			end
+		else
+			local indent, marker, spacing, rest = line:match("^(%s*)([-*])(%s+)(.*)$")
+			if not marker then indent, marker, spacing, rest = line:match("^(%s*)(%d+%.)(%s+)(.*)$") end
+			if marker then
+				local visual_marker = (marker == "-" or marker == "*") and "·" or marker
+				local leader = indent .. visual_marker .. spacing
+				local continuation = indent .. string.rep(" ", lcatui.width.string(visual_marker .. spacing))
+				local pieces = wrap_transcript_text(rest, terminal_width - lcatui.width.string("│ " .. leader))
+				for index, piece in ipairs(pieces) do
+					local content_leader = index == 1
+						and (indent .. transcript_paint(visual_marker, TRANSCRIPT_STYLES.marker, color) .. spacing)
+						or continuation
+					lines[#lines + 1] = gutter("│") .. " " .. content_leader .. transcript_inline(piece, color)
+				end
+			else
+				local padding, body = line:match("^(%s*)(.*)$")
+				padding = padding:sub(1, math.max(0, terminal_width - 3))
+				for _, piece in ipairs(wrap_transcript_text(body, terminal_width - lcatui.width.string("│ " .. padding))) do
+					lines[#lines + 1] = gutter("│") .. " " .. padding .. transcript_inline(piece, color)
+				end
+			end
+		end
+	end
+	if first_content then
+		lines[#lines + 1] = gutter("╭") .. " " .. transcript_paint("lca ›", TRANSCRIPT_STYLES.label, color)
+	end
+	lines[#lines + 1] = gutter("╰")
+	lines[#lines + 1] = ""
+	return lines
+end
+
+tui._assistant_transcript_lines = assistant_transcript_lines
+
+function App:commit_river(status)
+	if not self.state.river_trace or self.river_committed == self.state.turn_sequence then return end
+	self.state.river_trace:finish(self.state.clock())
+	self.river_committed = self.state.turn_sequence
+	local width = select(1, self:_size())
+	local lines = river_divider.render({ width = width, color = self.backend:supports_color(),
+		seed = self.river_seed or "lca", turn = self.state.turn_sequence, status = status,
+		design = self.state.river_design,
+		trace = self.state.river_trace:summary() })
+	lines[#lines + 1] = ""
+	return self:commit_lines(lines)
+end
+
+function App:commit_river_details()
+	local trace = self.state.river_trace
+	if not trace then return self:commit_lines({ "river › no turn recorded yet", "" }) end
+	local width = math.max(12, select(1, self:_size()))
+	local color = self.backend:supports_color()
+	local lines = { "" }
+	local function emit(prefix, text, style)
+		local clean = response_text(text, 12000)
+		for source in (clean .. "\n"):gmatch("(.-)\n") do
+			for _, piece in ipairs(wrap_transcript_text(source, width - lcatui.width.string(prefix))) do
+				lines[#lines + 1] = transcript_paint(prefix, TRANSCRIPT_STYLES.gutter, color)
+					.. transcript_paint(piece, style or TRANSCRIPT_STYLES.body, color)
+				prefix = prefix:gsub("╭", "│"):gsub("├", "│")
+			end
+		end
+	end
+	local summary = trace:summary()
+	emit("╭ ", "river › turn " .. self.state.turn_sequence, TRANSCRIPT_STYLES.heading)
+	emit("│ ", string.format("%d calls · %d failed · %d same args · %.2fs in tools",
+		summary.calls, summary.failed, summary.repeated, summary.seconds))
+	for _, call in ipairs(trace.calls) do
+		emit("│ ", "")
+		emit("├ ", string.format("#%d  %s · %s · %.2fs", call.index, call.name, call.status, call.elapsed or 0),
+			call.status == "failed" and TRANSCRIPT_STYLES.heading or TRANSCRIPT_STYLES.strong)
+		if call.repeated then emit("│   ", "same arguments as #" .. call.repeated, TRANSCRIPT_STYLES.marker) end
+		local keys = {}
+		for key in pairs(call.args) do keys[#keys + 1] = key end
+		table.sort(keys, function(a, b)
+			if a == "command" then return b ~= "command" end
+			if b == "command" then return false end
+			return tostring(a) < tostring(b)
+		end)
+		for _, key in ipairs(keys) do
+			local value = call.args[key]
+			local display = type(value) == "table" and json.encode(value) or tostring(value)
+			if key == "command" or display:find("\n", 1, true) then
+				emit("│   ", tostring(key) .. ":", TRANSCRIPT_STYLES.code)
+				emit("│     ", display)
+			else emit("│   ", tostring(key) .. ": " .. display) end
+		end
+		if call.summary and call.summary ~= "" then
+			emit("│   ", "result:", TRANSCRIPT_STYLES.code)
+			emit("│     ", call.summary)
+		end
+	end
+	emit("│ ", "")
+	emit("│ ", "Marks: · call  : overlap  ≈ same args  ! failed  ? unfinished", TRANSCRIPT_STYLES.gutter)
+	emit("│ ", "Left to right: call order. Repeated arguments may be necessary.", TRANSCRIPT_STYLES.gutter)
+	lines[#lines + 1] = transcript_paint("╰", TRANSCRIPT_STYLES.gutter, color)
+	lines[#lines + 1] = ""
+	return self:commit_lines(lines)
 end
 
 function App:commit_assistant(text)
-	local lines, first = {}, true
-	for line in (response_text(text, 12000) .. "\n"):gmatch("(.-)\n") do
-		lines[#lines + 1] = (first and "lca › " or "      ") .. line
-		first = false
-	end
-	lines[#lines + 1] = ""
-	return self:commit_lines(lines)
+	local width = select(1, self:_size())
+	return self:commit_lines(assistant_transcript_lines(text, self.backend:supports_color(), width))
 end
 
 function App:_handle_action(action)
@@ -1731,6 +2533,21 @@ function App:_handle_action(action)
 	end
 end
 
+function App:feed_input(chunk)
+	for _, action in ipairs(self.input:feed_chunk(chunk, self.busy)) do self:_handle_action(action) end
+end
+
+local function stdin_chunk_reader(read)
+	return function()
+		local chunk, err = read(0, 128, -1)
+		if chunk then return chunk end
+		if err then core.debug_log("[tui] stdin read failed: %s", tostring(err)) end
+		return ""
+	end
+end
+
+tui._stdin_chunk_reader = stdin_chunk_reader
+
 function App:start_io()
 	self.input = Input.new(self.editor)
 	self:render(0)
@@ -1739,23 +2556,14 @@ function App:start_io()
 		self:drive_frame()
 	end)
 	if not self.input_reader then
-		local posix_ok, unistd = false, nil
-		if self.owns_backend then posix_ok, unistd = pcall(require, "posix.unistd") end
-		if unistd and type(unistd.read) == "function" then
-			-- Do not combine libuv's fd readiness with buffered io.stdin reads:
-			-- stdio can swallow the rest of a multi-byte escape sequence and leave
-			-- libuv nothing to wake on until the user's next keypress.
-			self.input_reader = function() return unistd.read(0, 128) end
-		else
-			self.input_reader = function() return self.backend:read_byte() end
-		end
+		-- Keep fd readiness and reads inside libuv. Buffered io.stdin:read(1)
+		-- can swallow the tail of an arrow-key escape sequence, leaving libuv
+		-- nothing to wake on until the user's next keypress.
+		self.input_reader = stdin_chunk_reader(uv.fs_read)
 	end
 	self.stdin_poll = uv.new_poll(0)
 	self.stdin_poll:start("r", function()
-		local chunk = self.input_reader()
-		for _, action in ipairs(self.input:feed_chunk(chunk, self.busy)) do
-			self:_handle_action(action)
-		end
+		self:feed_input(self.input_reader())
 	end)
 end
 
@@ -1842,6 +2650,7 @@ local function command_ui(state)
 	function facade.jobs(list) state:notice(tostring(#(list or {})) .. " background jobs") end
 	function facade.job_detail(job) state:notice((job and job.id or "job") .. " · " .. tostring(job and job.status or "unknown")) end
 	function facade.job_output(id, output) state:notice(tostring(id) .. " · " .. compact_text(output, 150)) end
+	function facade.insanitywolf(active) state:insanitywolf(active) end
 	return facade
 end
 
@@ -1849,12 +2658,18 @@ function tui.run(options)
 	options = options or {}
 	local history_path = options.history_path or ".lca-history"
 	local session = options.session or session_module.create(options)
+	local tool_stage = options.tool_stage
+	if tool_stage == nil then
+		local env = tostring(os.getenv("LCA_TOOL_STAGE") or ""):lower()
+		tool_stage = not (env == "0" or env == "false" or env == "off" or env == "no")
+	end
 	local app = App.new({
 		backend = options.backend,
 		terminal = options.terminal,
 		renderer = options.renderer,
 		history = load_history(history_path),
 		effect = options.tui_effect or os.getenv("LCA_TUI_EFFECT"),
+		tool_stage = tool_stage,
 	})
 	local facade = command_ui(app.state)
 	local last_auto_compact_messages = 0
@@ -1873,9 +2688,7 @@ function tui.run(options)
 	end
 
 	local result, err = tui.with_terminal(app.terminal, app.renderer, function()
-		local loaded, load_err = session:load()
-		if loaded then app.state:notice(session:load_message())
-		elseif load_err and not tostring(load_err):lower():find("no such file", 1, true) then app.state:notice(load_err, "error") end
+		app.state:notice("fresh session · /resume restores the last session for this project")
 		last_auto_compact_messages = #session.messages
 		jobs.prune(session.cwd)
 		if options.mcp_tool_count and options.mcp_tool_count > 0 then app.state:notice(tostring(options.mcp_tool_count) .. " MCP tools connected") end
@@ -1890,7 +2703,10 @@ function tui.run(options)
 				app.state.model_phase = "running command"
 				app:drive_frame()
 				local requested_effect = line:match("^/effect%s+([%w_-]+)%s*$")
-				if line:match("^/effect%s*$") then
+				if line:match("^/river%s*$") then
+					app:commit_river_details()
+					goto continue
+				elseif line:match("^/effect%s*$") then
 					local auto = app.effect_auto and " · auto" or " · manual"
 					app.state:notice("animation · " .. app.effect .. auto .. " · choose " .. table.concat(EFFECT_NAMES, ", "))
 					goto continue
@@ -1901,6 +2717,15 @@ function tui.run(options)
 					elseif requested_effect == "manual" or requested_effect == "off" then changed = app:set_effect_auto(false)
 					else changed, effect_err = app:set_effect(requested_effect) end
 					if not changed then app.state:notice(effect_err, "error") end
+					goto continue
+				elseif line:match("^/tools%s*$") or line:match("^/stage%s*$") then
+					app.state:notice("tool stage · " .. (app.tool_stage and "on" or "off") .. " · /tools on|off")
+					goto continue
+				elseif line:match("^/tools[%s]") or line:match("^/stage[%s]") then
+					local value = line:match("^/%w+%s+(%w+)%s*$")
+					if value == "on" then app:set_tool_stage(true)
+					elseif value == "off" then app:set_tool_stage(false)
+					else app.state:notice("usage: /tools [on|off]", "error") end
 					goto continue
 				end
 				local command_result = commands.dispatch(line, session, facade)
@@ -1929,10 +2754,17 @@ function tui.run(options)
 						function(event) app.state:tool_event(event) end,
 						function(info) app.state:reviewing(info); filter = StreamFilter.new() end,
 						function() app:pump() end,
-						{ cancelled = function() return app.cancel_requested end }
+						{
+							cancelled = function() return app.cancel_requested end,
+							on_model_activity = function(activity)
+								app.state:model_activity(activity)
+								app:pump()
+							end,
+						}
 					)
 				end)
 				app.busy = false
+				local turn_cancelled = app.cancel_requested
 				local tail = filter:finish()
 				if tail ~= "" then app.state:model_stream(tail) end
 				if app.cancel_requested then
@@ -1942,7 +2774,8 @@ function tui.run(options)
 				elseif ok then
 					local final = protocol.strip_tool_results(protocol.strip_tool_calls(turn_result.text or ""))
 					session:add_assistant(turn_result.text, turn_result._output_items)
-					local final_usage = type(turn_result._usage) == "table" and turn_result._usage or nil
+					local final_usage = type(turn_result._turn_usage) == "table" and turn_result._turn_usage
+						or type(turn_result._usage) == "table" and turn_result._usage or nil
 					local model_tokens = final_usage and tonumber(final_usage.prompt_tokens)
 						or session:estimated_model_input_tokens_usage_aware()
 					local cache_percent
@@ -1957,6 +2790,8 @@ function tui.run(options)
 					app.state.mode = "failed"
 					app:commit_lines({ "error › " .. compact_text(turn_result, 240), "" })
 				end
+				app.river_seed = session.id
+				app:commit_river(turn_cancelled and "interrupted" or not ok and "failed" or nil)
 				app:drive_frame()
 			end
 			::continue::

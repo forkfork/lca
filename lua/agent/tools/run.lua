@@ -4,6 +4,7 @@ local run = {}
 
 local MAX_OUTPUT = 20000
 local DEFAULT_TIMEOUT_MS = 120000
+local DEFAULT_PROGRESS_INTERVAL_MS = 2000
 
 local function truncate_output(output)
 	if #output <= MAX_OUTPUT then
@@ -119,6 +120,8 @@ function run.execute(args, context)
 	local stdout_pipe = uv.new_pipe(false)
 	local stderr_pipe = uv.new_pipe(false)
 	local chunks = {}
+	local output_bytes = 0
+	local output_chunks = 0
 	local exit_code = nil
 	local timed_out = false
 	local done = false
@@ -145,14 +148,33 @@ function run.execute(args, context)
 	stdout_pipe:read_start(function(_, data)
 		if data then
 			chunks[#chunks + 1] = data
+			output_bytes = output_bytes + #data
+			output_chunks = output_chunks + 1
 		end
 	end)
 
 	stderr_pipe:read_start(function(_, data)
 		if data then
 			chunks[#chunks + 1] = data
+			output_bytes = output_bytes + #data
+			output_chunks = output_chunks + 1
 		end
 	end)
+
+	local progress_timer
+	if type(context.progress) == "function" then
+		local interval_ms = math.max(100, math.floor(tonumber(context.progress_interval_ms) or DEFAULT_PROGRESS_INTERVAL_MS))
+		local started_ns = uv.hrtime()
+		progress_timer = uv.new_timer()
+		progress_timer:start(interval_ms, interval_ms, function()
+			if done then return end
+			context.progress({
+				elapsed_ms = math.floor((uv.hrtime() - started_ns) / 1000000),
+				output_bytes = output_bytes,
+				output_chunks = output_chunks,
+			})
+		end)
+	end
 
 	local timer = uv.new_timer()
 	timer:start(timeout_ms, 0, function()
@@ -162,12 +184,11 @@ function run.execute(args, context)
 		end
 	end)
 
-	local repl_ok, repl_mod = pcall(require, "agent.repl")
 	local function is_cancelled()
 		if type(context.cancelled) == "function" then
 			return context.cancelled() == true
 		end
-		return repl_ok and repl_mod.cancelled == true
+		return false
 	end
 	while not done do
 		uv.run("once")
@@ -195,6 +216,7 @@ function run.execute(args, context)
 
 	timer:stop()
 	timer:close()
+	if progress_timer then progress_timer:stop(); progress_timer:close() end
 	stdout_pipe:read_stop()
 	stderr_pipe:read_stop()
 	stdout_pipe:close()

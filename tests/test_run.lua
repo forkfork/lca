@@ -64,6 +64,21 @@ test("timeout kills child process", function()
 	end
 end)
 
+test("long foreground commands emit bounded progress heartbeats", function()
+	local heartbeats = {}
+	local result = run_tool.execute({
+		command = "printf started; sleep 0.25; printf finished",
+	}, {
+		cwd = project_dir,
+		progress_interval_ms = 100,
+		progress = function(progress) heartbeats[#heartbeats + 1] = progress end,
+	})
+	if result.is_error then error("command failed: " .. tostring(result.summary)) end
+	if #heartbeats < 1 then error("expected at least one progress heartbeat") end
+	if (heartbeats[1].elapsed_ms or 0) < 90 then error("heartbeat elapsed time was not measured") end
+	if (heartbeats[1].output_bytes or 0) < 7 then error("heartbeat did not expose output growth") end
+end)
+
 test("blocks broad git staging", function()
 	local result = run_tool.execute({
 		command = "git add -A && git commit -m nope",
@@ -139,6 +154,7 @@ test("strips curl progress meter", function()
 		error("curl response content was lost: " .. cleaned)
 	end
 end)
+
 
 io.write("\n" .. dim("─────────────────────────────────────") .. "\n")
 io.write(string.format("  %s passed, %s failed\n",

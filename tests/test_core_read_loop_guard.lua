@@ -8,6 +8,7 @@ pcall(require, "luarocks.loader")
 local shell = require("agent.util.shell")
 
 local provider_calls = 0
+local native_fixture = dofile(project_dir .. "/tests/native_fixture.lua")
 
 package.loaded["agent.providers"] = {
 	load = function()
@@ -16,16 +17,16 @@ package.loaded["agent.providers"] = {
 				provider_calls = provider_calls + 1
 				for _, message in ipairs(request.messages or {}) do
 					if tostring(message.text or ""):find("Read%-only loop guard") then
-						return { text = "done after guard" }
+						return native_fixture.response("done after guard")
 					end
 				end
-				return {
+				return native_fixture.response({
 					text = table.concat({
 						'<tool_call name="read">',
 						'{"path":"loop.txt","offset":1,"limit":5}',
 						"</tool_call>",
 					}, "\n"),
-				}
+				})
 			end,
 		}
 	end,
@@ -84,8 +85,8 @@ test("repeated read-only batches are steered instead of executed forever", funct
 	if result.text ~= "done after guard" then
 		error("unexpected result: " .. tostring(result.text))
 	end
-	if provider_calls ~= 7 then
-		error("expected 7 provider calls, got " .. tostring(provider_calls))
+	if provider_calls ~= 6 then
+		error("expected 6 provider calls, got " .. tostring(provider_calls))
 	end
 	if read_results ~= 1 then
 		error("expected one executed read before duplicate-range skips, got " .. tostring(read_results))

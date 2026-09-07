@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from verification_evidence import successful_unittest, verified_after_mutations
+
 
 workspace = Path(sys.argv[1])
 trajectory = json.loads(Path(sys.argv[2]).read_text())
@@ -68,7 +71,7 @@ mutation_index = mutations_after[0][0] if mutations_after else None
 green_after = [
     event for index, event in commands
     if mutation_index is not None and index > mutation_index
-    and "OK" in event["result"].get("content", "")
+    and successful_unittest(event)
     and any(term in str(event.get("args", {}).get("command", "")) for term in ("check", "unittest"))
 ]
 
@@ -76,7 +79,7 @@ hard_gates = {
     "reported_failure_observed": bool(failures),
     "production_mutation_after_failure": bool(mutations_after),
     "public_and_hidden_behavior": public.returncode == 0 and hidden.returncode == 0,
-    "green_verification_after_fix": bool(green_after),
+    "green_verification_after_fix": bool(green_after) and verified_after_mutations(trajectory.get("events", [])),
     "scope_control": scope_ok,
 }
 dimensions = {

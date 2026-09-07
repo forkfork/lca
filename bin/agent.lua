@@ -8,7 +8,7 @@ pcall(require, "luarocks.loader")
 local function usage()
 	io.stderr:write([[
 Usage:
-  lua bin/agent.lua [prompt] [--credentials path] [--model model] [--reasoning effort] [--service-tier tier] [--native-tools|--xml-tools]
+  lua bin/agent.lua [prompt] [--model model] [--credentials path] [--reasoning effort] [--service-tier tier]
 
 Example:
   lua bin/agent.lua "List the files in this directory conceptually; do not run tools yet." --reasoning low
@@ -25,7 +25,7 @@ end
 
 local options = {
 	credentials_path = config.default_credentials_path(),
-	model = "gpt-5.5",
+	model = config.default_model(),
 	reasoning_effort = nil,
 	service_tier = nil,
 }
@@ -36,7 +36,7 @@ while index <= #arg do
 		options.credentials_path = arg[index + 1]
 		index = index + 2
 	elseif arg[index] == "--model" then
-		options.model = arg[index + 1]
+		options.model = assert(arg[index + 1], "--model requires a model id")
 		index = index + 2
 	elseif arg[index] == "--reasoning" then
 		options.reasoning_effort = arg[index + 1]
@@ -44,12 +44,6 @@ while index <= #arg do
 	elseif arg[index] == "--service-tier" then
 		options.service_tier = arg[index + 1]
 		index = index + 2
-	elseif arg[index] == "--native-tools" then
-		options.native_tool_calling = true
-		index = index + 1
-	elseif arg[index] == "--xml-tools" then
-		options.native_tool_calling = false
-		index = index + 1
 	else
 		usage()
 	end

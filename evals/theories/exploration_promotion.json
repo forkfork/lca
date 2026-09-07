@@ -1,0 +1,19 @@
+{
+  "id": "exploration_promotion",
+  "title": "Held-out benefit of validated exploration lessons",
+  "hypothesis": "On held-out comparable coding tasks, conditionally promoted lessons outperform an unfiltered exploration ledger in correctness-preserving efficiency.",
+  "falsified_if": "D repeatedly loses correctness or shows no meaningful advantage over C; persuasive blind agreement without held-out gains is not confirmation.",
+  "source_ids": [],
+  "control_variant": "ledger",
+  "minimum_runs_per_cell": 3,
+  "scenarios": ["simple_prompt", "existing_codebase_edit", "credential_loader_bug"],
+  "variants": [
+    {"id": "none", "model": "gpt-6-astra", "reasoning": "high", "experience_mode": "none", "experience_bundle": "evals/experience_corpora/promotion-v1.json"},
+    {"id": "raw", "model": "gpt-6-astra", "reasoning": "high", "experience_mode": "raw", "experience_bundle": "evals/experience_corpora/promotion-v1.json"},
+    {"id": "ledger", "model": "gpt-6-astra", "reasoning": "high", "experience_mode": "ledger", "experience_bundle": "evals/experience_corpora/promotion-v1.json"},
+    {"id": "promoted", "model": "gpt-6-astra", "reasoning": "high", "experience_mode": "promoted", "experience_bundle": "evals/experience_corpora/promotion-v1.json"}
+  ],
+  "deterministic_outcomes": ["external correctness and scope gates", "request-level treatment activation", "disjoint discovery, validation and evaluation tasks", "recorded independent interpretation agreement, not a promotion gate"],
+  "efficiency_outcomes": ["all-run standard-equivalent cost", "wall time", "model and tool calls", "context bytes", "amortized discovery and validation cost reported separately"],
+  "decision_rule": "Requires a real frozen promotion-v1 corpus with matched raw and distilled evidence; absent corpus or no promoted lessons blocks execution. Register each conditional candidate and five distinct validation tasks before results. Freeze the full ledger before held-out testing; do not feed smoke or pilot outcomes back into it. Run 8 smoke cases (simple_prompt plus existing_codebase_edit, four arms), then 36 randomized pilot cases (3 scenarios, 3 reps, 4 arms), at most 44 launches with a $10 between-run estimate threshold and 3600 active seconds. Primary contrast D versus C; A/B secondary. Continue only with no additional observed correctness losses and at least 15% lower aggregate cost or median wall time, without >10% regression in the other metric. With three reps this is a directional pilot, not statistical approval; mixed outcomes are inconclusive. Blind interpretation reviews must be separate fresh instances with tools disabled, seeing measurements/interventions only; agreement is triangulation, not independent task validation. A fixture clone or repetition is not a distinct validation task. The initial short scenarios do not establish long-task benefit. Cohort appropriateness must be reviewed before creating the real corpus."
+}

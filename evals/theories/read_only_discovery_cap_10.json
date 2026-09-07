@@ -1,0 +1,45 @@
+{
+  "id": "read_only_discovery_cap_10",
+  "title": "Trade a larger evidence-dense read batch for fewer model rounds",
+  "hypothesis": "Letting Sol execute up to ten read-only calls in one response, while retaining the 24KB aggregate output budget, removes the recurrent seventh-read deferral without encouraging broad discovery or weakening correctness.",
+  "falsified_if": "Any treatment run fails, the simple prompt uses a tool, project-orientation mean score falls by ten points or its mean tool count rises by more than two, either implementation scenario loses scope or verification evidence, or the treatment does not eliminate recurrent core batch-cap events and improve model calls or latency on at least one complex scenario without worsening the other by more than ten percent.",
+  "source_ids": ["codex-loop", "openai-responses-function-calling-2026-08-22"],
+  "control_variant": "read_cap_6",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "multifile_order_cancellation",
+    "ambiguous_bug_investigation",
+    "project_orientation",
+    "simple_prompt"
+  ],
+  "variants": [
+    {
+      "id": "read_cap_6",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "read_only_batch_cap": 6
+    },
+    {
+      "id": "read_cap_10",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "system_prompt_profile": "current",
+      "native_tool_calling": true,
+      "read_only_batch_cap": 10
+    }
+  ],
+  "deterministic_outcomes": [
+    "multi-file and investigation behavior, scope, and verification pass",
+    "project orientation stays grounded and concise without broad inventory",
+    "simple prompt remains one model call with zero tools"
+  ],
+  "efficiency_outcomes": [
+    "model calls and elapsed milliseconds",
+    "core batch-cap events and tool calls",
+    "prompt, cached, and output tokens",
+    "source reads, mutation scope, and verification evidence"
+  ],
+  "decision_rule": "Adopt ten only if all treatment runs pass, simple prompts remain tool-free, orientation quality and boundedness remain intact, complex-task cap deferrals disappear, and at least one complex scenario improves mean model calls or latency without a greater than ten percent regression in the other. Keep the 24KB output budget and general ten-call batch ceiling unchanged. Evaluate the consecutive-read-loop limit separately as a coupled safety invariant rather than attributing it to this treatment."
+}

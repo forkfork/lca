@@ -1,0 +1,39 @@
+{
+  "id": "web_only_tool_scope",
+  "title": "Use only hosted web search for general research",
+  "hypothesis": "Removing irrelevant local coding tools from general web-research requests preserves deterministic answer quality while reducing median estimated input cost or latency by at least 10%.",
+  "falsified_if": "Any treatment hard gate fails, treatment pass rate is below control, the simple-prompt negative control starts searching, or neither median estimated input cost nor median latency improves by at least 10% on general_web_research.",
+  "source_ids": ["harness-token-costs-2026-08", "harnessdev-2609.01437"],
+  "control_variant": "all_tools",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["general_web_research", "simple_prompt"],
+  "variants": [
+    {
+      "id": "all_tools",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "all"
+    },
+    {
+      "id": "web_only",
+      "engine": "lca",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "web_only"
+    }
+  ],
+  "deterministic_outcomes": [
+    "all existing scenario hard gates remain authoritative",
+    "general research retains current authoritative coverage and source links",
+    "simple_prompt remains correct with one model call and no hosted search"
+  ],
+  "efficiency_outcomes": [
+    "estimated input and total cost",
+    "prompt, uncached, cached, cache-write, and output tokens",
+    "elapsed time, model calls, and tool calls"
+  ],
+  "decision_rule": "Accept only if all five web_only runs pass in both scenarios, pass rate is no worse than control, simple_prompt uses one model call without hosted search, and web_only reduces either median estimated_input_cost_usd or median elapsed_ms on general_web_research by at least 10% without increasing the other by more than 10%. Otherwise reject."
+}

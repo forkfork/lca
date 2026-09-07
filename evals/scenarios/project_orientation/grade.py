@@ -26,6 +26,12 @@ reads = [
     event.get("args", {}).get("path") for event in events
     if event.get("name") == "read" and not event["result"].get("is_error")
 ]
+delegated_paths = [
+    path for event in events
+    if event.get("name") == "delegate_readonly" and not event["result"].get("is_error")
+    for path in (event["result"].get("delegate", {}).get("files") or [])
+]
+inspected_paths = set(str(path) for path in reads + delegated_paths if path)
 commands = [event for event in events if event.get("name") in ("run", "shell", "command_execution")]
 mutations = [event for event in events if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
 observed_output = "\n".join(result_text(event) for event in events)
@@ -33,13 +39,13 @@ observed_output = "\n".join(result_text(event) for event in events)
 # Grade content made visible to the agent, independently of whether it used LCA read
 # calls, native tools, or bounded read-only shell discovery.
 observed = {
-    "readme": "README.md" in reads
+    "readme": "README.md" in inspected_paths
         or ("# Rill" in observed_output and "local-first deployment" in observed_output),
-    "architecture": "docs/architecture.md" in reads
+    "architecture": "docs/architecture.md" in inspected_paths
         or ("# Architecture" in observed_output and "separates planning from execution" in observed_output),
-    "source": any(path and str(path).startswith("src/rill/") for path in reads)
+    "source": any(path.startswith("src/rill/") for path in inspected_paths)
         or ("raise NotImplementedError" in observed_output and "def create_plan" in observed_output),
-    "package_metadata": "pyproject.toml" in reads
+    "package_metadata": "pyproject.toml" in inspected_paths
         or ('name = "rill-release"' in observed_output and "requires-python" in observed_output),
 }
 
@@ -170,6 +176,7 @@ print(json.dumps({
         "word_count": word_count,
         "lookup_count": investigation_actions,
         "reads": reads,
+        "delegated_paths": delegated_paths,
         "observed": observed,
         "run_calls": len(commands),
         "unsafe_command_calls": len(unsafe_commands),

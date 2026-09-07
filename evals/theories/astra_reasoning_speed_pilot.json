@@ -1,0 +1,54 @@
+{
+  "id": "astra_reasoning_speed_pilot",
+  "title": "Time to verified solution: Astra low versus medium versus high",
+  "hypothesis": "Reducing Astra reasoning effort reduces end-to-end solution latency without increasing coding, scope or recovery failures.",
+  "falsified_if": "Lower effort loses correctness, merely shifts work into more tool calls, or misses the registered latency reduction.",
+  "source_ids": [],
+  "local_evidence": "User explicitly prioritizes speed of correct solution. This independent screen keeps the current prompt and tools, tests both medium and low against high, and reuses the repaired explicit task scope. Interactive LCA leaves effort unspecified unless selected; high is the pinned experimental control, not an assertion about the endpoint default.",
+  "control_variant": "high",
+  "minimum_runs_per_cell": 3,
+  "scenarios": [
+    "simple_prompt",
+    "ambiguous_bug_investigation",
+    "multifile_order_cancellation",
+    "failure_recovery"
+  ],
+  "variants": [
+    {
+      "id": "high",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "medium",
+      "model": "gpt-6-astra",
+      "reasoning": "medium",
+      "system_prompt_profile": "current"
+    },
+    {
+      "id": "low",
+      "model": "gpt-6-astra",
+      "reasoning": "low",
+      "system_prompt_profile": "current"
+    }
+  ],
+  "task_suffixes": {
+    "ambiguous_bug_investigation": "\n\nFile scope: change only checkout/cache.py and checkout/service.py. Do not add files.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files.",
+    "failure_recovery": "\n\nFile scope: change only shipping/quotes.py. Do not add files."
+  },
+  "deterministic_outcomes": [
+    "external artifact and original end-to-end hard gates",
+    "scope and recovery behavior",
+    "request-level model, effort, prompt and task contract audits"
+  ],
+  "efficiency_outcomes": [
+    "time to verified completion, including failed attempts",
+    "aggregate coding elapsed milliseconds and per-task medians",
+    "all-attempt estimated API cost",
+    "model round trips and tools",
+    "failed edits and duplicate-read review candidates"
+  ],
+  "decision_rule": "Seed 911. Six independent smoke cells: arithmetic and ambiguous investigation across three efforts. Then 36 pilot cells: four scenarios, three repetitions, three efforts. Maximum 42 launches, $10 between-run cost estimate threshold (may overshoot one run), 1800 active worker seconds. No retries or failed-run exclusion. Stop on any smoke task failure or activation/protocol failure. Compare each lower effort against contemporaneous randomized high controls, excluding smoke and arithmetic from primary outcomes. A candidate must have at least as many passes on each coding scenario, at least 20% lower aggregate coding elapsed time, lower median latency on at least two of three coding scenarios, and no more than 10% aggregate cost increase. If both candidates qualify, select the faster by aggregate elapsed time, breaking ties within 5% by lower cost. No success declaration before completion. Candidate selection is screening, not statistical proof; run a fresh held-out task cohort before changing a default. Existing prompt-pilot outcomes are never substituted for concurrent high controls. No state deletion, planner changes, tool changes, experience, or model change; only explicit effort differs. These are small-to-medium authored coding tasks, not 20+ tool long-task validation."
+}

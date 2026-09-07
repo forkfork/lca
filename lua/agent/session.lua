@@ -1,13 +1,14 @@
 local session = {}
 session.__index = session
 
-local json = require("agent.util.json")
 local config = require("agent.config")
+local fs = require("agent.util.fs")
 
 local DEFAULT_SESSION_FILE = ".lca-session.json"
-local DEFAULT_HANDOFF_FILE = "HANDOFF.txt"
+local SESSION_ARCHIVE_DIR = ".lca-sessions"
+local DEFAULT_MODEL = config.default_model()
 local USAGE_HISTORY_LIMIT = 50
-local SYSTEM_PROMPT_VERSION = 15
+local SYSTEM_PROMPT_VERSION = 26
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -35,51 +36,11 @@ local function create_session_id(cwd)
 end
 
 local function resolve_model(options)
-	if options.model and options.model ~= "gpt-5.5" then
-		return options.model
+	local model = options.model or DEFAULT_MODEL
+	if model ~= "gpt-6-astra" and model ~= "gpt-5.6-sol" and model ~= "gpt-5.6-terra" and model ~= "gpt-5.6-luna" then
+		error("unsupported model: " .. tostring(model) .. " (LCA supports GPT-6 Astra and Codex GPT-5.6)")
 	end
-	local providers = require("agent.providers")
-	local path = options.credentials_path or config.default_credentials_path()
-	local ok, body = pcall(providers.credentials_body, path)
-	if not ok then return options.model or "gpt-5.5" end
-	local provider = json.field(body, "provider")
-	if provider == "bedrock" then
-		local model = json.field(body, "model")
-		return model or "us.anthropic.claude-opus-4-6-v1"
-	end
-	if provider == "deepseek" then
-		local model = json.field(body, "model")
-		return model or "deepseek-v4-pro"
-	end
-	return options.model or "gpt-5.5"
-end
-
-local function model_for_credentials(credentials_path, current_model)
-	local providers = require("agent.providers")
-	local path = credentials_path or config.default_credentials_path()
-	local ok, body = pcall(providers.credentials_body, path)
-	if not ok then return current_model or "gpt-5.5" end
-	local provider = json.field(body, "provider")
-	local configured_model = json.field(body, "model")
-	current_model = current_model or "gpt-5.5"
-	if provider == "bedrock" then
-		if current_model:match("^us%.") or current_model:match("^eu%.") or current_model:match("^ap%.") or current_model:find("anthropic", 1, true) then
-			return current_model
-		end
-		return configured_model or "us.anthropic.claude-opus-4-6-v1"
-	end
-	if provider == "deepseek" then
-		if current_model:find("deepseek", 1, true) then
-			return current_model
-		end
-		return configured_model or "deepseek-v4-pro"
-	end
-	if provider == "codex" then
-		if current_model:find("deepseek", 1, true) or current_model:match("^us%.") or current_model:match("^eu%.") or current_model:match("^ap%.") or current_model:find("anthropic", 1, true) then
-			return configured_model or "gpt-5.5"
-		end
-	end
-	return current_model
+	return model
 end
 
 local VALID_REASONING_EFFORTS = {
@@ -113,11 +74,15 @@ local function resolve_flow(value)
 	return value
 end
 
-local function resolve_reasoning_effort(value)
+local function resolve_reasoning_effort(value, model)
 	if not value or value == "" then
 		return nil
 	end
 	value = tostring(value):lower()
+	if (model or DEFAULT_MODEL) == "gpt-6-astra" then
+		if value == "none" or value == "minimal" then return "low" end
+		if value == "max" then return value end
+	end
 	if not VALID_REASONING_EFFORTS[value] then
 		error("invalid reasoning effort: " .. tostring(value))
 	end
@@ -135,31 +100,28 @@ local function resolve_service_tier(value)
 	return value
 end
 
-local function native_tools_for_model(model)
-	return tostring(model or ""):match("^gpt%-5%.6%-sol") ~= nil
-end
-
 function session.create(options)
+	options = options or {}
+	for _, key in ipairs({ "delegate_readonly_enabled", "tool_dag_enabled", "readonly_fork_join_enabled", "delegate_readonly_profile" }) do
+		if options[key] ~= nil and options[key] ~= false then
+			error("retired experiment option: " .. key .. "; see research/archive/README.md")
+		end
+	end
 	local cwd = current_dir()
 	local resolved_model = resolve_model(options)
-	local native_explicit = options.native_tool_calling ~= nil
-	local native_tool_calling
-	if native_explicit then
-		native_tool_calling = options.native_tool_calling == true
-	else
-		native_tool_calling = native_tools_for_model(resolved_model)
-	end
 	return setmetatable({
 		id = options.session_id or create_session_id(cwd),
 		credentials_path = options.credentials_path or config.default_credentials_path(),
 		model = resolved_model,
-		reasoning_effort = resolve_reasoning_effort(options.reasoning_effort),
-		service_tier = resolve_service_tier(options.service_tier),
-		native_tool_calling = native_tool_calling,
-		native_tool_calling_explicit = native_explicit,
-			stream_tool_call_cap = tonumber(options.stream_tool_call_cap),
-			stream_duplicate_call_cap = tonumber(options.stream_duplicate_call_cap),
+			reasoning_effort = resolve_reasoning_effort(options.reasoning_effort, resolved_model),
+			service_tier = resolve_service_tier(options.service_tier),
+			tool_scope = options.tool_scope,
+			native_tool_calling = true,
+			native_tool_pair_closure = options.native_tool_pair_closure ~= false,
 			read_only_batch_cap = tonumber(options.read_only_batch_cap),
+			read_batch_bytes = tonumber(options.read_batch_bytes),
+			grep_evidence = options.grep_evidence ~= false,
+			stale_edit_evidence = options.stale_edit_evidence ~= false,
 			intra_turn_compaction = options.intra_turn_compaction,
 			context_compaction_threshold = tonumber(options.context_compaction_threshold),
 			context_hard_limit = tonumber(options.context_hard_limit),
@@ -214,6 +176,7 @@ function session:clear()
 	self.compaction_summary = nil
 	self.compaction_details = nil
 	self.plan = nil
+	self.journey = nil
 	self.last_usage = nil
 	self.usage_history = {}
 	self.last_turn_ast_summary = nil
@@ -234,11 +197,15 @@ end
 
 function session:get_system_prompt()
 	if type(self.system_prompt) ~= "string" or self.system_prompt == "" or self.system_prompt_version ~= SYSTEM_PROMPT_VERSION
-		or self.system_prompt_native_tools ~= self.native_tool_calling then
+		or self.system_prompt_native_tools ~= true then
 		local system_prompt = require("agent.system_prompt")
-		self.system_prompt = system_prompt.build({ cwd = self.cwd, flow = self.flow, native_tool_calling = self.native_tool_calling })
+		self.system_prompt = system_prompt.build({
+			cwd = self.cwd,
+			model = self.model,
+			flow = self.flow,
+		})
 		self.system_prompt_version = SYSTEM_PROMPT_VERSION
-		self.system_prompt_native_tools = self.native_tool_calling
+		self.system_prompt_native_tools = true
 	end
 	return self.system_prompt
 end
@@ -408,7 +375,9 @@ function session:load_message(path)
 		details = details .. " · dumb mode"
 	end
 
-	return "session loaded from " .. (path or DEFAULT_SESSION_FILE) .. " (" .. details .. ")"
+	local repaired = tonumber(self.native_history_repairs) or 0
+	local repair_note = repaired > 0 and (" · repaired " .. tostring(repaired) .. " orphaned tool call" .. (repaired == 1 and "" or "s")) or ""
+	return "session loaded from " .. (path or DEFAULT_SESSION_FILE) .. " (" .. details .. ")" .. repair_note
 end
 
 --- Serialize session state to a JSON-compatible table
@@ -419,8 +388,9 @@ function session:serialize()
 		model = self.model,
 		reasoning_effort = self.reasoning_effort,
 		service_tier = self.service_tier,
-		native_tool_calling = self.native_tool_calling,
-		native_tool_calling_explicit = self.native_tool_calling_explicit,
+		read_only_batch_cap = self.read_only_batch_cap,
+		read_batch_bytes = self.read_batch_bytes,
+		native_tool_pair_closure = self.native_tool_pair_closure,
 		cwd = self.cwd,
 		messages = self.messages,
 		system_prompt = self.system_prompt,
@@ -437,15 +407,11 @@ function session:serialize()
 end
 
 local function write_text_file(path, content)
-	local f, err = io.open(path, "w")
-	if not f then
-		return false, "cannot write to " .. path .. ": " .. (err or "unknown error")
-	end
-	f:write(content)
 	if content:sub(-1) ~= "\n" then
-		f:write("\n")
+		content = content .. "\n"
 	end
-	f:close()
+	local ok, err = pcall(fs.write_file, path, content)
+	if not ok then return false, err end
 	return true
 end
 
@@ -459,12 +425,74 @@ local function read_text_file(path)
 	return content
 end
 
+local function archive_dir_for(path)
+	local parent = tostring(path):match("^(.*)/[^/]+$")
+	return parent and parent ~= "" and (parent .. "/" .. SESSION_ARCHIVE_DIR) or SESSION_ARCHIVE_DIR
+end
+
+local function archive_previous_session(path, next_id)
+	local content = read_text_file(path)
+	if not content then return true end
+	local cjson = require("cjson")
+	local ok, previous = pcall(cjson.decode, content)
+	if not ok or type(previous) ~= "table" or type(previous.id) ~= "string"
+		or previous.id == "" or previous.id == next_id
+	then
+		return true
+	end
+	local archive_dir = archive_dir_for(path)
+	local uv = require("luv")
+	local made, mkdir_err = uv.fs_mkdir(archive_dir, tonumber("755", 8))
+	if not made and not tostring(mkdir_err):find("EEXIST", 1, true) then
+		return false, "cannot archive previous session: " .. tostring(mkdir_err)
+	end
+	local safe_id = previous.id:gsub("[^%w._-]", "_")
+	return write_text_file(archive_dir .. "/" .. safe_id .. ".json", content)
+end
+
+local function repair_orphan_native_calls(messages)
+	local outputs = {}
+	for _, message in ipairs(messages or {}) do
+		if message.native_call_id then outputs[tostring(message.native_call_id)] = true end
+		for _, item in ipairs(type(message.provider_items) == "table" and message.provider_items or {}) do
+			if item.type == "function_call_output" and item.call_id then outputs[tostring(item.call_id)] = true end
+		end
+	end
+	local repaired, normalized = 0, {}
+	for _, message in ipairs(messages or {}) do
+		local items = message.provider_items
+		if type(items) == "table" and #items > 0 then
+			local kept = {}
+			for _, item in ipairs(items) do
+				if item.type == "function_call" and item.call_id and not outputs[tostring(item.call_id)] then
+					repaired = repaired + 1
+				else
+					kept[#kept + 1] = item
+				end
+			end
+			if #kept > 0 then
+				message.provider_items = kept
+				normalized[#normalized + 1] = message
+			elseif repaired == 0 then
+				normalized[#normalized + 1] = message
+			end
+		else
+			normalized[#normalized + 1] = message
+		end
+	end
+	return normalized, repaired
+end
+
 --- Save session to a JSON file
 function session:save(path)
 	path = path or DEFAULT_SESSION_FILE
 	local cjson = require("cjson")
 	local data = self:serialize()
 	local encoded = cjson.encode(data)
+	if path == DEFAULT_SESSION_FILE then
+		local archived, archive_err = archive_previous_session(path, self.id)
+		if not archived then return false, archive_err end
+	end
 	return write_text_file(path, encoded)
 end
 
@@ -487,12 +515,14 @@ function session:load(path)
 	end
 	-- Restore messages
 	if type(data.messages) == "table" then
-		self.messages = data.messages
+		self.messages, self.native_history_repairs = repair_orphan_native_calls(data.messages)
 	end
-	self.native_tool_calling = data.native_tool_calling == true
-	self.native_tool_calling_explicit = data.native_tool_calling_explicit == true
+	self.read_only_batch_cap = tonumber(data.read_only_batch_cap) or self.read_only_batch_cap
+	self.read_batch_bytes = tonumber(data.read_batch_bytes) or self.read_batch_bytes
+	self.native_tool_pair_closure = data.native_tool_pair_closure ~= false
+	self.native_tool_calling = true
 	if data.system_prompt_version == SYSTEM_PROMPT_VERSION and type(data.system_prompt) == "string" and data.system_prompt ~= ""
-		and data.system_prompt_native_tools == self.native_tool_calling then
+		and data.system_prompt_native_tools == true and data.model == self.model then
 		self.system_prompt = data.system_prompt
 		self.system_prompt_version = data.system_prompt_version
 		self.system_prompt_native_tools = data.system_prompt_native_tools
@@ -537,19 +567,11 @@ function session:load(path)
 	else
 		self.last_turn_ast_snapshot = nil
 	end
-	-- Optionally restore model/credentials if present
-	if data.model then
-		self.model = data.model
-	end
-	if data.credentials_path then
-		self.credentials_path = data.credentials_path
-	end
-	self.model = model_for_credentials(self.credentials_path, self.model)
-	if not self.native_tool_calling_explicit then
-		self.native_tool_calling = native_tools_for_model(self.model)
-	end
+	-- Model, provider credentials, and native-tool mode are launch policy, not
+	-- resumable conversation state. Old sessions can restore their messages but
+	-- cannot switch this process back to a retired runtime.
 	if data.reasoning_effort and data.reasoning_effort ~= require("cjson").null then
-		self.reasoning_effort = resolve_reasoning_effort(data.reasoning_effort)
+		self.reasoning_effort = resolve_reasoning_effort(data.reasoning_effort, self.model)
 	end
 	if data.service_tier and data.service_tier ~= require("cjson").null then
 		self.service_tier = resolve_service_tier(data.service_tier)
@@ -558,56 +580,11 @@ function session:load(path)
 	return true
 end
 
---- Save an explicit handoff summary for the next startup
-function session:save_handoff(path)
-	path = path or DEFAULT_HANDOFF_FILE
-
-	local content
-	if #self.messages == 0 then
-		content = "# Handoff\n\n(no conversation yet)"
-	else
-		local compaction = require("agent.compaction")
-		content = compaction.generate_summary(self.messages, self.compaction_summary, self)
-		self.compaction_summary = content
-	end
-
-	return write_text_file(path, content)
-end
-
---- Load HANDOFF.txt into an empty session as startup context
-function session:load_handoff(path)
-	path = path or DEFAULT_HANDOFF_FILE
-	if #self.messages > 0 then
-		return false, nil, 0
-	end
-
-	local content, err = read_text_file(path)
-	if not content then
-		return false, err, 0
-	end
-	if content == "" then
-		return false, "handoff file is empty: " .. path, 0
-	end
-
-	self.compaction_summary = content
-	self.messages[1] = {
-		role = "user",
-		text = "[Handoff loaded from " .. path .. "]\n\n" .. content,
-	}
-	self.messages[2] = {
-		role = "assistant",
-		text = "Understood. I have loaded the handoff context.",
-	}
-
-	return true, nil, #content
-end
-
 --- Default session file path
 session.DEFAULT_SESSION_FILE = DEFAULT_SESSION_FILE
-session.DEFAULT_HANDOFF_FILE = DEFAULT_HANDOFF_FILE
+session.SESSION_ARCHIVE_DIR = SESSION_ARCHIVE_DIR
 session.resolve_reasoning_effort = resolve_reasoning_effort
 session.resolve_service_tier = resolve_service_tier
-session.native_tools_for_model = native_tools_for_model
 session.resolve_flow = resolve_flow
 session.SYSTEM_PROMPT_VERSION = SYSTEM_PROMPT_VERSION
 return session

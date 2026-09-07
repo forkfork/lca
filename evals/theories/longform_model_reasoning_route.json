@@ -1,0 +1,27 @@
+{
+  "id": "longform_model_reasoning_route",
+  "title": "Route long-form research to the cheapest sufficient model and reasoning level",
+  "hypothesis": "A lower-cost GPT-5.6 tier or reasoning level can preserve every deterministic long-form research gate while reducing median total estimated cost by at least 30% relative to Sol at high reasoning.",
+  "falsified_if": "No treatment passes every hard gate in every scenario or no fully passing treatment reduces median estimated API cost by at least 30%.",
+  "source_ids": ["harnessdev-2609.01437", "harnessevolve-2609.00829", "openai-gpt-5-6-guide-2026-08"],
+  "control_variant": "sol_high",
+  "minimum_runs_per_cell": 5,
+  "scenarios": ["general_web_research", "repo_dependent_web_research", "external_api_example", "researched_blank_build"],
+  "variants": [
+    {"id": "sol_high", "engine": "lca", "model": "gpt-5.6-sol", "reasoning": "high", "system_prompt_profile": "current"},
+    {"id": "terra_high", "engine": "lca", "model": "gpt-5.6-terra", "reasoning": "high", "system_prompt_profile": "current"},
+    {"id": "terra_medium", "engine": "lca", "model": "gpt-5.6-terra", "reasoning": "medium", "system_prompt_profile": "current"},
+    {"id": "luna_high", "engine": "lca", "model": "gpt-5.6-luna", "reasoning": "high", "system_prompt_profile": "current"}
+  ],
+  "deterministic_outcomes": [
+    "all existing scenario hard gates remain authoritative",
+    "each accepted route passes every run in every scenario",
+    "repository-dependent research still inspects the checkout and researched builds remain correctly scoped"
+  ],
+  "efficiency_outcomes": [
+    "estimated total and input cost per successful task",
+    "prompt, cached, uncached, cache-write, and output tokens",
+    "elapsed time, model calls, and tool calls"
+  ],
+  "decision_rule": "A route is eligible only if all five runs pass every hard gate in all four scenarios. Among eligible routes, accept the cheapest one only if its median estimated_api_cost_usd across successful runs is at least 30% below sol_high and its median latency is no more than 20% worse. Otherwise retain Sol/high. Do not infer that a winning route applies outside these scenario families."
+}

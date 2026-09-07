@@ -1,0 +1,10 @@
+{
+  "lua/agent/tools/edit.lua": "5c8bb05ff6a23c5e447c10a003a6c938b8881215470b9a974430ec365d823859",
+  "tests/test_tool_writes.lua": "dc11809169c119ed68c3f2522fd036007deeefbbf091867069339b6101b21ac9",
+  "evals/driver.lua": "3930228e5d3aa6d124e87031b2ad48f0020343a6799ce8c6c09dc69213b13b58",
+  "evals/run.py": "6c2dc475e49183acb931d33943d455a3678653f3e60257e0f5c3c40fb830bf27",
+  "evals/prompt_profiles.py": "9518179f1ded5cb92a7356e9ce384b347a3c82a9163e6226501868b39887ae7d",
+  "evals/repository_facts.lua": "041fe879681221558389665abca060421948b0f4e3e1403da2dca2ea5ee7fdb4",
+  "evals/repository_facts.py": "8dffd5c31ffe209374dde7932630d5f5eea5a4a372bc342d68ecde7f8b01ffef",
+  "evals/tests/test_repository_facts.py": "bb13535396050a4562054dc6201984223defba357f3377cee62cea6f5b2732fa"
+}

@@ -1,0 +1,9 @@
+{
+  "evals/prompt_ablation.json": "655c936f712f9e51a3a033d8f88d6676e9d15799275be6bdfb7863b34411fc60",
+  "evals/prompt_ablation.lua": "dcb807a1df2bb54b36ccbec69160b7a22862d8eb0704ee83e2813049a6d85b27",
+  "evals/prompt_ablation.py": "286fd5afc954e019cd2067d2705008b6d382b49a9fffc1da6efbe0f08e7a6453",
+  "evals/tests/test_prompt_ablation.py": "687a1cff1e1f8515a839c2009900657b8466e712757090e1b99ee86c6875b5dd",
+  "evals/driver.lua": "92a840104f80140f2bd815ea400683350194146490506bf82d3d6ccc8ed02626",
+  "evals/run.py": "c3e86093b2b7924ad0bb06ad4057f164ce9040d5f31caf18ac70b40d1f87bfda",
+  "evals/campaign.py": "6b7202fdedf56c4529d9b906b97838124e204466ed20c1bd9f5a8b20c9a059bc"
+}
