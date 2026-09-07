@@ -3,9 +3,9 @@
 Captured September 7, 2026 with `/record`, before a complete read-only analysis turn.
 Source: local capture `20260907-143649-564231-1.jsonl`; the private original remains outside Git.
 
-`tui-performance-analysis.jsonl` retains all 1,214 semantic events, original relative timestamps, initial drift effect, and end record. It includes concurrent tools, finish-only read events, deferred read results, eight review rounds, 1,175 streaming chunks, and completion. Playback lasts about 126.6 simulated seconds, including the original initial idle interval and final hold.
+`tui-performance-analysis.jsonl` retains all 1,214 semantic events, initial drift effect, and end record. It includes concurrent tools, finish-only read events, deferred read results, eight review rounds, 1,175 streaming chunks, and completion. The initial 24.617430666 seconds of idle time were removed programmatically by subtracting the first event timestamp from every event and the end record. The submission now occurs at time zero; all subsequent event gaps and the final hold are preserved. Playback lasts about 102 simulated seconds.
 
-Private home paths were replaced consistently with `/home/demo/`; JSON was reserialized. No event payloads or timing were otherwise intentionally changed. A common credential-pattern scan found no matches; that scan is not a general guarantee of redaction. Tool results contain source excerpts from this checkout and its local lcatui dependency.
+Private home paths were replaced consistently with `/home/demo/`; JSON was reserialized. No event payloads were otherwise intentionally changed. A common credential-pattern scan found no matches; that scan is not a general guarantee of redaction. Tool results contain source excerpts from this checkout and its local lcatui dependency.
 
 Interactive replay (no model calls, tool execution, or session writes):
 
