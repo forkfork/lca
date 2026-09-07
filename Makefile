@@ -1,17 +1,13 @@
 ROCKSPEC ?= lca-dev-1.rockspec
-LCATUI_ROCKSPEC ?= /home/tim/git/lcatui/lcatui-dev-1.rockspec
-LUAROCKS ?= /home/tim/.luarocks/bin/luarocks
+LUAROCKS ?= luarocks
 LUA_VERSION ?= 5.5
-LUA_INCDIR ?= /usr/include/lua$(LUA_VERSION)
-LUA ?= lua$(LUA_VERSION)
+LUA ?= lua
+# LuaRocks discovers headers by default; override LUA_INCDIR if needed.
 
-.PHONY: local local-lcatui rock test check eval eval-list
+.PHONY: local rock test check eval eval-list
 
-local: local-lcatui
-	@python3 scripts/test.py $(if $(filter 1,$(VERBOSE)),--verbose,) --label 'local lca' --command $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC) LUA_INCDIR=$(LUA_INCDIR)
-
-local-lcatui:
-	@cd $(dir $(LCATUI_ROCKSPEC)) && python3 '$(CURDIR)/scripts/test.py' $(if $(filter 1,$(VERBOSE)),--verbose,) --label 'local lcatui' --command $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(notdir $(LCATUI_ROCKSPEC)) LUA_INCDIR=$(LUA_INCDIR)
+local:
+	@python3 scripts/test.py $(if $(filter 1,$(VERBOSE)),--verbose,) --label 'local lca' --command $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC) $(if $(LUA_INCDIR),LUA_INCDIR=$(LUA_INCDIR),)
 
 rock:
 	$(LUAROCKS) --lua-version=$(LUA_VERSION) pack $(ROCKSPEC)

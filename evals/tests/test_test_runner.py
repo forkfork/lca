@@ -54,5 +54,24 @@ class CommandRunnerTests(TestRunnerTests):
         self.assertEqual(result.returncode, 2)
         self.assertIn('needs a command', result.stderr)
 
+class DiscoveryTests(unittest.TestCase):
+    def test_default_discovery_includes_nested_ui_suites(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'tests' / 'ui').mkdir(parents=True)
+            (root / 'evals' / 'tests').mkdir(parents=True)
+            (root / 'evals' / 'tests' / 'test_smoke.py').write_text(
+                "import unittest\nclass Smoke(unittest.TestCase):\n    def test_ok(self): self.assertTrue(True)\n")
+            for relative in ('tests/test_top.lua', 'tests/ui/test_nested.lua'):
+                (root / relative).write_text("print('suite ran')\n")
+            result = subprocess.run([sys.executable, str(RUNNER), '--lua', sys.executable],
+                                    cwd=root, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('PASS tests/test_top.lua', result.stdout)
+            self.assertIn('PASS tests/ui/test_nested.lua', result.stdout)
+            self.assertIn('PASS Python eval tests', result.stdout)
+            self.assertEqual(len(result.stdout.splitlines()), 3)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -5,7 +5,7 @@ package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.pa
 pcall(require, "luarocks.loader")
 local Replay = require("agent.tui_replay")
 local effects = require("agent.tui_effects")
-local lcatui = require("lcatui")
+local lcatui = require("agent.ui")
 local uv = require("luv")
 local json = require("agent.util.json")
 local Profile = {}

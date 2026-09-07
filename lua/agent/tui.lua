@@ -11,7 +11,7 @@ local RiverTrace = require("agent.river_trace")
 local json = require("agent.util.json")
 local socket = require("socket")
 local uv = require("luv")
-local lcatui = require("lcatui")
+local lcatui = require("agent.ui")
 
 local tui = {}
 

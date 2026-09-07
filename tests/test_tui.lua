@@ -5,7 +5,7 @@ local project_dir = script_dir .. "/.."
 package.path = project_dir .. "/lua/?.lua;" .. project_dir .. "/lua/?/init.lua;" .. package.path
 pcall(require, "luarocks.loader")
 
-local lcatui = require("lcatui")
+local lcatui = require("agent.ui")
 local tui = require("agent.tui")
 
 local passed, failed = 0, 0

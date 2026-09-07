@@ -38,7 +38,7 @@ def main():
         if not args.command or args.paths:
             parser.error('--command needs a command and cannot be combined with test paths')
         return run_suite(args.label, args.command, args.verbose)
-    paths = args.paths or sorted(glob.glob('tests/test_*.lua'))
+    paths = args.paths or sorted(glob.glob('tests/**/test_*.lua', recursive=True))
     if not paths:
         parser.error('no Lua tests found; run from the project root')
     suites = [(path, shlex.split(args.lua) + [path]) for path in paths]

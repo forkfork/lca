@@ -58,7 +58,7 @@ package.loaded["agent.providers"] = { load = function() return { complete = func
 	assert(not payload:find("OLD_SECRET"))
 	if calls == 3 then
 		assert(not payload:find("Agent Notes"), "older read result leaked through core")
-		assert(payload:find("LCATUI_ROCKSPEC"), "latest read result was lost")
+		assert(payload:find("ROCKSPEC ?= lca-dev-1.rockspec", 1, true), "latest read result was lost")
 		return { text = valid .. "done", _native_tool_calls = {} }
 	end
 	local path = calls == 1 and "AGENTS.md" or "Makefile"

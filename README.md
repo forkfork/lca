@@ -22,12 +22,16 @@ luarocks --lua-version=5.5 --local install lca
 eval "$(luarocks --lua-version=5.5 --local path --bin)"
 ```
 
-From a checkout:
+From a checkout (after installing Lua 5.5, LuaRocks, Python 3 and the build prerequisites above):
 
 ```bash
 make local
 eval "$(luarocks --lua-version=5.5 --local path --bin)"
 ```
+
+The terminal UI is included in this repository; no sibling checkout or separate
+`lcatui` rock is needed. `make local` uses `luarocks` from your PATH. Override
+`LUAROCKS`, `LUA`, or `LUA_INCDIR` if your toolchain uses different locations.
 
 ## Auth
 
@@ -56,8 +60,8 @@ rather than a guessed completion percentage.
 The interactive `lca` and `lca repl` commands keep completed messages in normal
 terminal scrollback, with a compact activity area above the input. Tool activity,
 failures, and verification results stay visible while the agent works. The TUI
-requires a POSIX terminal and the sibling `lcatui` Lua rock; it does not use the
-alternate screen.
+requires a POSIX terminal; its runtime is bundled as `agent.ui`. It does not use
+the alternate screen.
 
 Press **Ctrl-T** to inspect running or recent tools without losing your draft.
 **Tab** selects the next tool; **↑/↓** scroll arguments and result details;
@@ -177,19 +181,16 @@ make test    # run all Lua tests
 make check   # make local, then make test
 ```
 
-`make local` first installs
-`/home/tim/git/lcatui/lcatui-dev-1.rockspec`, then installs LCA. Override the
-sibling checkout location when needed:
-
-```bash
-make local LCATUI_ROCKSPEC=/path/to/lcatui/lcatui-dev-1.rockspec
-```
+`make local` installs LCA and its bundled terminal runtime together. UI primitives
+live in `lua/agent/ui/`; agent state, layout, and interaction remain in
+`lua/agent/tui.lua`. The imported UI suites live in `tests/ui/` and run as part of
+`make test`. No sibling source directory is accessed during build or execution.
 
 See `docs/architecture.md` for the module layout.
 
 ## License
 
-BSD 2-Clause. See `LICENSE`.
+BSD 2-Clause, with MIT-licensed terminal UI modules originally from lcatui. See `LICENSE`.
 
 ## Credits
 

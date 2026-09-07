@@ -1,0 +1,85 @@
+local h = require("tests.ui.helper")
+local ansi = require("agent.ui.ansi")
+local Buffer = require("agent.ui.buffer")
+local Memory = h.Memory
+local Renderer = require("agent.ui.renderer")
+
+h.test("does not redraw an unchanged inline frame", function()
+  local backend = Memory.new({ width = 20, height = 8, color = false })
+  local renderer = Renderer.new(backend):mount()
+  local buffer = Buffer.new(10, 1):write(1, 1, "hello")
+  renderer:draw(buffer)
+  local first = backend:output()
+  renderer:draw(buffer)
+  h.equal(backend:output(), first)
+end)
+
+h.test("commits permanent output before a fresh inline viewport", function()
+  local backend = Memory.new({ color = false })
+  local renderer = Renderer.new(backend):mount()
+  renderer:draw(Buffer.new(10, 2):write(1, 1, "live"))
+  local ok = renderer:commit("done")
+  h.truthy(ok)
+  h.truthy(backend:output():find("done\r\n", 1, true))
+  h.equal(renderer.inline_height, 0)
+end)
+
+h.test("clears rows left behind when an inline viewport shrinks", function()
+  local backend = Memory.new({ color = false })
+  local renderer = Renderer.new(backend):mount()
+  renderer:draw(Buffer.new(10, 3):write(3, 1, "stale"))
+  backend:reset()
+  renderer:draw(Buffer.new(10, 1):write(1, 1, "small"))
+  local output = backend:output()
+  local clears, offset = 0, 1
+  while true do
+    local found = output:find(ansi.clear_line, offset, true)
+    if not found then break end
+    clears = clears + 1
+    offset = found + #ansi.clear_line
+  end
+  h.equal(clears, 3)
+  h.truthy(output:find(ansi.move_up(2), 1, true))
+  h.equal(renderer.inline_height, 1)
+end)
+
+h.test("switches to alternate screen and restores inline mode", function()
+  local backend = Memory.new({ color = false })
+  local renderer = Renderer.new(backend):mount("inline")
+  renderer:switch("fullscreen")
+  renderer:draw(Buffer.new(8, 2):write(1, 1, "strange"))
+  renderer:switch("inline")
+  local output = backend:output()
+  h.truthy(output:find(ansi.enter_alt_screen, 1, true))
+  h.truthy(output:find(ansi.leave_alt_screen, 1, true))
+  h.equal(renderer.mode, "inline")
+  h.equal(renderer.previous, nil)
+end)
+
+h.test("optional damage rendering emits only changed spans", function()
+  local backend = Memory.new({ width = 80, height = 20, color = false })
+  local renderer = Renderer.new(backend, { mode = "fullscreen", damage_spans = true }):mount("fullscreen")
+  renderer:draw(Buffer.new(80, 20):write(10, 4, "alpha"):write(10, 60, "omega"))
+  backend:reset()
+  renderer:draw(Buffer.new(80, 20):write(10, 4, "alpha"):write(10, 60, "sigma"))
+  local output = backend:output()
+  h.truthy(output:find(ansi.position(10, 60), 1, true))
+  h.equal(output:find(ansi.position(10, 1), 1, true), nil)
+  h.equal(output:find(ansi.clear_line, 1, true), nil)
+end)
+
+h.test("damage rendering can coalesce nearby changes", function()
+  local backend = Memory.new({ width = 20, height = 4, color = false })
+  local renderer = Renderer.new(backend, {
+    mode = "fullscreen", damage_spans = true, damage_gap = 4,
+  }):mount("fullscreen")
+  renderer:draw(Buffer.new(20, 4):write(2, 2, "a"):write(2, 7, "b"))
+  backend:reset()
+  renderer:draw(Buffer.new(20, 4):write(2, 2, "x"):write(2, 7, "y"))
+  local output = backend:output()
+  h.truthy(output:find(ansi.position(2, 2), 1, true))
+  h.equal(output:find(ansi.position(2, 7), 1, true), nil)
+  h.truthy(output:find("x    y", 1, true))
+end)
+
+h.finish()

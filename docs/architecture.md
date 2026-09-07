@@ -22,7 +22,9 @@ scripts/
 
 lua/agent/
   core.lua                 model/tool loop, transcript logging, tool budgets
-  tui.lua                  compact lcatui runtime and cancellation owner
+  tui.lua                  agent UI layout, interaction, and cancellation owner
+  ui/                      bundled terminal buffers, renderer, effects, POSIX backend
+                           (agent.ui; no separate lcatui rock or sibling checkout)
   commands.lua             slash commands
   session.lua              conversation state and save/resume policy
   compaction.lua           long-context summarization

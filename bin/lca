@@ -56,7 +56,7 @@ end
 
 local function lua_can_run_lca(candidate, prefix, require_tui)
 	local probe = "pcall(require,'luarocks.loader'); require('luv'); require('cjson')"
-	if require_tui then probe = probe .. "; require('lcatui')" end
+	if require_tui then probe = probe .. "; require('agent.ui')" end
 	return command_succeeds((prefix or "") .. shell_quote(candidate) .. " -e " .. shell_quote(probe) .. " >/dev/null 2>&1")
 end
 

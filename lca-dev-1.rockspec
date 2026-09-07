@@ -15,7 +15,7 @@ The tag-based read/edit tool design is inspired by Salvatore Sanfilippo
 (@antirez), especially https://antirez.com/news/166.
 ]],
 	homepage = "https://github.com/forkfork/lca",
-	license = "BSD-2-Clause",
+	license = "BSD-2-Clause AND MIT",
 }
 dependencies = {
 	"lua >= 5.5, < 5.6",
@@ -23,11 +23,21 @@ dependencies = {
 	"luasec",
 	"lua-cjson",
 	"luv",
-	"lcatui",
 }
 build = {
 	type = "builtin",
 	modules = {
+		["agent.ui"] = "lua/agent/ui/init.lua",
+		["agent.ui.ansi"] = "lua/agent/ui/ansi.lua",
+		["agent.ui.buffer"] = "lua/agent/ui/buffer.lua",
+		["agent.ui.current"] = "lua/agent/ui/current.lua",
+		["agent.ui.kinetic"] = "lua/agent/ui/kinetic.lua",
+		["agent.ui.review"] = "lua/agent/ui/review.lua",
+		["agent.ui.renderer"] = "lua/agent/ui/renderer.lua",
+		["agent.ui.style"] = "lua/agent/ui/style.lua",
+		["agent.ui.terminal"] = "lua/agent/ui/terminal.lua",
+		["agent.ui.width"] = "lua/agent/ui/width.lua",
+		["agent.ui.backends.posix"] = "lua/agent/ui/backends/posix.lua",
 		["logo"] = "lua/logo.lua",
 		["agent.commands"] = "lua/agent/commands.lua",
 		["agent.compaction"] = "lua/agent/compaction.lua",

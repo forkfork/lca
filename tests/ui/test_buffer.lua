@@ -1,0 +1,88 @@
+local h = require("tests.ui.helper")
+local Buffer = require("agent.ui.buffer")
+local width = require("agent.ui.width")
+
+h.test("measures ASCII, combining marks, CJK, and emoji", function()
+  h.equal(width.string("abc"), 3)
+  h.equal(width.string("e\204\129"), 1)
+  h.equal(width.string("界"), 2)
+  h.equal(width.string("🐺"), 2)
+end)
+
+h.test("writes wide cells without corrupting following columns", function()
+  local buffer = Buffer.new(8, 1)
+  buffer:write(1, 1, "a界b")
+  h.equal(buffer:plain_line(1), "a界b")
+  h.truthy(buffer.rows[1][3].continuation)
+  h.equal(buffer.rows[1][4].char, "b")
+end)
+
+h.test("clips content to the buffer", function()
+  local buffer = Buffer.new(4, 1)
+  buffer:write(1, 1, "hello")
+  h.equal(buffer:plain_line(1), "hell")
+  buffer:clear():write(1, 4, "界")
+  h.equal(buffer:plain_line(1), "")
+end)
+
+h.test("updates live cells in place without changing Unicode boundaries", function()
+  local buffer = Buffer.new(8, 1)
+  local first, wide, continuation = buffer.rows[1][1], buffer.rows[1][2], buffer.rows[1][3]
+  local red = { fg = { 200, 10, 20 }, attrs = { "bold" } }
+  buffer:write(1, 1, "a界b", red)
+  h.truthy(buffer.rows[1][1] == first and buffer.rows[1][2] == wide and buffer.rows[1][3] == continuation)
+  h.equal(wide.char, "界")
+  h.equal(continuation.char, "")
+  h.truthy(continuation.continuation and continuation.style == red)
+  buffer:set(1, 2, "x"):set(1, 3, "y")
+  h.truthy(buffer.rows[1][2] == wide and buffer.rows[1][3] == continuation)
+  h.equal(wide.style, nil)
+  h.equal(continuation.continuation, false)
+  buffer:set(1, 5, "\204\129") -- Combining mark attaches to the preceding cell.
+  h.equal(buffer:plain_line(1), "axyb\204\129")
+  buffer:set(0, 1, "z"):set(1, 9, "z"):set(1, 8, "界"):set(1, 1, "\204\129")
+  h.equal(buffer:plain_line(1), "axyb\204\129")
+  buffer:fill(1, 1, 1, 8, " ")
+  h.truthy(buffer.rows[1][1] == first)
+  h.equal(first.char, " ")
+  h.equal(first.style, nil)
+  buffer:clear()
+  h.truthy(buffer.rows[1][1] ~= first)
+end)
+
+h.test("serializes adjacent styles and observes mutations between calls", function()
+  local ansi = require("agent.ui.ansi")
+  local buffer = Buffer.new(6, 1)
+  local shared = { fg = { 12, 34, 56 }, attrs = { "bold" } }
+  buffer:write(1, 1, "ab", shared):write(1, 3, "c", { fg = { 12, 34, 56 }, attrs = { "bold" } })
+  buffer:write(1, 4, "d", "red"):write(1, 5, "e")
+  local reset = ansi.reset
+  local expected = "\27[1;38;2;12;34;56mabc" .. reset .. "\27[31md" .. reset .. "e " .. reset
+  h.equal(buffer:styled_line(1, true), expected)
+  h.equal(buffer:styled_line(1, false), "abcde ")
+  shared.fg[1], shared.attrs[1] = 77, "dim"
+  local changed = "\27[2;38;2;77;34;56mab" .. reset .. "\27[1;38;2;12;34;56mc" .. reset
+    .. "\27[31md" .. reset .. "e " .. reset
+  h.equal(buffer:styled_line(1, true), changed)
+  h.equal(buffer:styled_line(1, true), changed)
+  buffer:clear():write(1, 1, "plain")
+  h.equal(buffer:styled_line(1, true), "plain " .. reset)
+  h.equal(buffer:styled_line(1, false), "plain ")
+end)
+
+h.test("drawing a new frame does not mutate the renderer's previous cells", function()
+  local Renderer = require("agent.ui.renderer")
+  local backend = h.Memory.new({ color = false })
+  local renderer = Renderer.new(backend)
+  local previous = Buffer.new(8, 1):write(1, 1, "old")
+  renderer:draw(previous)
+  local next_frame = Buffer.new(8, 1):write(1, 1, "new")
+  h.equal(renderer.previous:plain_line(1), "old")
+  h.truthy(previous.rows[1][1] ~= next_frame.rows[1][1])
+  backend:reset()
+  renderer:draw(next_frame)
+  h.truthy(backend:output():find("new", 1, true))
+  h.equal(previous:plain_line(1), "old")
+end)
+
+h.finish()
