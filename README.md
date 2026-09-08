@@ -4,6 +4,9 @@ A small coding-agent harness, written in Lua 5.5, with a carefully made terminal
 interface. The aim is simple: make working with a model feel clear, useful, and
 lovely—not like watching an opaque process churn.
 
+LCA supports **Amazon Bedrock and OpenAI** because that's what I use. If you want
+the vibes but with a different provider, I recommend forking, adding your provider
+support, and removing the Bedrock / OpenAI code—it'll take you about five minutes.
 The model brings the reasoning. LCA provides the working environment: files,
 tools, conversation state, background jobs, and a readable account of what happened.
 Use it to understand a codebase, make a change, and check the result.
@@ -26,10 +29,8 @@ with thoughtful defaults, not a framework you have to assemble before using it.
 
 ## Install
 
-LCA needs Lua 5.5, LuaRocks, a POSIX terminal, and a native build toolchain.
-The terminal UI is bundled; no sibling checkout or separate `lcatui` rock is needed.
-A tiny bundled OpenSSL 3+ binding handles signing in-process—no luaossl fork or
-additional Lua crypto package.
+LCA needs Lua 5.5, LuaRocks, a POSIX terminal, a C compiler, and OpenSSL 3+
+development headers and libraries.
 
 ### macOS
 
@@ -182,40 +183,6 @@ rain and small lightning flashes; and **nightfall**, a quiet braille sky. Effect
 stay in the activity area rather than erasing the conversation. The status bar
 shows delivered animation FPS, including stalls and excluding repaint-only draws.
 
-### Preview without a model
-
-```bash
-lua scripts/tui-replay.lua
-lua scripts/tui-replay.lua tests/fixtures/tui-performance-analysis.jsonl duet
-```
-
-The replay exercises concurrent tools, failures, recovery, progress, completion,
-and cancellation. No fixture commands execute and no session is saved. Type a
-draft, inspect tools, and resize the terminal while it plays.
-
-**Ctrl-P** pauses, **Ctrl-R** restarts while preserving your draft, **Ctrl-F** cycles
-0.25×–4× speed, **Ctrl-N** steps, **Ctrl-E** cycles effects, and **Ctrl-C** exits.
-The runner accepts `[fixture.json] [effect]`; its default is
-`tests/fixtures/tui-replay.json`.
-
-### Record an interaction
-
-Enter `/record` before the turn to capture. `/record off` stops and `/record status`
-reports status. Captures are automatically named under `/tmp/lca/replays/`; copy
-them elsewhere to keep them. An explicit path works too:
-`/record /tmp/lca-capture.jsonl` or `LCA_TUI_RECORD=/tmp/lca-capture.jsonl lca`.
-Replay with `lua scripts/tui-replay.lua <saved-path>`.
-
-**Captures may contain secrets and source code. There is no automatic redaction.**
-Recording is off by default. Files are created exclusively with owner-only
-permissions (0600), never overwritten or uploaded. Choose a trusted directory.
-Recording stops at 2 MiB with a warning; completed JSONL records survive interruption,
-and an incomplete final line is ignored. Writes are not power-loss durable.
-
-Recordings contain subsequent semantic events, not prior session state, keystrokes,
-resize history, or pixel-exact frames. Replay uses your current terminal dimensions
-and the initial effect. Stopping recording leaves the agent running.
-
 ## Development and diagnostics
 
 ```bash
@@ -245,8 +212,9 @@ The native binding uses OpenSSL's one-shot APIs:
 
 ## License and credits
 
-BSD 2-Clause, with MIT-licensed terminal UI modules originally from lcatui.
-See `LICENSE`.
+BSD 2-Clause, with MIT-licensed terminal UI modules. See `LICENSE`.
 
 The tagged read/edit tool design is inspired by Salvatore Sanfilippo (@antirez),
 especially [Alternatives for the EDIT tool of LLM agents](https://antirez.com/news/166).
+LCA adapts the idea with start/end tags for edit ranges and bounded relocation
+when both endpoints uniquely match after a line shift.
