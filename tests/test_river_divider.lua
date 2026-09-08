@@ -81,6 +81,12 @@ end
 assert(#river.render({width=40,design='fleuron'}) == 1, 'narrow fallback retained old book art')
 local engraved = river.render({width=80, design='fleuron', turn=12})
 assert(#engraved == 3 and engraved[2]:find('turn 12',1,true))
+-- Wider terminals must not add a centering margin to the capped ornament.
+local left_aligned = river.render({width=88,design='fleuron',turn=12})
+for _, width in ipairs({89, 120, 160, 500}) do
+ local wide = river.render({width=width,design='fleuron',turn=12})
+ for row=1,3 do assert(wide[row]==left_aligned[row], 'fleuron shifted away from the left edge') end
+end
 for _, width in ipairs({56, 72, 88, 120}) do
  local compact = river.render({width=width,design='fleuron',turn=12,status='interrupted'})
  assert(#compact == 3 and compact[2]:find('turn 12 / interrupted',1,true))

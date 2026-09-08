@@ -62,7 +62,7 @@ function engraving.render(width, label)
  -- Match parity so the composition is reflected around a whole cell boundary.
  if (span-middle)%2 ~= 0 then span = span-1 end
  local wing = (span-middle)/2
- local margin = string.rep(' ', math.floor((width-span)/2))
+ local margin = '' -- Keep the ornament left-aligned, including on wide terminals.
  local label_col = math.floor((span-#label)/2)
  local function dot(x,y)
   if x < wing*2 then
