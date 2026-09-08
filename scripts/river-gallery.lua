@@ -2,14 +2,15 @@
 local directory = arg[0]:match("^(.*)/[^/]+$") or "."
 package.path = directory .. "/../lua/?.lua;" .. package.path
 local river = require("agent.river_divider")
-local color, requested_width, ascii, activity, expressive, worlds = false, nil, false, false, false, false
+local color, requested_width, ascii, activity, expressive, worlds, books = false, nil, false, false, false, false, false
 for _, value in ipairs(arg) do
 	if value == "--color" then color = true
 	elseif value == "--ascii" then ascii = true
 	elseif value == "--activity" then activity = true
 	elseif value == "--expressive" then expressive = true
 	elseif value == "--worlds" then worlds = true
-	else requested_width = assert(tonumber(value), "usage: lua5.5 scripts/river-gallery.lua [width] [--color] [--ascii] [--activity|--expressive|--worlds]") end
+	elseif value == "--books" then books = true
+	else requested_width = assert(tonumber(value), "usage: lua scripts/river-gallery.lua [width] [--color] [--ascii] [--activity|--expressive|--worlds|--books]") end
 end
 if activity then
 	local Trace = require("agent.river_trace")
@@ -55,11 +56,14 @@ local titles = { velvet="VELVET LABYRINTH / woven curves, rose and cream", petri
  glass="STAINED-GLASS STREAM / jewel cells, dark seams", horizon="EVENT HORIZON / bent currents, a dark centre", chrome="CHROME THORNS / silver sigils, ice glints", fairywire="FAIRYWIRE / pearl loops, lilac constellations",
  acid="ACID ESTUARY / fluorescent pools, stippled banks",
  pirate="PIRATE RADIO / ANSI mosaics, electric blocks", moonlit = "MOONLIT RIVER / slate, teal, pale cyan", estuary = "ESTUARY / indigo, turquoise, sand",
-	phosphor = "PHOSPHOR WATER / deep green, mint", dusk = "DUSK / plum, mauve, peach" }
+	phosphor = "PHOSPHOR WATER / deep green, mint", dusk = "DUSK / plum, mauve, peach",
+	cat = "SLEEPY CAT / a quiet dot drawing",
+	fleuron = "FLEURON / engraved Braille acanthus, antique gold" }
+local book_names = {fleuron=true}
 for _, width in ipairs(requested_width and { requested_width } or { 40, 72, 100 }) do
 	print("RIVER STUDIES / " .. width .. " columns\n")
 	for _, name in ipairs(river.names()) do
-		if (worlds and world_names[name]) or (not worlds and (not expressive or (not world_names[name] and name ~= "moonlit" and name ~= "estuary" and name ~= "phosphor" and name ~= "dusk"))) then
+		if (books and book_names[name]) or (not books and ((worlds and world_names[name]) or (not worlds and (not expressive or (not world_names[name] and name ~= "moonlit" and name ~= "estuary" and name ~= "phosphor" and name ~= "dusk"))))) then
 		print(titles[name] .. "\n")
 		print("lca > The changes are ready to review.\n")
 		local lines = river.render({ width = width, seed = "gallery", turn = 12, design = name, color = color, ascii = ascii, trace = (expressive or worlds) and {calls=6,failed=1,repeated=1,unfinished=0,deferred=0,peak=2,seconds=8.4,

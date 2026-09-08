@@ -126,6 +126,21 @@ Use `/river` to inspect recorded tool activity, failures, concurrency, and repea
 arguments. Raw run logs are available under `/tmp/lca/logs`; no automatic reviewer
 or research model runs.
 
+The **fleuron** now uses a three-line Braille engraving on terminals at least 56
+columns wide: individually drawn scalloped leaves, curved stems, cut-out veins,
+and a double oval with space reserved for the turn label. Its geometry is static;
+ASCII mode and smaller widths use a plain single-line rule. This is
+an original foliage study, not a reproduction. The reference is Hans Sebald
+Beham's *Ornament of Satyr's Head and Wreath* (1543), Cleveland Museum of Art
+1922.122: <https://www.clevelandart.org/art/1922.122>.
+
+Fleuron is the only book ornament in the random per-turn rotation. Its antique-gold
+artwork frames the turn label; tool summaries remain below, including failure counts.
+The other river designs are unchanged.
+
+Preview without model calls: `lua scripts/river-gallery.lua 72 --books`
+(add `--color` for antique gold).
+
 Each readable `lca-*.log` has a matching `.log.jsonl` replay log. It records full
 turn context, model requests/responses, tool arguments/results (including successful
 inspections), and transport request bodies and response chunks before parsing.

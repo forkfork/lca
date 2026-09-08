@@ -13,6 +13,7 @@ local function frame(w, h, time, scene)
     for x = 1, w do
       local char = b.rows[y][x].char
       assert(ui.width.string(char) == 1)
+      assert(not b.rows[y][x].style or b.rows[y][x].style.bg == nil, "sky overrides terminal background")
       assert(char == " " or (utf8.codepoint(char) > 0x2800 and utf8.codepoint(char) <= 0x28ff))
     end
   end
@@ -54,18 +55,18 @@ for y = 1, 4 do
   end
 end
 assert(moon_cells > 1 and occupied < 80 * 4 / 5, "sky should be sparse with a visible moon")
--- The haze changes shading, never star positions, and stays very dim.
+-- The haze changes star foregrounds, never positions or the terminal background.
 local _, _, drift = frame(80, 4, 10)
 local changed = 0
 for y = 1, 4 do
   for x = 1, 80 do
     local a, b = base.rows[y][x], drift.rows[y][x]
     assert(a.char == b.char, "haze moved a star")
-    assert(b.style.bg[3] <= 9, "haze is too bright")
-    if a.style.bg[3] ~= b.style.bg[3] then changed = changed + 1 end
+    assert(a.style.bg == nil and b.style.bg == nil, "sky overrides terminal background")
+    if a.style.fg and b.style.fg and a.style.fg[1] ~= b.style.fg[1] then changed = changed + 1 end
   end
 end
-assert(changed > 10, "haze did not drift")
+assert(changed > 0, "star shading did not change")
 -- Adjacent frames must not flash, including pulse and haze cycle boundaries.
 for _, t in ipairs({0, 3, 8, 10, 37.99, 38, 1000}) do
   local _, _, a = frame(80, 4, t)

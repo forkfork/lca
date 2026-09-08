@@ -249,6 +249,31 @@ test("Alt-Backspace deletes the previous word for both backspace encodings", fun
 		assert_eq(editor:text(), "o")
 	end
 end)
+test("word navigation aliases preserve Unicode input while idle and busy", function()
+	for _, keys in ipairs({ { "\27[1;5D", "\27[1;5C" }, { "\27[1;3D", "\27[1;3C" }, { "\27b", "\27f" } }) do
+		for _, busy in ipairs({ false, true }) do
+			local editor = tui.Editor.new()
+			local input = tui.Input.new(editor)
+			local text = "one héλ \t tail  "
+			editor:set(text)
+			for _, position in ipairs({ 10, 4, 0, 0 }) do
+				assert_eq(#input:feed_chunk(keys[1], busy), 0)
+				assert_eq(editor.cursor, position)
+			end
+			for _, position in ipairs({ 3, 7, 14, 16, 16 }) do
+				-- Split sequences across reads, as a terminal may do.
+				input:feed_chunk(keys[2]:sub(1, 1), busy)
+				assert_eq(#input:feed_chunk(keys[2]:sub(2), busy), 0)
+				assert_eq(editor.cursor, position)
+			end
+			assert_eq(editor:text(), text)
+			editor:set("")
+			input:feed_chunk(keys[1] .. keys[2], busy)
+			assert_eq(editor.cursor, 0)
+		end
+	end
+end)
+
 test("complete arrow-key chunks move exactly one history entry", function()
 	local editor = tui.Editor.new({ "first", "second", "third" })
 	local input = tui.Input.new(editor)
@@ -1516,7 +1541,7 @@ test("input wrapping respects wide characters and exact row boundaries", functio
 	assert_eq(col, 0)
 end)
 
-test("Ctrl+L reanchors the viewport without changing the draft or task", function()
+test("Ctrl+L repaints only the inline strip without changing the draft or task", function()
 	for _, busy in ipairs({ false, true }) do
 		local backend = fake_backend({ width = 80, height = 24 })
 		local app = tui.App.new({ backend = backend })
@@ -1526,23 +1551,28 @@ test("Ctrl+L reanchors the viewport without changing the draft or task", functio
 		app.editor.cursor = 4
 		app.state.plan = { { step = "Keep working", status = "in_progress" } }
 		local plan = app.state.plan
+		app:commit_lines({ "older conversation stays above the river" })
 		app:render(0)
-		backend.output = {}
-		app:feed_input("\12")
-		app:render(0)
-		local output = table.concat(backend.output)
-		assert_contains(output, lcatui.ansi.clear_screen)
-		assert_contains(output, lcatui.ansi.position(24 - app.renderer.previous.height + 1, 1))
-		assert_contains(output, "keep")
-		assert_eq(output:find("\27[3J", 1, true), nil, "must not erase scrollback")
-		assert_eq(app.editor:text(), "keep my draft")
-		assert_eq(app.editor.cursor, 4)
-		assert_eq(app.state.plan, plan)
-		assert_eq(#app.submitted, 0)
-		assert_eq(app.redraw_requested, false)
-		backend.output = {}
-		app:render(0)
-		assert_eq(table.concat(backend.output):find(lcatui.ansi.clear_screen, 1, true), nil)
+		local height = app.renderer.inline_height
+		for _ = 1, 2 do
+			backend.output = {}
+			app:feed_input("\12")
+			app:draw()
+			local output = table.concat(backend.output)
+			assert_eq(output:find(lcatui.ansi.clear_screen, 1, true), nil, "must not erase visible conversation")
+			assert_eq(output:find("\27[3J", 1, true), nil, "must not erase scrollback")
+			assert_eq(output:find("\27%[%d+;%d+H"), nil, "must not relocate the strip")
+			assert_contains(output, lcatui.ansi.carriage_return .. lcatui.ansi.move_up(height - 1))
+			local _, cleared = output:gsub("\27%[2K", "")
+			assert_eq(cleared, height, "must repaint only the existing strip rows")
+			assert_eq(app.renderer.inline_height, height)
+			assert_contains(output, "keep")
+			assert_eq(app.editor:text(), "keep my draft")
+			assert_eq(app.editor.cursor, 4)
+			assert_eq(app.state.plan, plan)
+			assert_eq(#app.submitted, 0)
+			assert_eq(app.redraw_requested, false)
+		end
 	end
 	local editor = tui.Editor.new()
 	local input = tui.Input.new(editor)

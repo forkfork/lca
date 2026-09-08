@@ -55,19 +55,6 @@ local function context_section(files)
 	return "\n" .. table.concat(parts, "\n")
 end
 
-local function brave_search_section()
-	if not runtime_inventory.resolve("bx") then
-		return ""
-	end
-
-	return table.concat({
-		"## Brave Search",
-		"- A Brave Search CLI is available as `bx`.",
-		"- Use `bx context \"search topic\" --max-tokens 2048` via the run tool to search the web and retrieve compact context.",
-		"- Only invoke it when web search would materially help answer the user's request.",
-	}, "\n")
-end
-
 function system_prompt.build(options)
 	local cwd = options.cwd or "."
 	local files = project_context.load(cwd)
@@ -108,7 +95,6 @@ function system_prompt.build(options)
 		"- Do not run Git status or diff merely to prove that you made no edits; the visible tool history already establishes whether you mutated files. Use Git only when it resolves task-relevant uncertainty.",
 		"\n" .. runtime_inventory.section(),
 		context_section(files),
-		brave_search_section(),
 		index ~= "" and ("\n" .. index) or "",
 		runtime_line(options.model),
 		"Current date: " .. current_date(),

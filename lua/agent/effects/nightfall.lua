@@ -67,8 +67,8 @@ local function render(buffer, context)
       end
     end
   end
-  -- A broken, low-contrast veil crosses the sky in 38 seconds. Background
-  -- shading keeps braille geometry still; covered stars dim very slightly.
+  -- A broken veil crosses the sky in 38 seconds, dimming covered stars.
+  -- Preserve the terminal background so the sky and UI overlays blend together.
   for row = 1, buffer.height do
     for col = 1, buffer.width do
       local u = (col - 0.5) / buffer.width - time / 38
@@ -77,7 +77,7 @@ local function render(buffer, context)
       local gaps = (0.5 + 0.5 * math.cos(u * math.pi * 2))^3
       local density = band * gaps
       local cell = cells[(row - 1) * buffer.width + col]
-      local shade = { bg = {math.floor(3 * density), math.floor(5 * density), math.floor(9 * density)} }
+      local shade = {}
       if cell then
         local dim = cell.priority == 1 and math.floor(7 * density) or 0
         local fg = cell.style.fg

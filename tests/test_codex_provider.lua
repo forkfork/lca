@@ -85,6 +85,76 @@ test("request body can isolate a background reviewer to hosted search", function
 	assert_eq(no_tools.tool_choice, nil)
 end)
 
+test("stateless requests include hosted search results for continuation", function()
+	local json = require("agent.util.json")
+	for _, scope in ipairs({ "all", "web_only", "local_only", "none" }) do
+		local body = json.decode(codex._request_body({ tool_scope = scope, messages = {} }))
+		local included = {}
+		for _, field in ipairs(body.include) do included[field] = true end
+		assert_eq(body.store, false)
+		assert(included["reasoning.encrypted_content"], "reasoning continuation missing")
+		assert(included["web_search_call.results"], "hosted search results missing")
+	end
+end)
+
+test("streamed hosted search evidence survives a local tool round trip", function()
+	local json = require("agent.util.json")
+	local session = require("agent.session").create({})
+	local items = {}
+	-- Metadata shape captured in lca-20260908-094758-19166.log.jsonl,
+	-- call 8:1. Synthetic results use the text_result shape verified live.
+	local search = [[{"type":"response.output_item.done","item":{"id":"ws_replay","type":"web_search_call","status":"completed","action":{"type":"search","queries":["lca lua coding editor"],"query":"lca lua coding editor"},"results":[{"type":"text_result","title":"LCA","url":"https://example.com/lca","snippet":"Distinct search evidence"}]},"output_index":0,"sequence_number":6}]]
+	local call = [[{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_replay","call_id":"call_replay","name":"run","arguments":"{\"command\":\"printf local-result\"}"},"output_index":1}]]
+	for _, payload in ipairs({ search, call }) do
+		codex._process_event_payload(payload, function() end, nil, codex._new_sse_stats(),
+			function(item) items[#items + 1] = item end)
+	end
+	session:add_user("Compare the searches")
+	session:add_assistant("", items)
+	session.messages[#session.messages + 1] = {
+		role = "user", text = "local-result", tool_name = "run", native_call_id = "call_replay",
+	}
+	-- Exercise the JSON boundary used by saved sessions as well as input replay.
+	local messages = json.decode(json.encode(session.messages))
+	local body = json.decode(codex._request_body({ messages = messages }))
+	assert_eq(body.input[2].type, "web_search_call")
+	assert_eq(body.input[2].id, "ws_replay")
+	assert_eq(body.input[2].action.queries[1], "lca lua coding editor")
+	assert_eq(#body.input[2].results, 1)
+	assert_eq(body.input[2].results[1].url, "https://example.com/lca")
+	assert_eq(body.input[2].results[1].type, "text_result")
+	assert_eq(body.input[2].results[1].title, "LCA")
+	assert_eq(body.input[2].results[1].snippet, "Distinct search evidence")
+	assert_eq(body.input[3].role, "user")
+	assert_eq(body.input[3].content[1].type, "input_text")
+	local evidence = json.decode(body.input[3].content[1].text:match("\n(.*)$"))
+	assert_eq(evidence.id, "ws_replay")
+	assert_eq(evidence.results[1].snippet, "Distinct search evidence")
+	assert_eq(evidence.results[1].url, "https://example.com/lca")
+	assert_eq(body.input[4].call_id, "call_replay")
+	assert_eq(body.input[5].type, "function_call_output")
+	assert_eq(body.input[5].output, "local-result")
+	-- Evidence is materialized only at serialization, never accumulated in history.
+	assert_eq(#messages, 3)
+	assert_eq(#json.decode(codex._request_body({ messages = messages })).input, 5)
+end)
+
+test("hosted search replay preserves empty results and absent legacy results", function()
+	local json = require("agent.util.json")
+	for _, results in ipairs({ '[]', '{}' }) do
+		local item = json.decode('{"type":"web_search_call","id":"ws_empty","status":"completed","action":{"type":"search","query":"missing"},"results":' .. results .. '}')
+		local input = codex._input_json({ { role = "assistant", text = "", provider_items = { item } } }, true)
+		assert(input:find('"results":[]', 1, true), input)
+		local evidence = json.decode(input)[2].content[1].text
+		assert(evidence:find('"results":[]', 1, true), "empty search evidence must be visible")
+	end
+	local input = json.decode(codex._input_json({ { role = "assistant", text = "", provider_items = {
+		{ type = "web_search_call", id = "ws_legacy", status = "completed", action = { type = "search", query = "old query" } },
+	} } }, true))
+	assert_eq(input[1].results, nil, "missing evidence must not become an empty result set")
+	assert_eq(#input, 1, "legacy metadata must not fabricate evidence")
+end)
+
 test("local-only removes exactly hosted search and preserves every native tool", function()
 	local json = require("agent.util.json")
 	local request = { model = "gpt-6-astra", messages = { { role = "user", text = "local task" } } }

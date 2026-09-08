@@ -6,6 +6,7 @@ local designs = {
 	{ name = "estuary", palette = { {57, 59, 114}, {43, 164, 169}, {218, 191, 139} } },
 	{ name = "phosphor", palette = { {29, 66, 59}, {53, 153, 111}, {184, 255, 204} } },
 	{ name = "dusk", palette = { {75, 49, 92}, {156, 91, 145}, {242, 179, 155} } },
+	{ name = "fleuron", palette = {{101,77,48},{202,156,79},{255,226,163}} },
 }
 for _, design in ipairs(styles.designs) do designs[#designs + 1] = design end
 local statuses = { interrupted = true, failed = true }
@@ -34,7 +35,7 @@ function river.names()
 	return names
 end
 
-local function caption(lines, trace, width, color)
+local function caption(lines, trace, width, color, ascii)
 	if not trace then return end
 	local parts = { trace.calls .. " calls" }
 	if trace.peak > 1 then parts[#parts + 1] = trace.peak .. " max concurrent" end
@@ -44,7 +45,7 @@ local function caption(lines, trace, width, color)
 	if trace.deferred > 0 then parts[#parts + 1] = trace.deferred .. " deferred" end
 	parts[#parts + 1] = string.format("%.1fs in tools", trace.seconds)
 	parts[#parts + 1] = "/river"
-	local text = table.concat(parts, " · ")
+	local text = table.concat(parts, ascii and " / " or " · ")
 	local line = ""
 	for word in text:gmatch("%S+") do
 		if utf8.len(line) + utf8.len(word) + 1 > width and line ~= "" then
@@ -76,11 +77,19 @@ function river.render(options)
 	local label = "turn " .. turn
 	if options.status then label = label .. " / " .. options.status end
 	if #label + 4 > width then label = options.status or ("t" .. turn) end
-	if options.ascii or width < 32 or (design.name == "cat" and #label + 4 + 15 > width) then
+	if design.name == 'fleuron' and not options.ascii and width >= 56 and #label + 28 <= width then
+		local lines = require('agent.book_engraving').render(width, label)
+		for row, line in ipairs(lines) do
+			lines[row] = paint(line, design.palette[row == 2 and 3 or 2], options.color)
+		end
+		caption(lines, options.trace, width, options.color)
+		return lines, design.name
+	end
+	if design.name == 'fleuron' or options.ascii or width < 32 or (design.name == "cat" and #label + 4 + 15 > width) then
 		local text = (#label + 4 <= width) and ("-- " .. label .. " " .. string.rep("-", width - #label - 4))
 			or label:sub(1, width)
 		local lines = { paint(text, design.palette[3], options.color) }
-		caption(lines, options.trace, width, options.color)
+		caption(lines, options.trace, width, options.color, options.ascii or design.name == 'fleuron')
 		return lines, design.name
 	end
 	local phase = (hash(seed .. ":" .. turn) % 6283) / 1000

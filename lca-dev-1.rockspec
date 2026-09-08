@@ -67,6 +67,7 @@ build = {
 		["agent.tui_recording"] = "lua/agent/tui_recording.lua",
 		["agent.river_styles"] = "lua/agent/river_styles.lua",
 		["agent.river_divider"] = "lua/agent/river_divider.lua",
+		["agent.book_engraving"] = "lua/agent/book_engraving.lua",
 		["agent.river_trace"] = "lua/agent/river_trace.lua",
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",
 		["agent.tool_registry"] = "lua/agent/tool_registry.lua",

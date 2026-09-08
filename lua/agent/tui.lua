@@ -891,6 +891,14 @@ function Editor:backspace_word()
 	while self.cursor > 0 and self.chars[self.cursor]:match("%s") do self:backspace() end
 	while self.cursor > 0 and not self.chars[self.cursor]:match("%s") do self:backspace() end
 end
+function Editor:word_left()
+	while self.cursor > 0 and self.chars[self.cursor]:match("%s") do self.cursor = self.cursor - 1 end
+	while self.cursor > 0 and not self.chars[self.cursor]:match("%s") do self.cursor = self.cursor - 1 end
+end
+function Editor:word_right()
+	while self.cursor < #self.chars and self.chars[self.cursor + 1]:match("%s") do self.cursor = self.cursor + 1 end
+	while self.cursor < #self.chars and not self.chars[self.cursor + 1]:match("%s") do self.cursor = self.cursor + 1 end
+end
 function Editor:delete()
 	if self.cursor < #self.chars then table.remove(self.chars, self.cursor + 1) end
 end
@@ -920,6 +928,9 @@ local ESCAPES = {
 	["\27[H"] = "home", ["\27[F"] = "end", ["\27[1~"] = "home", ["\27[4~"] = "end",
 	["\27[3~"] = "delete", ["\27[200~"] = "paste_start",
 	["\27\127"] = "backspace_word", ["\27\8"] = "backspace_word",
+	["\27[1;5D"] = "word_left", ["\27[1;5C"] = "word_right",
+	["\27[1;3D"] = "word_left", ["\27[1;3C"] = "word_right",
+	["\27b"] = "word_left", ["\27f"] = "word_right",
 }
 
 local function escape_prefix(value)
@@ -950,6 +961,8 @@ function Input:_action(name)
 	elseif name == "down" then editor:history_move(1)
 	elseif name == "left" then editor.cursor = math.max(0, editor.cursor - 1)
 	elseif name == "right" then editor.cursor = math.min(#editor.chars, editor.cursor + 1)
+	elseif name == "word_left" then editor:word_left()
+	elseif name == "word_right" then editor:word_right()
 	elseif name == "home" then editor.cursor = 0
 	elseif name == "end" then editor.cursor = #editor.chars
 	elseif name == "delete" then editor:delete()
@@ -2125,12 +2138,10 @@ function App:draw()
 	-- may have made the hardware cursor visible since startup. Hiding is idempotent.
 	self.backend:write(lcatui.ansi.hide_cursor)
 	if self.redraw_requested then
-		-- Relative redraws cannot recover a lost terminal cursor anchor. Clear
-		-- only the visible screen (not scrollback) and rebuild from a known row.
-		self.backend:write(lcatui.ansi.reset .. lcatui.ansi.clear_screen
-			.. lcatui.ansi.position(math.max(1, terminal_height - screen.height + 1), 1))
+		-- Repaint only the inline strip at its existing anchor. Clearing or
+		-- repositioning the screen would erase committed conversation above it.
+		self.backend:write(lcatui.ansi.reset)
 		self.renderer.previous = nil
-		self.renderer.inline_height = 0
 		self.redraw_requested = false
 	end
 	local flash_style = tui_effects.flash_style(self.effect, self.flow_time)

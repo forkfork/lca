@@ -20,7 +20,7 @@ assert(summary.seconds==6, 'tool duration must use union of active intervals, ex
 assert(summary.events[3].repeated==1)
 assert(summary.events[1].status=='failed', 'later success must not erase failure')
 for _, width in ipairs({1,12,31,32,40,80,120}) do
- local lines = river.render({width=width,trace=summary})
+ local lines = river.render({width=width,trace=summary,design='moonlit'}) -- event glyphs belong to river studies
  for _, line in ipairs(lines) do assert(utf8.len(line)<=width, line) end
  if width==80 then
   local text=table.concat(lines,'\n')
