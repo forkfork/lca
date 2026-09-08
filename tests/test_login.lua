@@ -6,6 +6,7 @@ package.path = project_dir .. "/lua/?.lua;" .. project_dir .. "/lua/?/init.lua;"
 pcall(require, "luarocks.loader")
 
 local json = require("agent.util.json")
+local login = require("agent.login")
 
 local passed = 0
 local failed = 0
@@ -72,6 +73,32 @@ exit 2
 	os.remove(output)
 	os.remove(auth)
 	os.remove(login_script)
+	assert(os.execute("rmdir " .. shell_quote(base)))
+end)
+
+test("default auth prefers Codex then falls back to the Bedrock profile", function()
+	local base = os.tmpname()
+	os.remove(base)
+	assert(os.execute("mkdir " .. shell_quote(base)))
+	local default_path = base .. "/default.json"
+	local bedrock_path = base .. "/bedrock.json"
+	write_file(default_path, [[{"provider":"codex","providers":{"codex":{"access":"token","accountId":"acct"}}}]])
+	write_file(bedrock_path, [[{"provider":"bedrock","providers":{"bedrock":{"isengardAccount":"work"}}}]])
+
+	local config = require("agent.config")
+	local old_default = config.default_credentials_path
+	local old_bedrock = config.bedrock_credentials_path
+	config.default_credentials_path = function() return default_path end
+	config.bedrock_credentials_path = function() return bedrock_path end
+	assert(login._resolve_existing(default_path) == default_path)
+
+	write_file(default_path, [[{"provider":"bedrock","providers":{"bedrock":{"accessKeyId":"old","secretAccessKey":"old"}}}]])
+	assert(login._resolve_existing(default_path) == bedrock_path)
+
+	config.default_credentials_path = old_default
+	config.bedrock_credentials_path = old_bedrock
+	os.remove(default_path)
+	os.remove(bedrock_path)
 	assert(os.execute("rmdir " .. shell_quote(base)))
 end)
 

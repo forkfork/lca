@@ -10,6 +10,10 @@ function config.default_credentials_path()
 	return config.home() .. "/.lca-credentials.json"
 end
 
+function config.bedrock_credentials_path()
+	return config.home() .. "/.lca-bedrock-credentials.json"
+end
+
 function config.default_model()
 	return config.DEFAULT_MODEL
 end

@@ -7,7 +7,7 @@ LUA ?= lua
 .PHONY: local rock test check eval eval-list
 
 local:
-	@python3 scripts/test.py $(if $(filter 1,$(VERBOSE)),--verbose,) --label 'local lca' --command $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC) $(if $(LUA_INCDIR),LUA_INCDIR=$(LUA_INCDIR),)
+	@python3 scripts/test.py $(if $(filter 1,$(VERBOSE)),--verbose,) --label 'local lca' --command $(LUAROCKS) --lua-version=$(LUA_VERSION) --local make $(ROCKSPEC) $(if $(LUA_INCDIR),LUA_INCDIR=$(LUA_INCDIR),) $(if $(OPENSSL_DIR),OPENSSL_DIR=$(OPENSSL_DIR),)
 
 rock:
 	$(LUAROCKS) --lua-version=$(LUA_VERSION) pack $(ROCKSPEC)

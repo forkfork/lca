@@ -1345,6 +1345,7 @@ codex._usage_from_payload = usage_from_payload
 codex._headers = codex_headers
 codex._process_event_payload = process_event_payload
 codex._new_sse_stats = new_sse_stats
+codex._sse_parser = sse_parser
 codex._materialize_citations = materialize_citations
 codex._refresh_after_auth_error = refresh_after_auth_error
 codex._set_http_request = function(fn)

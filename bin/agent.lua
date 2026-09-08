@@ -25,7 +25,7 @@ end
 
 local options = {
 	credentials_path = config.default_credentials_path(),
-	model = config.default_model(),
+	model = nil,
 	reasoning_effort = nil,
 	service_tier = nil,
 }
@@ -51,11 +51,12 @@ end
 
 local login = require("agent.login")
 
-local login_ok, login_err = login.ensure_credentials(options.credentials_path)
+local login_ok, resolved_credentials = login.ensure_credentials(options.credentials_path)
 if not login_ok then
-	io.stderr:write("error: " .. tostring(login_err) .. "\n")
+	io.stderr:write("error: " .. tostring(resolved_credentials) .. "\n")
 	os.exit(1)
 end
+options.credentials_path = resolved_credentials or options.credentials_path
 
 local agent = require("agent.core")
 local session_module = require("agent.session")

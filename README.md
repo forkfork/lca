@@ -1,242 +1,252 @@
-# lca - lua coding agent
+# lca — lua coding agent
 
-Personal coding agent written in Lua 5.5. It has one interactive TUI, Codex
-GPT-6 Astra native tools, tagged edits, and built-in background jobs.
+A small coding-agent harness, written in Lua 5.5, with a carefully made terminal
+interface. The aim is simple: make working with a model feel clear, useful, and
+lovely—not like watching an opaque process churn.
+
+The model brings the reasoning. LCA provides the working environment: files,
+tools, conversation state, background jobs, and a readable account of what happened.
+Use it to understand a codebase, make a change, and check the result.
+
+## A harness worth spending time in
+
+- **Work you can follow.** See tool activity, failures, edits, and verification
+  results as they happen. Progress describes actual work, not a guessed percentage.
+- **Edits grounded in what was read.** Tagged source inspection ties replacements
+  to the file contents the agent saw.
+- **A terminal, not a takeover.** Completed messages stay in normal scrollback.
+  A compact activity area—the river—sits above your draft. No alternate screen.
+- **Room for real work.** Native tools handle inspection, commands, and background
+  jobs. Inspect a running tool without losing what you're typing.
+- **A little delight.** Animated effects and ornamental turn dividers give the
+  interface character. The visuals follow observable activity, not hidden reasoning.
+
+LCA is a personal, evolving harness. The goal is a small, understandable system
+with thoughtful defaults, not a framework you have to assemble before using it.
 
 ## Install
 
-macOS:
+LCA needs Lua 5.5, LuaRocks, a POSIX terminal, and a native build toolchain.
+The terminal UI is bundled; no sibling checkout or separate `lcatui` rock is needed.
+A tiny bundled OpenSSL 3+ binding handles signing in-process—no luaossl fork or
+additional Lua crypto package.
+
+### macOS
+
+Install the Xcode command-line tools and the Homebrew prerequisites, then build
+with Homebrew's OpenSSL prefix rather than an architecture-specific path:
 
 ```bash
-brew install lua@5.5 luarocks curl openssl cmake
+brew install lua@5.5 luarocks curl openssl@3 cmake
 LUA_PREFIX="$(brew --prefix lua@5.5)"
-luarocks install --local --lua-dir="$LUA_PREFIX" lca
-eval "$(luarocks --local --lua-dir="$LUA_PREFIX" path --bin)"
+luarocks --lua-version=5.5 --local --lua-dir="$LUA_PREFIX" install lca OPENSSL_DIR="$(brew --prefix openssl@3)"
+eval "$(luarocks --lua-version=5.5 --local --lua-dir="$LUA_PREFIX" path --bin)"
 ```
 
-Linux:
+The native binding is tested locally on Ubuntu; macOS build verification is still
+outstanding.
+
+### Ubuntu
+
+With Lua 5.5 and its development headers available in your package sources:
 
 ```bash
-sudo apt install lua5.5 liblua5.5-dev luarocks build-essential curl openssl libcrypt-dev
+sudo apt install lua5.5 liblua5.5-dev luarocks build-essential curl libssl-dev libcrypt-dev
 luarocks --lua-version=5.5 --local install lca
 eval "$(luarocks --lua-version=5.5 --local path --bin)"
 ```
 
-From a checkout (after installing Lua 5.5, LuaRocks, Python 3 and the build prerequisites above):
+### From a checkout
+
+For the code in this checkout rather than the published rock, install Python 3
+and the prerequisites above, then:
 
 ```bash
 make local
 eval "$(luarocks --lua-version=5.5 --local path --bin)"
+# On macOS, use this instead of plain make local:
+# make local OPENSSL_DIR="$(brew --prefix openssl@3)"
 ```
 
-The terminal UI is included in this repository; no sibling checkout or separate
-`lcatui` rock is needed. `make local` uses `luarocks` from your PATH. Override
-`LUAROCKS`, `LUA`, or `LUA_INCDIR` if your toolchain uses different locations.
+`make local` uses `luarocks` from your PATH. Override `LUAROCKS`, `LUA`, or
+`LUA_INCDIR` if your toolchain lives elsewhere. Build once before running Lua
+entry points directly from the checkout.
 
-## Auth
+## Start working
 
-LCA uses Codex/OpenAI OAuth only.
+The default provider is Codex/OpenAI, using OAuth:
 
 ```bash
 lca login
+lca
 ```
 
-Credentials are stored in `~/.lca-credentials.json`.
-
-## Usage
+Credentials are stored in `~/.lca-credentials.json`. Start in the project you want
+to work on, then ask for an explanation, a change, or a focused investigation.
 
 ```bash
-lca
 lca run "explain this project"
 lca run "add the feature" --reasoning low
 lca repl
 ```
 
-Use LCA to explore a codebase, make changes, and verify the results. Native tools
-support file inspection, tagged edits, shell commands, and background jobs. For
-substantial tasks, progress is tied to actual inspection, changes, and verification
-rather than a guessed completion percentage.
+Interactive startup is fresh. Enter `/resume` to load the previous conversation.
+The latest project session lives in `.lca-session.json`; replaced sessions are
+archived under `.lca-sessions/`. Resuming keeps the launch model and credentials.
 
-The interactive `lca` and `lca repl` commands keep completed messages in normal
-terminal scrollback, with a compact activity area above the input. Tool activity,
-failures, and verification results stay visible while the agent works. The TUI
-requires a POSIX terminal; its runtime is bundled as `agent.ui`. It does not use
-the alternate screen.
+### Stay in control
 
-Press **Ctrl-T** to inspect running or recent tools without losing your draft.
-**Tab** selects the next tool; **↑/↓** scroll arguments and result details;
-**Ctrl-T** returns to the live river. Inspection retains at most 8 KB of arguments
-and 16 KB of result text per retained tool (all active plus 18 completed).
+| Control | Purpose |
+| --- | --- |
+| `/help`, `/status` | Commands and current session state |
+| `/reasoning` | Reasoning settings |
+| `/resume`, `/clear`, `/exit` | Manage the conversation |
+| **Ctrl-T** | Inspect tools, then return to the live river |
+| **Tab**, **↑/↓** in inspection | Select a tool and scroll its details |
+| `/tools on`, `/tools off` | Show or hide the detailed tool board |
+| `/river` | Inspect recorded activity, failures, and concurrency |
+| `/effect NAME` | Change the visual style |
 
-### Fast TUI development
+Tool inspection retains bounded argument/result previews: all active tools and
+18 completed tools, up to 8 KB of arguments and 16 KB of results per tool.
+After each turn, the summary reports work time, context usage, changed files,
+verification results, and prompt-cache share when available.
 
-Run `lua scripts/tui-replay.lua` from a checkout for a model-free interactive
-replay: concurrent tools, failed edits, recovery, command progress, completion,
-and cancellation. No commands in the fixture are executed and no session is saved.
-Type a draft, inspect tools, and resize your terminal while it plays.
+### Run your tests directly
 
-**Ctrl-P** pauses, **Ctrl-R** restarts (preserving your draft), **Ctrl-F** cycles
-0.25×–4× speed, **Ctrl-N** steps, **Ctrl-E** cycles effects, and **Ctrl-C** exits.
-The runner accepts `[fixture.json] [effect]`; the default fixture is
-`tests/fixtures/tui-replay.json`. Fixtures contain a sorted `events` array with
-`at` (seconds), `kind` (`submit`, `tool`, `waiting`, `complete`, `cancel`), and
-`event` for tool callback payloads or `text` for other events. Optional `duration`
-keeps the final state visible. Playback stops advancing at the end; restart or quit.
-This is an explicit replay format, not an importer for raw protocol logs.
+Use `/test make test` to run a command without a model request or adding its output
+to model context. `/test` repeats that exact command in the current session and
+project directory; LCA never guesses it from repository files. A fresh session
+requires selecting the command again.
 
-#### Record a real interaction
+Ctrl-C cancels the process group. The terminal shows exit status and bounded
+output tails; full output is in the displayed job logs, subject to job pruning.
+The command waits for completion or cancellation, with no automatic timeout.
 
-Enter `/record` **before the turn you want to capture**, then use LCA normally.
-Captures are automatically named in `/tmp/lca/replays/`, beside the logs and outside
- the project (temporary storage; copy captures elsewhere to keep them); the
-saved path is printed. `/record off` stops; `/record status` reports status.
-While recording, `/record` also reports status without starting another capture.
-An explicit path still works: `/record /tmp/lca-capture.jsonl`, or launch with
-`LCA_TUI_RECORD=/tmp/lca-capture.jsonl lca`. Recording is off by default.
-Replay with `lua scripts/tui-replay.lua <saved-path>`.
+## Providers and models
 
-Captures contain prompts, assistant text, tool arguments/results/progress, model
-activity, completion, and cancellation. **These may include secrets and source code;
-there is no automatic redaction.** Files are created exclusively with owner-only
-permissions (0600), never overwritten or uploaded. Choose a trusted local directory.
-Recording stops at 2 MiB with a visible warning rather than silently dropping events.
-Completed JSONL records remain replayable after interruption; an incomplete final
-line is ignored. Writes are immediate but not fsynced (not power-loss durable).
+**Codex/OpenAI defaults to GPT-6 Astra. Bedrock defaults to GPT-5.6 Sol.**
+Both use native function calling; an explicit Astra selection on Bedrock fails
+clearly rather than silently switching models.
 
-This records subsequent semantic events, not prior session state, keyboard input,
-terminal resize history, or pixel-exact frames. Replay uses the initial effect and
-your current terminal dimensions; later effect changes are not captured. Typing and
-resizing during replay still work. Stopping recording leaves the agent running;
-normal TUI exit closes the capture automatically.
-Interactive startup is deliberately fresh: prior transcript context is not
-loaded until you enter `/resume`. The latest session for the current project
-remains in `.lca-session.json`; when a new session replaces it, LCA first
-archives the previous one under `.lca-sessions/`.
+### Codex/OpenAI
 
-Run `/test make test` to execute tests directly, without model requests or adding
-results to model context. `/test` repeats that exact shell command in the current
-session and project working directory; a fresh session requires selecting it again.
-No command is inferred from repository files. Ctrl-C cancels the process group.
-The terminal shows exit status and bounded stdout/stderr tails; full output stays
-in the displayed durable job logs (subject to normal job pruning). This shortcut
-waits until completion or cancellation; it has no automatic timeout.
-After each turn, the summary reports work time and model-context usage, plus
-changed files, verification results, and prompt-cache share when available.
-Use `/river` to inspect recorded tool activity, failures, concurrency, and repeated
-arguments. Raw run logs are available under `/tmp/lca/logs`; no automatic reviewer
-or research model runs.
+Use `--model gpt-5.6-sol` (also Terra or Luna) for a comparison. Astra supports
+reasoning `low`, `medium`, `high`, `xhigh`, and `max`; legacy `none`/`minimal`
+settings map to `low`.
 
-The **fleuron** now uses a three-line Braille engraving on terminals at least 56
-columns wide: individually drawn scalloped leaves, curved stems, cut-out veins,
-and a double oval with space reserved for the turn label. Its geometry is static;
-ASCII mode and smaller widths use a plain single-line rule. This is
-an original foliage study, not a reproduction. The reference is Hans Sebald
-Beham's *Ornament of Satyr's Head and Wreath* (1543), Cleveland Museum of Art
-1922.122: <https://www.clevelandart.org/art/1922.122>.
-
-Fleuron is the only book ornament in the random per-turn rotation. Its antique-gold
-artwork frames the turn label; tool summaries remain below, including failure counts.
-The other river designs are unchanged.
-
-Preview without model calls: `lua scripts/river-gallery.lua 72 --books`
-(add `--color` for antique gold).
-
-Each readable `lca-*.log` has a matching `.log.jsonl` replay log. It records full
-turn context, model requests/responses, tool arguments/results (including successful
-inspections), and transport request bodies and response chunks before parsing.
-Records include UTC timestamps, sequence numbers, turn IDs, and model/tool call IDs.
-Transport chunks use `bytes_hex` so even split UTF-8 and malformed streams can be
-reconstructed exactly. Authentication headers are excluded; conversation and file
-contents are retained. Logging write/flush failures are reported as errors.
-
-GPT-6 Astra with native Responses function calling is the default runtime.
-Use `--model gpt-5.6-sol` (also Terra or Luna) for an explicit rollback or
-comparison. Astra accepts reasoning `low`, `medium`, `high`, `xhigh`, and `max`;
-legacy `none`/`minimal` settings map to `low`. Resuming restores the conversation
-but keeps the launch model and credentials. Read-only delegate models remain
-independently pinned. The eval CLI retains its historical Sol default: pass
-`--model gpt-6-astra` explicitly for new Astra runs.
-
-Useful TUI commands: `/help`, `/status`, `/reasoning`, `/resume`, `/clear`,
-`/exit`. Use `/tools on` or `/tools off` to show or hide the detailed tool board.
-
-Animation adds visual polish: startup picks a style at random, then usually keeps
-it, with a 20% chance of changing at each safe turn boundary after the first.
-The established styles are equally likely. Pin a launch style with `--tui-effect NAME`
-or `LCA_TUI_EFFECT`; `/effect NAME` changes it live, `/effect manual` stops rotation,
-and `/effect auto` restores occasional changes.
-
-**Duet** (`/effect duet` or `lca --tui-effect duet`) is a two-voice counterpoint:
-a cool model-activity phrase and a warm tool-response phrase, with independent
-rests, overlapping calls, suspended failures, and a closing cadence. It follows
-observable activity, not hidden reasoning. Preview without model/tool calls:
-`lua scripts/tui-replay.lua tests/fixtures/tui-performance-analysis.jsonl duet`.
-**Squall** joins drift, mycelium, cytoplasm, ink, and contours in normal
-startup selection and automatic rotation. It has slate-blue rain, small lightning
-bolts, and a brief white flash confined to the river (not the prompt or scrollback).
-Select it with `/effect squall`, or preview without model/tool calls:
-
-```bash
-lua scripts/tui-replay.lua tests/fixtures/tui-performance-analysis.jsonl squall
-```
-
-**Nightfall** (`/effect nightfall`) is a quiet braille sky: a fixed silver crescent,
-sparse stars with slow twinkling, and a short fading shooting star every 18 visual
-seconds. It participates in startup selection and automatic rotation. Preview with
-`lua scripts/tui-replay.lua tests/fixtures/tui-replay.json nightfall`.
-
-Press **Ctrl-E** to cycle effects; the replay status shows the current name.
-While paused, cycling switches immediately. Squall lives in `lua/agent/effects/squall.lua`.
-
-The status bar always shows delivered animation FPS. It counts completed full frames,
-includes stalls, and excludes repaint-only draws.
-Codex/OpenAI uses the Responses WebSocket transport by default, with HTTPS/SSE
-fallback on transport failure. To force the old HTTPS/SSE path:
+The Responses transport uses WebSockets by default, with HTTPS/SSE fallback.
+To force HTTPS/SSE:
 
 ```bash
 LCA_CODEX_WEBSOCKET=0 lca
 ```
 
-## Local Development
+### Amazon Bedrock
 
-The local development install targets Lua 5.5 by default. Override
-`LUA_VERSION` only when deliberately testing another supported runtime.
+Bedrock is an alternative provider through its OpenAI-compatible Responses endpoint.
+A minimal credentials profile can use your AWS environment or CLI credential chain:
 
-Run directly from the checkout:
-
-```bash
-lua bin/agent.lua "Explain what files this project should inspect first."
-lua bin/repl.lua
+```json
+{
+  "provider": "bedrock",
+  "providers": {
+    "bedrock": {
+      "region": "us-east-1"
+    }
+  }
+}
 ```
 
-Useful development targets:
+Save it as `~/.lca-bedrock-credentials.json` and select it with `--credentials`.
+Plain `lca` prefers valid Codex/OpenAI credentials; when those are absent, it
+selects a configured Bedrock profile automatically.
+
+The Bedrock profile also accepts `apiKey`, or `accessKeyId`, `secretAccessKey`,
+and optional `sessionToken`/`expiresAt`. Keep credential files private. Refreshed
+CLI credentials are saved back to the profile. The AWS CLI is only needed when
+using its credential chain.
+
+The optional `model` defaults to `global.openai.gpt-5.6-sol`. Bedrock uses HTTPS/SSE
+and local native tools; OpenAI's hosted web search is not available on this path.
+Astra requests are rejected, including when carried by a saved session.
+
+## The terminal experience
+
+Pin a launch effect with `--tui-effect NAME` or `LCA_TUI_EFFECT`. Use `/effect NAME`
+to change it live, `/effect manual` to stop rotation, and `/effect auto` to restore
+occasional changes at safe turn boundaries.
+
+Styles include **duet**, a two-voice model/tool counterpoint; **squall**, slate-blue
+rain and small lightning flashes; and **nightfall**, a quiet braille sky. Effects
+stay in the activity area rather than erasing the conversation. The status bar
+shows delivered animation FPS, including stalls and excluding repaint-only draws.
+
+### Preview without a model
 
 ```bash
-make local   # install this checkout into local LuaRocks
-make rock    # pack lca-dev-1.src.rock
-make test    # run all Lua tests
-make check   # make local, then make test
+lua scripts/tui-replay.lua
+lua scripts/tui-replay.lua tests/fixtures/tui-performance-analysis.jsonl duet
+```
+
+The replay exercises concurrent tools, failures, recovery, progress, completion,
+and cancellation. No fixture commands execute and no session is saved. Type a
+draft, inspect tools, and resize the terminal while it plays.
+
+**Ctrl-P** pauses, **Ctrl-R** restarts while preserving your draft, **Ctrl-F** cycles
+0.25×–4× speed, **Ctrl-N** steps, **Ctrl-E** cycles effects, and **Ctrl-C** exits.
+The runner accepts `[fixture.json] [effect]`; its default is
+`tests/fixtures/tui-replay.json`.
+
+### Record an interaction
+
+Enter `/record` before the turn to capture. `/record off` stops and `/record status`
+reports status. Captures are automatically named under `/tmp/lca/replays/`; copy
+them elsewhere to keep them. An explicit path works too:
+`/record /tmp/lca-capture.jsonl` or `LCA_TUI_RECORD=/tmp/lca-capture.jsonl lca`.
+Replay with `lua scripts/tui-replay.lua <saved-path>`.
+
+**Captures may contain secrets and source code. There is no automatic redaction.**
+Recording is off by default. Files are created exclusively with owner-only
+permissions (0600), never overwritten or uploaded. Choose a trusted directory.
+Recording stops at 2 MiB with a warning; completed JSONL records survive interruption,
+and an incomplete final line is ignored. Writes are not power-loss durable.
+
+Recordings contain subsequent semantic events, not prior session state, keystrokes,
+resize history, or pixel-exact frames. Replay uses your current terminal dimensions
+and the initial effect. Stopping recording leaves the agent running.
+
+## Development and diagnostics
+
+```bash
+make local   # build and install this checkout into local LuaRocks
+make test    # run the test suites
+make check   # local install followed by tests
+make rock    # pack the rock
 ```
 
 On Linux, also run `python3 tests/test_tui_pty.py` with the LuaRocks environment
-loaded. It exercises actual terminal polling, slow-reader backpressure, complete
-colored transcript writes, and Ctrl-D cleanup. Input polling must use a separately
-opened terminal descriptor: polling stdin can make shared stdout nonblocking and
-silently truncate river output. After upgrading an affected running session,
-launch LCA in a fresh terminal to avoid inheriting the old descriptor flags.
-`make local` installs LCA and its bundled terminal runtime together. UI primitives
-live in `lua/agent/ui/`; agent state, layout, and interaction remain in
-`lua/agent/tui.lua`. The imported UI suites live in `tests/ui/` and run as part of
-`make test`. No sibling source directory is accessed during build or execution.
+loaded for real-terminal polling, backpressure, transcript writes, and clean exit.
+After terminal polling changes, restart LCA in a fresh terminal.
 
-See `docs/architecture.md` for the module layout.
+Raw logs live under `/tmp/lca/logs`. Each readable `lca-*.log` has a matching
+`.log.jsonl` containing turn context, model requests/responses, tool arguments and
+results, and transport chunks before parsing. Authentication headers are excluded,
+but conversation and file contents remain: treat these logs as sensitive too.
+No automatic reviewer or research model runs.
 
-## License
+The terminal runtime is in `lua/agent/ui/`; agent-facing layout and interaction are
+in `lua/agent/tui.lua`. See `docs/architecture.md` for the module layout. The eval
+CLI retains its historical Sol default; pass `--model gpt-6-astra` for Astra runs.
 
-BSD 2-Clause, with MIT-licensed terminal UI modules originally from lcatui. See `LICENSE`.
+The native binding uses OpenSSL's one-shot APIs:
+<https://docs.openssl.org/3.0/man3/EVP_DigestInit/> and
+<https://docs.openssl.org/3.0/man3/EVP_MAC/>.
 
-## Credits
+## License and credits
 
-The tag-based read/edit tool design is inspired by Salvatore Sanfilippo
-(@antirez), especially the discussion in
-[Alternatives for the EDIT tool of LLM agents](https://antirez.com/news/166).
+BSD 2-Clause, with MIT-licensed terminal UI modules originally from lcatui.
+See `LICENSE`.
+
+The tagged read/edit tool design is inspired by Salvatore Sanfilippo (@antirez),
+especially [Alternatives for the EDIT tool of LLM agents](https://antirez.com/news/166).

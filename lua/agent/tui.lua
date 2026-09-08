@@ -2512,10 +2512,25 @@ function App:start_io()
 		self:drive_frame()
 	end)
 	self.active_input_reader = self.input_reader or stdin_chunk_reader(uv.fs_read, self.stdin_fd)
-	self.stdin_poll = uv.new_poll(self.stdin_fd)
-	self.stdin_poll:start("r", function()
-		self:feed_input(self.active_input_reader())
-	end)
+	local poll, poll_err = uv.new_poll(self.stdin_fd)
+	if poll then
+		self.stdin_poll = poll
+		self.stdin_poll:start("r", function()
+			self:feed_input(self.active_input_reader())
+		end)
+	else
+		core.debug_log("[tui] stdin poll unavailable: %s; using tty stream", tostring(poll_err))
+		local stream, stream_err = uv.new_tty(self.stdin_fd, true)
+		if not stream then error("cannot initialize terminal input: " .. tostring(stream_err)) end
+		self.stdin_stream = stream
+		self.stdin_stream:read_start(function(err, chunk)
+			if err then
+				core.debug_log("[tui] stdin stream failed: %s", tostring(err))
+				return
+			end
+			if chunk and chunk ~= "" then self:feed_input(chunk) end
+		end)
+	end
 end
 
 function App:stop_io()
@@ -2523,13 +2538,17 @@ function App:stop_io()
 		self.frame_timer:stop(); self.frame_timer:close()
 	end
 	local fd = self.stdin_fd
-	if self.stdin_poll and not self.stdin_poll:is_closing() then
+	if self.stdin_stream and not self.stdin_stream:is_closing() then
+		self.stdin_stream:read_stop()
+		self.stdin_stream:close()
+		fd = nil
+	elseif self.stdin_poll and not self.stdin_poll:is_closing() then
 		self.stdin_poll:stop()
 		self.stdin_poll:close(function() if fd then uv.fs_close(fd) end end)
 	elseif fd then
 		uv.fs_close(fd)
 	end
-	self.stdin_poll, self.frame_timer, self.stdin_fd, self.active_input_reader = nil, nil, nil, nil
+	self.stdin_poll, self.stdin_stream, self.frame_timer, self.stdin_fd, self.active_input_reader = nil, nil, nil, nil, nil
 	uv.run("nowait")
 end
 

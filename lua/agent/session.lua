@@ -36,7 +36,14 @@ local function create_session_id(cwd)
 end
 
 local function resolve_model(options)
-	local model = options.model or DEFAULT_MODEL
+	local model = options.model
+	if options.credentials_path then
+		local providers = require("agent.providers")
+		local provider, name = providers.load(options.credentials_path)
+		model = model or providers.default_model(options.credentials_path)
+		if name == "bedrock" then provider.validate_model(model) end
+	end
+	model = model or DEFAULT_MODEL
 	if model ~= "gpt-6-astra" and model ~= "gpt-5.6-sol" and model ~= "gpt-5.6-terra" and model ~= "gpt-5.6-luna" then
 		error("unsupported model: " .. tostring(model) .. " (LCA supports GPT-6 Astra and Codex GPT-5.6)")
 	end

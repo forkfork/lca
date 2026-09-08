@@ -13,7 +13,10 @@ for file in files:lines() do
 end
 assert(files:close())
 for module, file in pairs(rockspec.build.modules) do
-	local handle = assert(io.open(root .. "/" .. file, "r"), "missing packaged file: " .. module)
-	handle:close()
+	local sources = type(file) == "table" and file.sources or { file }
+	for _, source in ipairs(sources) do
+		local handle = assert(io.open(root .. "/" .. source, "r"), "missing packaged file: " .. module)
+		handle:close()
+	end
 end
 print("Packaging module inventory PASS")

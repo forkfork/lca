@@ -53,6 +53,9 @@ local function start_server(response, opts)
 		args = { "tests/http_transport_fixture_server.lua" },
 		stdio = { nil, stdout, stderr },
 		env = {
+			"PATH=" .. tostring(os.getenv("PATH") or ""),
+			"LUA_PATH=" .. package.path,
+			"LUA_CPATH=" .. package.cpath,
 			"LCA_FIXTURE_PORT=" .. tostring(port),
 			"LCA_FIXTURE_CERT=" .. cert,
 			"LCA_FIXTURE_KEY=" .. key,

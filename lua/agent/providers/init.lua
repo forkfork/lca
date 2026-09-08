@@ -33,6 +33,29 @@ local function codex_credentials_body(root_body)
 	return json.encode(selected)
 end
 
+local function bedrock_credentials_body(root_body)
+	local root = decode_body(root_body)
+	if not root then error("invalid credentials file") end
+	local selected = type(root.providers) == "table" and root.providers.bedrock or root
+	local has_api_key = type(selected) == "table" and type(selected.apiKey) == "string" and selected.apiKey ~= ""
+	local has_aws_credentials = type(selected) == "table"
+		and type(selected.accessKeyId) == "string" and selected.accessKeyId ~= ""
+		and type(selected.secretAccessKey) == "string" and selected.secretAccessKey ~= ""
+	local has_credential_source = type(selected) == "table"
+		and type(selected.isengardAccount) == "string" and selected.isengardAccount ~= ""
+	if not has_api_key and not has_aws_credentials and not has_credential_source then
+		error("credentials file has no Bedrock credentials or configured credential source")
+	end
+	selected.provider = "bedrock"
+	return json.encode(selected)
+end
+
+local function selected_provider(root_body)
+	local root = decode_body(root_body)
+	if type(root) == "table" and root.provider == "bedrock" then return "bedrock" end
+	return "codex"
+end
+
 local function credentials_tables(root_body)
 	local root = decode_body(root_body)
 	if not root then error("invalid Codex credentials file; run lca login") end
@@ -125,7 +148,11 @@ end
 
 function providers.credentials_body(credentials_path)
 	local path = credentials_path or config.default_credentials_path()
-	local selected = codex_credentials_body(read_credentials(path))
+	local root_body = read_credentials(path)
+	if selected_provider(root_body) == "bedrock" then
+		return bedrock_credentials_body(root_body)
+	end
+	local selected = codex_credentials_body(root_body)
 	if is_expired(selected) then
 		return refresh_credentials(path)
 	end
@@ -136,8 +163,29 @@ function providers.refresh_credentials(credentials_path, failed_access)
 	return refresh_credentials(credentials_path or config.default_credentials_path(), failed_access)
 end
 
-function providers.load(_credentials_path)
+function providers.load(credentials_path)
+	local body = read_credentials(credentials_path or config.default_credentials_path())
+	if selected_provider(body) == "bedrock" then
+		return require("agent.providers.bedrock"), "bedrock"
+	end
 	return require("agent.providers.codex"), "codex"
+end
+
+function providers.default_model(credentials_path)
+	local body = read_credentials(credentials_path or config.default_credentials_path())
+	if selected_provider(body) ~= "bedrock" then return config.default_model() end
+	local selected = decode_body(bedrock_credentials_body(body))
+	local model = selected and selected.model
+	require("agent.providers.bedrock").validate_model(model)
+	if not model or model == "" or model:match("%.openai%.gpt%-5%.6%-sol$") then
+		return "gpt-5.6-sol"
+	end
+	if model == "gpt-6-astra" or model == "gpt-5.6-sol"
+		or model == "gpt-5.6-terra" or model == "gpt-5.6-luna"
+	then
+		return model
+	end
+	return "gpt-5.6-sol"
 end
 
 function providers._invalidate_cache()

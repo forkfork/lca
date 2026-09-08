@@ -24,9 +24,18 @@ dependencies = {
 	"lua-cjson",
 	"luv",
 }
+external_dependencies = {
+	OPENSSL = { header = "openssl/evp.h", library = "crypto" },
+}
 build = {
 	type = "builtin",
 	modules = {
+		["agent.crypto"] = {
+			sources = { "c/crypto.c" },
+			libraries = { "crypto" },
+			incdirs = { "$(OPENSSL_INCDIR)" },
+			libdirs = { "$(OPENSSL_LIBDIR)" },
+		},
 		["agent.ui"] = "lua/agent/ui/init.lua",
 		["agent.ui.ansi"] = "lua/agent/ui/ansi.lua",
 		["agent.ui.buffer"] = "lua/agent/ui/buffer.lua",
@@ -72,6 +81,7 @@ build = {
 		["agent.tool_protocol"] = "lua/agent/tool_protocol.lua",
 		["agent.tool_registry"] = "lua/agent/tool_registry.lua",
 		["agent.providers"] = "lua/agent/providers/init.lua",
+		["agent.providers.bedrock"] = "lua/agent/providers/bedrock.lua",
 		["agent.providers.codex"] = "lua/agent/providers/codex.lua",
 		["agent.tools.job_args"] = "lua/agent/tools/job_args.lua",
 		["agent.tools.edit"] = "lua/agent/tools/edit.lua",

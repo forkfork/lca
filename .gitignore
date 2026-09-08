@@ -19,3 +19,7 @@ __pycache__/
 tricky_quotes.lua
 nested_tables.lua
 regex_parser.py
+
+# Native Lua module build products
+*.o
+*.so

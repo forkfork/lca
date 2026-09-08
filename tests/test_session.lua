@@ -56,6 +56,30 @@ run_test("new Codex sessions default to Astra with native tools", function()
 	assert_eq(session_module.create({ stale_edit_evidence = false }).stale_edit_evidence, false)
 end)
 
+run_test("Bedrock sessions default to Sol while Codex stays on Astra", function()
+	local path = os.tmpname()
+	local file = assert(io.open(path, "w"))
+	file:write([[{"provider":"bedrock","providers":{"bedrock":{"apiKey":"test"}}}]])
+	file:close()
+	require("agent.providers")._invalidate_cache()
+	local bedrock_session = session_module.create({ credentials_path = path })
+	assert_eq(bedrock_session.model, "gpt-5.6-sol")
+	local explicit = session_module.create({ credentials_path = path, model = "gpt-5.6-sol" })
+	assert_eq(explicit.model, "gpt-5.6-sol")
+	local ok, err = pcall(session_module.create, { credentials_path = path, model = "gpt-6-astra" })
+	assert_eq(ok, false)
+	assert(tostring(err):find("Astra is not supported by Bedrock", 1, true), tostring(err))
+	file = assert(io.open(path, "w"))
+	file:write([[{"provider":"bedrock","providers":{"bedrock":{"apiKey":"test","model":"gpt-6-astra"}}}]])
+	file:close()
+	require("agent.providers")._invalidate_cache()
+	ok, err = pcall(session_module.create, { credentials_path = path })
+	assert_eq(ok, false)
+	assert(tostring(err):find("Astra is not supported by Bedrock", 1, true), tostring(err))
+	os.remove(path)
+	require("agent.providers")._invalidate_cache()
+end)
+
 run_test("retired experiments cannot be enabled in new sessions", function()
 	for _, key in ipairs({ "delegate_readonly_enabled", "tool_dag_enabled", "readonly_fork_join_enabled", "delegate_readonly_profile" }) do
 		local ok, err = pcall(session_module.create, { [key] = key == "delegate_readonly_profile" and "compact_luna" or true })
@@ -316,7 +340,8 @@ end)
 run_test("system prompt bounds duplicate verification evidence", function()
 	local s = session_module.create({ model = "gpt-5.6-sol" })
 	local prompt = s:get_system_prompt()
-	if not prompt:find("Runtime: model=gpt-5.6-sol Linux ", 1, true) then
+	local system_name = require("luv").os_uname().sysname
+	if not prompt:find("Runtime: model=gpt-5.6-sol " .. system_name .. " ", 1, true) then
 		error("compact runtime identity missing")
 	end
 	if not prompt:find("## Verification sufficiency", 1, true) then
