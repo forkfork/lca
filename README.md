@@ -23,6 +23,11 @@ That feedback loop is the heart of the project. Better inspection, clearer tool
 results, fewer ways to make the same mistake twice. Tagged reads and edits are
 one example: a replacement is tied to the source the agent actually saw.
 
+We benchmark improvements carefully on example tasks, often running the same work
+through other harnesses to see what they do better and where LCA still stumbles.
+Experiment notes live in `research/`, including what we tried, what happened, and
+what was worth keeping.
+
 The terminal gets the same care. Beautiful little animations follow what the
 tools are doing; they aren't a screensaver laid over the work. Activity changes
 their rhythm, and failures disturb the pattern with turbulence and fractured
