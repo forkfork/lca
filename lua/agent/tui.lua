@@ -1777,16 +1777,20 @@ function App:advance(frame_dt)
 	local listening_breath = listening and (0.5 + 0.5 * math.sin(self.flow_time * 1.7)) or 0
 	local failed = self.state.disturbance > 0
 	local active = not listening and self.state.mode ~= "complete" and self.state.mode ~= "cancelled"
+	-- Let the completion summary take over without lingering tool labels.
+	-- Keep active tools and failure details visible; retain history for the inspector.
+	local completing = self.state.completion_summary ~= nil and not self.state.failure
+	local stage_candidates = completing and self.state:active_tools() or self.state.tools
 	local visible_tools = {}
-	for index = #self.state.tools, 1, -1 do
-		local tool = self.state.tools[index]
+	for index = #stage_candidates, 1, -1 do
+		local tool = stage_candidates[index]
 		if tool.status == "active" or (tool.finished_at and state_now - tool.finished_at < 4) then
 			visible_tools[#visible_tools + 1] = tool
 			if #visible_tools >= world_rows then break end
 		end
 	end
 	local staged_tools, staged_batch_id = {}, nil
-	if self.tool_stage then staged_tools, staged_batch_id = tool_stage_batch(self.state.tools, state_now) end
+	if self.tool_stage then staged_tools, staged_batch_id = tool_stage_batch(stage_candidates, state_now) end
 	self.staged_tools, self.staged_batch_id = staged_tools, staged_batch_id
 	local vortices = {}
 	local tool_positions = {}

@@ -616,6 +616,37 @@ test("completed turn rests on elapsed time and one context token number", functi
 	assert_eq(state.completion_summary, nil)
 end)
 
+test("completion clears finished tool labels without delaying the pop or losing history", function()
+	for _, tool_stage in ipairs({ false, true }) do
+		local now = 100
+		local state = tui.State.new({ clock = function() return now end })
+		local app = tui.App.new({ backend = fake_backend({ width = 100, height = 24 }), state = state, tool_stage = tool_stage })
+		state:submit("check it")
+		state:tool_event(start("check", "run", { command = "make test" }))
+		state:tool_event(finish("check", "run", {}, { summary = "exit 0" }))
+		app:render(0)
+		assert_eq(#app.frame.visible_tools, 1)
+		assert_eq(#app.staged_tools, tool_stage and 1 or 0)
+		state:assistant_complete("Done.", { elapsed = 2, tokens = 1000 })
+		state:listen()
+		app:render(0)
+		assert_eq(#app.frame.visible_tools, 0)
+		assert_eq(#app.staged_tools, 0)
+		assert_eq(state.tools_by_id.check.status, "ok")
+		now = now + 1
+		app:render(1)
+		assert_eq(app.celebration_active, true)
+		assert_contains(app.renderer.previous:plain_line(3), "✓ 2s · 1k tokens")
+		state.failure = "check failed"
+		app:render(0)
+		assert_eq(#app.frame.visible_tools, 1, "failure details retain their normal linger")
+		state.failure = nil
+		state:submit("next check")
+		state:tool_event(start("next", "run", { command = "make test" }))
+		app:render(0)
+		assert(#app.frame.visible_tools > 0, "next turn tools remain visible")
+	end
+end)
 test("completion cache percentage distinguishes zero from unavailable", function()
 	local now = 10
 	local state = tui.State.new({ clock = function() return now end })
