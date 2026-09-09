@@ -1081,6 +1081,32 @@ test("tool stage can be toggled without changing tool state", function()
 	assert_eq(#state:active_tools(), 1)
 end)
 
+test("status bar names the startup animation and subsequent effects", function()
+	for _, effect in ipairs({ "ink", "auto" }) do
+		local now = 10
+		local app = tui.App.new({ backend = fake_backend({ width = 80, height = 24 }),
+			state = tui.State.new({ clock = function() return now end }),
+			effect = effect, effect_random = function(n) return n and 1 or 0 end })
+		local function assert_status(name)
+			app.state:notice("fresh session · /resume restores the last session for this project")
+			app.state:notice("3 MCP tools connected")
+			app:render(0.1)
+			assert_contains(app.renderer.previous:plain_line(8), "LCA · " .. name .. " · ")
+			now = now + 9
+			app:render(0.1)
+			assert_contains(app.renderer.previous:plain_line(8), "LCA · " .. name .. " · ")
+		end
+		assert_status(effect == "auto" and "drift" or "ink")
+		assert_eq(app:next_effect(), true)
+		assert_status(app.effect)
+		if effect == "auto" then
+			assert_eq(app:auto_advance_effect(), false)
+			assert_eq(app:auto_advance_effect(), true)
+			assert_status(app.effect)
+		end
+	end
+end)
+
 test("animation effects switch without replacing semantic state", function()
 	local backend = fake_backend({ width = 100, height = 24 })
 	local state = tui.State.new({ clock = function() return 10 end })
@@ -1789,7 +1815,7 @@ test("expired notices disappear from the compact status row", function()
 	local app = tui.App.new({ backend = fake_backend({ width = 100, height = 32 }), state = state })
 	app:render(1 / 30)
 	local status = app.renderer.previous:plain_line(8)
-	assert_contains(status, "LCA · listening")
+	assert_contains(status, "LCA · " .. app.effect .. " · listening")
 	if status:find("session cleared", 1, true) then error("expired notice remained in status row") end
 end)
 

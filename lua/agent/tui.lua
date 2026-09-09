@@ -1558,6 +1558,7 @@ function App.new(opts)
 	if not tui_effects.known(effect) then
 		error("unknown TUI effect '" .. tostring(effect) .. "' (choose " .. table.concat(EFFECT_NAMES, ", ") .. ")")
 	end
+	local state = opts.state or State.new()
 	return setmetatable({
 		backend = backend,
 		terminal = opts.terminal or lcatui.Terminal.new(backend),
@@ -1565,7 +1566,7 @@ function App.new(opts)
 			mode = "inline",
 			synchronized = true,
 		}),
-		state = opts.state or State.new(),
+		state = state,
 		editor = opts.editor or Editor.new(opts.history),
 		input = nil,
 		flow = nil,
@@ -2123,7 +2124,7 @@ function App:draw()
 	if focus_status then status = compact_text(focus_status, width - 18) .. " · Tab next"
 	elseif notice then status = compact_text(notice.text, math.max(20, width - #status - 8)) .. " · " .. status end
 	local fps_label = self.fps and (tostring(math.floor(self.fps + 0.5)) .. " fps") or "-- fps"
-	screen:write(status_row, 2, "LCA · " .. displayed_phase .. " · " .. fps_label .. " · " .. status, rgb(74, 93, 105), width - 2)
+	screen:write(status_row, 2, "LCA · " .. self.effect .. " · " .. displayed_phase .. " · " .. fps_label .. " · " .. status, rgb(74, 93, 105), width - 2)
 	local cursor_col = 10 + editor_col
 	local cursor_cell = screen.rows[input_row + editor_row - 1][cursor_col]
 	local cursor_style = cursor_cell.style or rgb(224, 219, 229)
