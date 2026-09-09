@@ -37,15 +37,7 @@ local function bedrock_credentials_body(root_body)
 	local root = decode_body(root_body)
 	if not root then error("invalid credentials file") end
 	local selected = type(root.providers) == "table" and root.providers.bedrock or root
-	local has_api_key = type(selected) == "table" and type(selected.apiKey) == "string" and selected.apiKey ~= ""
-	local has_aws_credentials = type(selected) == "table"
-		and type(selected.accessKeyId) == "string" and selected.accessKeyId ~= ""
-		and type(selected.secretAccessKey) == "string" and selected.secretAccessKey ~= ""
-	local has_credential_source = type(selected) == "table"
-		and type(selected.isengardAccount) == "string" and selected.isengardAccount ~= ""
-	if not has_api_key and not has_aws_credentials and not has_credential_source then
-		error("credentials file has no Bedrock credentials or configured credential source")
-	end
+	if type(selected) ~= "table" then error("credentials file has no Bedrock provider configuration") end
 	selected.provider = "bedrock"
 	return json.encode(selected)
 end

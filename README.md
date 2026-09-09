@@ -171,7 +171,9 @@ A minimal credentials profile can use your AWS environment or CLI credential cha
 
 Save it as `~/.lca-bedrock-credentials.json` and select it with `--credentials`.
 Plain `lca` prefers valid Codex/OpenAI credentials; when those are absent, it
-selects a configured Bedrock profile automatically.
+selects a configured Bedrock profile automatically. If no LCA profile exists,
+startup also detects `AWS_BEARER_TOKEN_BEDROCK`, AWS environment credentials,
+or a usable AWS CLI credential chain and creates the minimal Bedrock profile.
 
 The Bedrock profile also accepts `apiKey`, or `accessKeyId`, `secretAccessKey`,
 and optional `sessionToken`/`expiresAt`. Keep credential files private. Refreshed

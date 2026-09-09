@@ -3,6 +3,8 @@ local json = require("agent.util.json")
 local config = require("agent.config")
 
 local login = {}
+local getenv = os.getenv
+local command_capture = shell.capture
 
 local function file_exists(path)
 	local file = io.open(path, "r")
@@ -22,14 +24,7 @@ local function provider_name(path)
 	if not ok or type(root) ~= "table" then return nil end
 	if root.provider == "bedrock" then
 		local selected = type(root.providers) == "table" and root.providers.bedrock or root
-		if type(selected) == "table" then
-			local has_key = type(selected.apiKey) == "string" and selected.apiKey ~= ""
-			local has_aws = type(selected.accessKeyId) == "string" and selected.accessKeyId ~= ""
-				and type(selected.secretAccessKey) == "string" and selected.secretAccessKey ~= ""
-			local has_isengard = type(selected.isengardAccount) == "string" and selected.isengardAccount ~= ""
-			if has_key or has_aws or has_isengard then return "bedrock" end
-		end
-		return nil
+		return type(selected) == "table" and "bedrock" or nil
 	end
 	local selected = type(root.providers) == "table" and (root.providers.codex or root.providers.openai) or root
 	if type(selected) == "table" and type(selected.access) == "string" and selected.access ~= ""
@@ -49,6 +44,36 @@ local function resolve_existing(credentials_path)
 	local bedrock_path = config.bedrock_credentials_path()
 	if provider_name(bedrock_path) == "bedrock" then return bedrock_path end
 	if provider_name(default_path) == "bedrock" then return default_path end
+
+	local bearer_token = getenv("AWS_BEARER_TOKEN_BEDROCK")
+	local access_key = getenv("AWS_ACCESS_KEY_ID")
+	local secret_key = getenv("AWS_SECRET_ACCESS_KEY")
+	local has_bedrock_token = type(bearer_token) == "string" and bearer_token ~= ""
+	local has_environment_keys = type(access_key) == "string" and access_key ~= ""
+		and type(secret_key) == "string" and secret_key ~= ""
+	local has_cli_credentials = false
+	if not has_bedrock_token and not has_environment_keys then
+		local ok, body = pcall(command_capture, "aws configure export-credentials --format process 2>/dev/null")
+		if ok then
+			local decoded_ok, exported = pcall(json.decode, tostring(body or ""))
+			has_cli_credentials = decoded_ok and type(exported) == "table"
+				and type(exported.AccessKeyId or exported.accessKeyId) == "string"
+				and type(exported.SecretAccessKey or exported.secretAccessKey) == "string"
+		end
+	end
+	if has_bedrock_token or has_environment_keys or has_cli_credentials then
+		local region = getenv("AWS_REGION") or getenv("AWS_DEFAULT_REGION") or "us-east-1"
+		local file = io.open(bedrock_path, "w")
+		if file then
+			local body = json.encode({ provider = "bedrock", providers = { bedrock = { region = region } } }) .. "\n"
+			local wrote = file:write(body)
+			local closed = file:close()
+			if wrote and closed then
+				pcall(require("luv").fs_chmod, bedrock_path, tonumber("600", 8))
+				return bedrock_path
+			end
+		end
+	end
 	return nil
 end
 
@@ -126,5 +151,7 @@ end
 
 login._provider_name = provider_name
 login._resolve_existing = resolve_existing
+login._set_getenv = function(fn) getenv = fn or os.getenv end
+login._set_command_capture = function(fn) command_capture = fn or shell.capture end
 
 return login

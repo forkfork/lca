@@ -51,6 +51,48 @@ test("Bedrock is selected only when explicitly active", function()
 	os.remove(path)
 end)
 
+test("Bedrock accepts a profile backed by the AWS credential chain", function()
+	local path = temp_file([[{
+		"provider": "bedrock",
+		"providers": { "bedrock": { "region": "ap-southeast-2" } }
+	}]])
+	providers._invalidate_cache()
+	local credentials = json.decode(providers.credentials_body(path))
+	assert_eq(credentials.provider, "bedrock")
+	assert_eq(credentials.region, "ap-southeast-2")
+	bedrock._set_getenv(function(name)
+		local values = {
+			AWS_ACCESS_KEY_ID = "environment-access",
+			AWS_SECRET_ACCESS_KEY = "environment-secret",
+			AWS_SESSION_TOKEN = "environment-session",
+		}
+		return values[name]
+	end)
+	local loaded = bedrock._load_credentials(path)
+	assert_eq(loaded.access_key, "environment-access")
+	assert_eq(loaded.secret_key, "environment-secret")
+	assert_eq(loaded.session_token, "environment-session")
+	assert_eq(loaded.region, "ap-southeast-2")
+	bedrock._set_getenv(nil)
+	os.remove(path)
+end)
+
+test("Bedrock accepts AWS_BEARER_TOKEN_BEDROCK", function()
+	local path = temp_file([[{
+		"provider": "bedrock",
+		"providers": { "bedrock": { "region": "us-east-1" } }
+	}]])
+	providers._invalidate_cache()
+	bedrock._set_getenv(function(name)
+		if name == "AWS_BEARER_TOKEN_BEDROCK" then return "environment-bearer-token" end
+	end)
+	local loaded = bedrock._load_credentials(path)
+	assert_eq(loaded.api_key, "environment-bearer-token")
+	assert_eq(loaded.region, "us-east-1")
+	bedrock._set_getenv(nil)
+	os.remove(path)
+end)
+
 test("Bedrock request uses its Astra default and local native tools", function()
 	local body
 	local path = temp_file([[{

@@ -105,6 +105,9 @@ end
 
 local function load_credentials(path, skip_configured)
 	local base = configured_credentials(path)
+	if (not base.api_key or base.api_key == "") and getenv("AWS_BEARER_TOKEN_BEDROCK") then
+		base.api_key = getenv("AWS_BEARER_TOKEN_BEDROCK")
+	end
 	if not skip_configured and credentials_valid(base) then return base end
 	local from_environment = {
 		access_key = getenv("AWS_ACCESS_KEY_ID"),

@@ -94,10 +94,46 @@ test("default auth prefers Codex then falls back to the Bedrock profile", functi
 
 	write_file(default_path, [[{"provider":"bedrock","providers":{"bedrock":{"accessKeyId":"old","secretAccessKey":"old"}}}]])
 	assert(login._resolve_existing(default_path) == bedrock_path)
+	write_file(bedrock_path, [[{"provider":"bedrock","providers":{"bedrock":{"region":"us-east-1"}}}]])
+	assert(login._resolve_existing(default_path) == bedrock_path)
 
 	config.default_credentials_path = old_default
 	config.bedrock_credentials_path = old_bedrock
 	os.remove(default_path)
+	os.remove(bedrock_path)
+	assert(os.execute("rmdir " .. shell_quote(base)))
+end)
+
+test("default auth detects Bedrock environment credentials", function()
+	local base = os.tmpname()
+	os.remove(base)
+	assert(os.execute("mkdir " .. shell_quote(base)))
+	local default_path = base .. "/default.json"
+	local bedrock_path = base .. "/bedrock.json"
+
+	local config = require("agent.config")
+	local old_default = config.default_credentials_path
+	local old_bedrock = config.bedrock_credentials_path
+	config.default_credentials_path = function() return default_path end
+	config.bedrock_credentials_path = function() return bedrock_path end
+	login._set_getenv(function(name)
+		if name == "AWS_BEARER_TOKEN_BEDROCK" then return "test-token" end
+		if name == "AWS_REGION" then return "ap-southeast-2" end
+	end)
+	login._set_command_capture(function() error("AWS CLI should not be called") end)
+
+	assert(login._resolve_existing(default_path) == bedrock_path)
+	local file = assert(io.open(bedrock_path, "r"))
+	local saved = json.decode(file:read("*a"))
+	file:close()
+	assert(saved.provider == "bedrock")
+	assert(saved.providers.bedrock.region == "ap-southeast-2")
+	assert(saved.providers.bedrock.apiKey == nil)
+
+	login._set_getenv(nil)
+	login._set_command_capture(nil)
+	config.default_credentials_path = old_default
+	config.bedrock_credentials_path = old_bedrock
 	os.remove(bedrock_path)
 	assert(os.execute("rmdir " .. shell_quote(base)))
 end)
