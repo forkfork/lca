@@ -11,21 +11,26 @@ The model brings the reasoning. LCA provides the working environment: files,
 tools, conversation state, background jobs, and a readable account of what happened.
 Use it to understand a codebase, make a change, and check the result.
 
-## A harness worth spending time in
+## A harness that gets better with use
 
-- **Work you can follow.** See tool activity, failures, edits, and verification
-  results as they happen. Progress describes actual work, not a guessed percentage.
-- **Edits grounded in what was read.** Tagged source inspection ties replacements
-  to the file contents the agent saw.
-- **A terminal, not a takeover.** Completed messages stay in normal scrollback.
-  A compact activity area—the river—sits above your draft. No alternate screen.
-- **Room for real work.** Native tools handle inspection, commands, and background
-  jobs. Inspect a running tool without losing what you're typing.
-- **A little delight.** Animated effects and ornamental turn dividers give the
-  interface character. The visuals follow observable activity, not hidden reasoning.
+When LCA does a poor job, I want enough evidence to fix the harness—not just
+rephrase the prompt and hope. Tool calls, arguments, results, and the raw model
+exchange are logged together, so a clumsy run can become a concrete repair:
+find where things went wrong, replay the awkward case, and keep a regression test.
+The logs are there to work from while the annoyance is still fresh.
 
-LCA is a personal, evolving harness. The goal is a small, understandable system
-with thoughtful defaults, not a framework you have to assemble before using it.
+That feedback loop is the heart of the project. Better inspection, clearer tool
+results, fewer ways to make the same mistake twice. Tagged reads and edits are
+one example: a replacement is tied to the source the agent actually saw.
+
+The terminal gets the same care. Beautiful little animations follow what the
+tools are doing; they aren't a screensaver laid over the work. Activity changes
+their rhythm, and failures disturb the pattern with turbulence and fractured
+marks. Even the ornament should tell you something. There is room for a little
+charm in a tool you spend all day with.
+
+LCA is a personal, evolving harness, kept small enough to understand and repair.
+The aim is to make each rough edge easier to notice, explain, and smooth away.
 
 ## Install
 
