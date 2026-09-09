@@ -136,9 +136,8 @@ The command waits for completion or cancellation, with no automatic timeout.
 
 ## Providers and models
 
-**Codex/OpenAI defaults to GPT-6 Astra. Bedrock defaults to GPT-5.6 Sol.**
-Both use native function calling; an explicit Astra selection on Bedrock fails
-clearly rather than silently switching models.
+**Codex/OpenAI and Bedrock both default to GPT-6 Astra.**
+Both use native function calling.
 
 ### Codex/OpenAI
 
@@ -178,9 +177,10 @@ and optional `sessionToken`/`expiresAt`. Keep credential files private. Refreshe
 CLI credentials are saved back to the profile. The AWS CLI is only needed when
 using its credential chain.
 
-The optional `model` defaults to `global.openai.gpt-5.6-sol`. Bedrock uses HTTPS/SSE
-and local native tools; OpenAI's hosted web search is not available on this path.
-Astra requests are rejected, including when carried by a saved session.
+The optional transport `model` defaults to `global.openai.gpt-6-astra`;
+explicit request models take precedence. Short GPT names map to global OpenAI
+inference profiles. Bedrock uses HTTPS/SSE and local native tools; OpenAI's
+hosted web search is not available on this path.
 
 ## The terminal experience
 
@@ -214,7 +214,7 @@ No automatic reviewer or research model runs.
 
 The terminal runtime is in `lua/agent/ui/`; agent-facing layout and interaction are
 in `lua/agent/tui.lua`. See `docs/architecture.md` for the module layout. The eval
-CLI retains its historical Sol default; pass `--model gpt-6-astra` for Astra runs.
+CLI also defaults to Astra; pass `--model gpt-5.6-sol` for historical Sol runs.
 
 The native binding uses OpenSSL's one-shot APIs:
 <https://docs.openssl.org/3.0/man3/EVP_DigestInit/> and

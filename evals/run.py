@@ -723,8 +723,7 @@ def main() -> int:
     parser.add_argument("--runs", type=int)
     parser.add_argument("--seed", type=int, default=0, help="seed for randomized theory-run order")
     parser.add_argument("--credentials", default="~/.lca-credentials.json")
-    # Keep historical unpinned theories on their original baseline.
-    parser.add_argument("--model", default="gpt-5.6-sol", choices=list(MODEL_PRICES))
+    parser.add_argument("--model", default="gpt-6-astra", choices=list(MODEL_PRICES))
     parser.add_argument("--reasoning")
     parser.add_argument("--judge", choices=["none", "codex"], default="none")
     parser.add_argument("--judge-model")

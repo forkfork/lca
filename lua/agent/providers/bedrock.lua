@@ -7,7 +7,7 @@ local fs = require("agent.util.fs")
 
 local bedrock = {}
 
-local DEFAULT_MODEL = "global.openai.gpt-5.6-sol"
+local DEFAULT_MODEL = "global.openai." .. config.default_model()
 local DEFAULT_REGION = "us-east-1"
 local MAX_RETRIES = 2
 local INITIAL_BACKOFF_SEC = 1
@@ -184,18 +184,11 @@ local function signed_headers(host, path, body, credentials, timestamp)
 	}
 end
 
-function bedrock.validate_model(model)
-	if model == "gpt-6-astra" or (type(model) == "string" and model:match("%.openai%.gpt%-6%-astra$")) then
-		error("Astra is not supported by Bedrock; select gpt-5.6-sol or use Codex/OpenAI credentials")
-	end
-	return model
-end
-
 local function model_id(requested, credentials)
 	local model = requested
 	if not model or model == "" then model = credentials.model end
-	bedrock.validate_model(model)
-	if model == "gpt-5.6-sol" then return "global.openai.gpt-5.6-sol" end
+	if not model or model == "" then model = config.default_model() end
+	if model:match("^gpt%-") then return "global.openai." .. model end
 	return model
 end
 

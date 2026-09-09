@@ -51,7 +51,7 @@ test("Bedrock is selected only when explicitly active", function()
 	os.remove(path)
 end)
 
-test("Bedrock request uses its Sol default and local native tools", function()
+test("Bedrock request uses its Astra default and local native tools", function()
 	local body
 	local path = temp_file([[{
 		"provider": "bedrock",
@@ -80,7 +80,7 @@ test("Bedrock request uses its Sol default and local native tools", function()
 		max_retries = 0,
 	}, function(delta) streamed[#streamed + 1] = delta end)
 	local decoded = json.decode(body)
-	assert_eq(decoded.model, "global.openai.gpt-5.6-sol")
+	assert_eq(decoded.model, "global.openai.gpt-6-astra")
 	assert(type(decoded.tools) == "table" and #decoded.tools > 0, "local tools missing")
 	assert_eq(result.text, "hello")
 	assert_eq(table.concat(streamed), "hello")
@@ -89,26 +89,19 @@ test("Bedrock request uses its Sol default and local native tools", function()
 	os.remove(path)
 end)
 
-test("Bedrock rejects explicit or configured Astra before transport", function()
-	local path = temp_file([[{"provider":"bedrock","providers":{"bedrock":{"apiKey":"test"}}}]])
-	providers._invalidate_cache()
-	local calls = 0
-	bedrock._set_http_request(function() calls = calls + 1; error("unexpected transport") end)
-	local ok, err = pcall(bedrock.complete, {
-		credentials_path = path, model = "gpt-6-astra", messages = {}, max_retries = 0,
-	})
-	bedrock._set_http_request(nil)
-	os.remove(path)
-	assert_eq(ok, false)
-	assert_eq(calls, 0)
-	assert(tostring(err):find("Astra is not supported by Bedrock", 1, true), tostring(err))
-	for _, model in ipairs({ "gpt-6-astra", "global.openai.gpt-6-astra" }) do
-		ok, err = pcall(bedrock._request_body, { messages = {}, tool_scope = "none" }, { model = model })
-		assert_eq(ok, false)
-		assert(tostring(err):find("Astra is not supported by Bedrock", 1, true), tostring(err))
+test("Bedrock maps short models and preserves configured profile IDs", function()
+	for _, model in ipairs({ "gpt-6-astra", "gpt-5.6-sol" }) do
+		local body = json.decode(bedrock._request_body({ model = model, messages = {}, tool_scope = "none" }, { model = "other-configured-model" }))
+		assert_eq(body.model, "global.openai." .. model)
 	end
-	local body = json.decode(bedrock._request_body({ model = "gpt-5.6-sol", messages = {}, tool_scope = "none" }, { model = "other-configured-model" }))
-	assert_eq(body.model, "global.openai.gpt-5.6-sol")
+	for _, model in ipairs({ "gpt-6-astra", "global.openai.gpt-6-astra", "us.openai.gpt-6-astra" }) do
+		local body = json.decode(bedrock._request_body({ messages = {}, tool_scope = "none" }, { model = model }))
+		assert_eq(body.model, model == "gpt-6-astra" and "global.openai.gpt-6-astra" or model)
+	end
+	for _, credentials in ipairs({ {}, { model = "" } }) do
+		local body = json.decode(bedrock._request_body({ model = "", messages = {}, tool_scope = "none" }, credentials))
+		assert_eq(body.model, "global.openai.gpt-6-astra")
+	end
 end)
 
 test("Bedrock rejects server-side web-only mode before transport", function()

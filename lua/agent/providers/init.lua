@@ -171,21 +171,8 @@ function providers.load(credentials_path)
 	return require("agent.providers.codex"), "codex"
 end
 
-function providers.default_model(credentials_path)
-	local body = read_credentials(credentials_path or config.default_credentials_path())
-	if selected_provider(body) ~= "bedrock" then return config.default_model() end
-	local selected = decode_body(bedrock_credentials_body(body))
-	local model = selected and selected.model
-	require("agent.providers.bedrock").validate_model(model)
-	if not model or model == "" or model:match("%.openai%.gpt%-5%.6%-sol$") then
-		return "gpt-5.6-sol"
-	end
-	if model == "gpt-6-astra" or model == "gpt-5.6-sol"
-		or model == "gpt-5.6-terra" or model == "gpt-5.6-luna"
-	then
-		return model
-	end
-	return "gpt-5.6-sol"
+function providers.default_model()
+	return config.default_model()
 end
 
 function providers._invalidate_cache()
