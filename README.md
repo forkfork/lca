@@ -4,6 +4,7 @@ A small coding-agent harness, written in Lua 5.5, with a carefully made terminal
 interface. The aim is simple: make working with a model feel clear, useful, and
 lovely—not like watching an opaque process churn.
 
+![LCA coding agent demo](demo.gif)
 LCA supports **Amazon Bedrock and OpenAI** because that's what I use. If you want
 the vibes but with a different provider, I recommend forking, adding your provider
 support, and removing the Bedrock / OpenAI code—it'll take you about five minutes.
