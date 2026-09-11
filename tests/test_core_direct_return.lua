@@ -17,10 +17,7 @@ package.loaded["agent.providers"] = {
 			complete = function(request)
 				calls = calls + 1
 				if calls == 2 then
-					local operational = request.messages[#request.messages].text
-					assert(operational:find("Command evidence", 1, true), "core must record tool outcomes before the next request")
-					assert(operational:find(command, 1, true), "command evidence must identify its command")
-					local result = request.messages[#request.messages - 1]
+					local result = request.messages[#request.messages]
 					assert(result.native_call_id, "tool result must return to model with its call ID")
 					assert(result.text:find(expected_output, 1, true), "model must receive command output")
 					return native_fixture.response({text="Task finished after inspecting tool output.",

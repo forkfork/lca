@@ -139,21 +139,31 @@ function state.render(session)
 	return table.concat(lines, "\n")
 end
 
+-- A snapshot is attached only at a history boundary. Once sent, its text stays
+-- in the conversation so an implicit cache endpoint can match the next request.
+function state.checkpoint(session)
+	return state.render(session)
+end
+
 function state.tokens(session)
-	local text = state.render(session)
+	if not session.operational_checkpoint_pending then return 0 end
+	local text = state.checkpoint(session)
 	return text ~= "" and (math.ceil(#text / 4) + 6) or 0
 end
 
 function state.request_messages(session)
-	local text = state.render(session)
-	session.operational_prompt_tokens = text ~= "" and (math.ceil(#text / 4) + 6) or 0
-	if text == "" then return session.messages end
-	-- Append transient context so changing state does not invalidate the cached
-	-- system prompt and conversation prefix, or accumulate in persisted history.
-	local messages = {}
-	for i, message in ipairs(session.messages) do messages[i] = message end
-	messages[#messages + 1] = { role = "user", text = text }
-	return messages
+	if session.operational_checkpoint_pending then
+		local text = state.checkpoint(session)
+		if text ~= "" then
+			session.messages[#session.messages + 1] = {
+				role = "user", text = text, operational_snapshot = true,
+			}
+		end
+		session.operational_checkpoint_pending = nil
+	end
+	-- Snapshots are counted as ordinary history after insertion.
+	session.operational_prompt_tokens = 0
+	return session.messages
 end
 
 return state

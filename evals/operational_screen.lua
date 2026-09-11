@@ -5,7 +5,22 @@ local state = require("agent.operational_state")
 local compaction = require("agent.compaction")
 local protocol = require("agent.tool_protocol")
 
+-- These registered historical experiments compare transient views. Keep their
+-- intervention explicit instead of silently changing it with production behavior.
+function M.legacy_projection()
+	state.checkpoint = function() return "" end
+	state.request_messages = function(session)
+		local text = state.render(session)
+		if text == "" then return session.messages end
+		local messages = {}
+		for i, message in ipairs(session.messages) do messages[i] = message end
+		messages[#messages + 1] = {role = "user", text = text}
+		return messages
+	end
+end
+
 function M.setup(session, arm, scenario, directory)
+	M.legacy_projection()
 	assert(arm == "with_state" or arm == "without_state", "invalid operational screen arm")
 	assert(scenario == "simple_prompt" or scenario == "stale_pass" or scenario == "unresolved_failure")
 	local function save(name, data)

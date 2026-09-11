@@ -46,11 +46,11 @@ local ok, err = pcall(function()
 end)
 compaction.generate_summary = original
 assert(ok, err)
-local prompt = state.request_messages(session)[#session.messages + 1].text
+local prompt = state.request_messages(session)[1].text
 local stored_count = #session.messages
 local base_prompt = session:get_system_prompt()
 local requests = state.request_messages(session)
-assert(#session.messages == stored_count and #requests == stored_count + 1)
+assert(#session.messages == stored_count and #requests == stored_count)
 assert(requests[1] == session.messages[1], "historical prefix must remain unchanged")
 assert(not base_prompt:find("<operational-state>", 1, true), "changing state must not invalidate the system prompt prefix")
 assert(session:estimated_model_input_tokens() >= state.tokens(session))
@@ -65,8 +65,12 @@ local restored = sessions.create({})
 assert(restored:load(path))
 assert(restored.operational_state.resumed)
 contains(state.render(restored), "Session restored")
-contains(state.request_messages(restored)[#restored.messages + 1].text, "regression failed")
-contains(state.request_messages(restored)[#restored.messages + 1].text, "Run integration checks")
+local resumed = state.request_messages(restored)
+contains(resumed[#resumed].text, "regression failed")
+contains(resumed[#resumed].text, "Run integration checks")
+local resumed_count = #resumed
+state.request_messages(restored)
+assert(#restored.messages == resumed_count, "resume snapshot must be inserted once")
 restored:clear()
 assert(restored.operational_state == nil)
 

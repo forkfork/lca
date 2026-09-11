@@ -1,10 +1,19 @@
 # Operational evidence across compaction
 
 LCA keeps an `operational_state` record in the saved session independently of the
-generated summary. It supplies the same observed facts to the summarizer and the
-continuing agent. The latter receives a transient appended message, preserving
-the cached system/conversation prefix without duplicating state in saved history.
-Context estimates include this message.
+generated summary. The summarizer receives the current record. Compaction embeds
+a snapshot in the retained checkpoint message; resume adds a snapshot once.
+Those snapshots stay unchanged in conversation history. Later tool calls use their
+ordinary results, and the next compaction captures the updated record.
+
+This avoids replacing a temporary state message on every model request. Such a
+replacement discarded the previous implicit cache endpoint even though the earlier
+text remained identical. Pending resume snapshots count toward context estimates;
+after insertion, ordinary history accounting counts them once. Compaction still
+replaces old history and can require a new cache entry.
+
+The snapshot is historical evidence at its boundary, not continuously refreshed
+job status. Later tool results and explicit job inspection establish newer facts.
 
 The record retains:
 

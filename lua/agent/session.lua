@@ -161,6 +161,7 @@ function session:clear()
 	self.compaction_details = nil
 	self.operational_state = nil
 	self.operational_prompt_tokens = nil
+	self.operational_checkpoint_pending = nil
 	self.plan = nil
 	self.journey = nil
 	self.last_usage = nil
@@ -526,6 +527,7 @@ function session:load(path)
 	if self.operational_state then
 		-- Work may have changed outside this process while the session was closed.
 		self.operational_state.resumed = true
+		self.operational_checkpoint_pending = true
 	end
 	if data.compaction_summary and data.compaction_summary ~= require("cjson").null then
 		self.compaction_summary = data.compaction_summary

@@ -13,6 +13,7 @@ local function read(path)
  local value = json.decode(f:read("*a")); f:close(); return value
 end
 function M.setup(session, arm, scenario, directory)
+ dofile(assert(debug.getinfo(1, "S").source:sub(2):match("^(.*)/")) .. "/operational_screen.lua").legacy_projection()
  assert(arm == "ledger" or arm == "receipts")
  assert(scenario == "simple_prompt" or scenario == "pending" or scenario == "ready")
  local report = {arm = arm, scenario = scenario, checkpoint_usage = require("cjson").empty_array}

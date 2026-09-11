@@ -577,7 +577,7 @@ function compaction.compact(session, opts)
 	if opts.preserve_active_turn then
 		for i = #session.messages, 1, -1 do
 			local message = session.messages[i]
-			if message.role == "user" and not message.tool_name then
+			if message.role == "user" and not message.tool_name and not message.operational_snapshot then
 				cut_index = math.min(cut_index, i)
 				break
 			end
@@ -613,10 +613,13 @@ function compaction.compact(session, opts)
 		kept_messages[#kept_messages + 1] = session.messages[i]
 	end
 
+	local operational = operational_state.checkpoint(session)
+	session.operational_checkpoint_pending = nil
 	session.messages = {}
 	session.messages[1] = {
 		role = "user",
-		text = "[Context from previous conversation]\n\n" .. summary,
+		text = "[Context from previous conversation]\n\n" .. summary
+			.. (operational ~= "" and "\n\n" .. operational or ""),
 	}
 	session.messages[2] = {
 		role = "assistant",
