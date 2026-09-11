@@ -1,0 +1,19 @@
+{
+  "id": "compaction_obligations_screen",
+  "study_kind": "screen",
+  "title": "Operational facts after deliberately incomplete compaction",
+  "hypothesis": "Showing independently retained tool outcomes helps an agent recover stale verification and unresolved failures omitted from an otherwise identical compacted summary.",
+  "falsified_if": "The treatment fails artifact or submitted-version verification gates, the information ablation fails activation, or both coding controls pass with no correctness improvement and only added overhead; the last outcome is inconclusive for harder tasks rather than evidence of benefit.",
+  "source_ids": [],
+  "local_evidence": "research/decisions/2026-09-05-state-only-pilot.md and frozen evals/results/20260905T044052Z-ambiguous_bug_investigation-state_only-2/state-0006.json, state-0008.json, state-0009.json show verified completion downgraded and lost after reads. Current offline tests establish storage but not agent behaviour. The new two coding tasks are deliberately constructed omission simulations, not claims of naturally observed compaction loss frequency.",
+  "control_variant": "without_state",
+  "minimum_runs_per_cell": 1,
+  "scenarios": ["simple_prompt", "compaction_stale_pass", "compaction_unresolved_failure"],
+  "variants": [
+    {"id": "without_state", "model": "gpt-6-astra", "reasoning": "high", "context_mode": "normal", "system_prompt_profile": "current", "tool_scope": "local_only", "operational_context": "without_state"},
+    {"id": "with_state", "model": "gpt-6-astra", "reasoning": "high", "context_mode": "normal", "system_prompt_profile": "current", "tool_scope": "local_only", "operational_context": "with_state"}
+  ],
+  "deterministic_outcomes": ["independent artifact correctness", "protected files unchanged", "successful documented verification receipt matches final source hash", "actual serialized information ablation", "real seeded tool outcomes and forced compaction"],
+  "efficiency_outcomes": ["all-attempt elapsed seconds", "model calls", "tool operations", "input and output tokens", "estimated standard-equivalent cost"],
+  "decision_rule": "Seed 91107. At most six serial launches, $3 between-run standard-equivalent cost threshold (one-run overshoot possible), 480 active worker seconds, 120 seconds per coding task. Freeze source/fixtures/grader/prompt in the campaign manifest before calls. Both arms execute identical real seed actions, force compaction using the same fixed incomplete summary, preserve identical continuation history, and differ only in operational-state visibility. Audit serialized provider bodies; stop on any task, protocol, activation, budget, or missing-usage failure. No retries or excluded attempts. A treatment correctness failure rejects this mechanism implementation for this diagnostic; an invalid ablation yields no efficacy conclusion. A treatment-only correctness success in a completed matched pair justifies fresh broader validation, never adoption. If both arms pass, record no demonstrated correctness benefit and inspect paired overhead; do not expand this screen. Retain the six-run upper bound even if there is no measurable effect. The naturally generated-summary and read-only freshness counter-tests remain future validation. No default changes are justified by this screen."
+}

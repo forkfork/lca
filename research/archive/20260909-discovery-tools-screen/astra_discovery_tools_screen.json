@@ -1,0 +1,23 @@
+{
+  "id": "astra_discovery_tools_screen",
+  "study_kind": "screen",
+  "title": "Discovery-only shell ablation with native tagged reads and edits",
+  "hypothesis": "Removing only ls/find/grep while retaining native read/edit/write avoids the shell-editing overhead seen in the broad file-tool screen and preserves bug-investigation correctness within 20% paired latency and cost overhead.",
+  "falsified_if": "Treatment fails a correctness gate or exceeds 20% paired coding latency or cost overhead. Missing discovery use makes the screen uninformative; invalid protocol stops it.",
+  "source_ids": [],
+  "local_evidence": "The original screen remains dropped. In evals/results/20260909-file-tools-screen/cell-0002/trajectory.json shell used 4 tools but 5 model rounds and 2579 output tokens; native cell-0003 used 14 tools, 5 rounds and 2425 output tokens. Smaller shell cell-0004 used an unnecessary git status in discovery (failed outside Git), then took five model rounds versus four in native cell-0005. These are observations, not proof of why latency changed. This new experiment removes only discovery tools and keeps native tagged reading/editing; it does not repeat or relabel the rejected full ablation.",
+  "control_variant": "native",
+  "minimum_runs_per_cell": 1,
+  "scenarios": ["simple_prompt", "ambiguous_bug_investigation"],
+  "variants": [
+    {"id":"native", "model":"gpt-6-astra", "reasoning":"high", "tool_scope":"local_only", "discovery_tools":"native"},
+    {"id":"shell-discovery", "model":"gpt-6-astra", "reasoning":"high", "tool_scope":"local_only", "discovery_tools":"shell"}
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "ambiguous_bug_investigation": "\n\nFile scope: change only checkout/cache.py and checkout/service.py; do not add files. Use native read for edit evidence and native edit/write for mutations; shell commands may inspect files and run tests but must not modify source files. Run final verification in a separate command after the final edit. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": ["public and hidden cache behavior", "reproduction and architecture trace before mutation", "scope control and verification after final mutation", "exact outgoing discovery-tool difference; native read/edit/write schemas unchanged", "simple_prompt no tools"],
+  "efficiency_outcomes": ["paired coding latency and cost", "input/output/cache tokens", "model and tool calls", "discovery commands and failures; native discovery activation"],
+  "decision_rule": "Seed 910. Four serial screen-only runs, one per arm on simple_prompt and one fresh bug-investigation task; randomized adjacent-pair arm order, simple prompt first. At most four launches, $1.50 between-run standard-equivalent estimated-cost threshold (one-run overshoot possible), 360 active worker seconds. Stop task or activation failures and preserve all attempts. Advance only if all four pass, simple prompt uses no tools, control uses at least one ls/find/grep and treatment performs actual shell discovery, mutations remain native and final verification follows the last edit, and coding treatment time and cost are each no more than 20% above control. No discovery activation or failed control means inconclusive/drop, not a win. A positive result buys fresh validation only, not adoption or proof of code savings. Preserve the original broader screen's rejection; never pool these different interventions."
+}

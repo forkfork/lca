@@ -2467,6 +2467,75 @@ function App:commit_assistant(text)
 	return self:commit_lines(assistant_transcript_lines(text, self.backend:supports_color(), width))
 end
 
+-- Public text accompanying tools belongs in scrollback while the turn is live.
+-- Final responses are committed separately after the turn's river summary.
+local function message_text(item)
+	local parts = {}
+	for _, part in ipairs(item.content or {}) do
+		if part.type == "output_text" then parts[#parts + 1] = part.text or "" end
+	end
+	return table.concat(parts)
+end
+
+function App:commit_commentary(item, source)
+	self.work_update_ids = self.work_update_ids or {}
+	local text = message_text(item)
+	local key = item.id or text
+	if self.work_update_ids[key] then return false end
+	local displayed = self:commit_work_update_text(text, source)
+	self.work_update_ids[key] = true
+	return displayed
+end
+
+function App:commit_work_update_text(raw, source)
+	local filter = StreamFilter.new()
+	local visible = filter:feed(protocol.strip_tool_results(raw or ""))
+	local text = visible .. filter:finish()
+	if not text:find("%S") then
+		core.debug_log("[tui-update] skipped source=%s reason=no_public_text raw_bytes=%d", source, #(raw or ""))
+		return false
+	end
+	self:commit_assistant(text)
+	core.debug_log("[tui-update] displayed source=%s bytes=%d", source, #text)
+	return true
+end
+
+function App:commit_work_update(response)
+	if not response then return false end
+	local found, displayed = false, false
+	for _, item in ipairs(response._output_items or {}) do
+		if item.type == "message" and item.phase == "commentary" then
+			found = true
+			if self:commit_commentary(item, "response_commentary") then displayed = true end
+		end
+	end
+	if found then
+		core.debug_log("[tui-update] response commentary=true displayed=%s", tostring(displayed))
+		return displayed
+	end
+	local calls = #(response._native_tool_calls or {})
+	if calls == 0 then
+		core.debug_log("[tui-update] skipped source=response reason=no_commentary_or_local_tools text_bytes=%d", #(response.text or ""))
+		return false
+	end
+	return self:commit_work_update_text(response.text, "local_tools")
+end
+
+function App:final_response_text(response)
+	local text = response.text or ""
+	-- Providers can concatenate commentary and the answer into response.text.
+	-- Remove only exact leading commentary; preserve the answer and its citations.
+	for _, item in ipairs(response._output_items or {}) do
+		if item.type == "message" and item.phase == "commentary" then
+			local prefix = message_text(item)
+			if prefix ~= "" and text:sub(1, #prefix) == prefix then
+				text = text:sub(#prefix + 1):gsub("^%s+", "")
+			end
+		end
+	end
+	return text
+end
+
 function App:_handle_action(action)
 	if not action then return end
 	if action.type == "exit" then self.exit_requested = true
@@ -2789,6 +2858,7 @@ function tui.run(options)
 			if line ~= "" or session.messages[#session.messages] then
 				app:auto_advance_effect()
 				app.state:submit(line ~= "" and line or "command request")
+				app.work_update_ids = {}
 				app.busy, app.cancel_requested = true, false
 				-- Acknowledge Enter before provider setup or network waiting can block.
 				-- The editor is already empty, so this moves its cursor back to the dock start.
@@ -2807,7 +2877,14 @@ function tui.run(options)
 						function() app:pump() end,
 						{
 							cancelled = function() return app.cancel_requested end,
+							on_response = function(response)
+								app:commit_work_update(response)
+								app:pump()
+							end,
 							on_model_activity = function(activity)
+								if activity.type == "assistant_commentary" then
+									app:commit_commentary(activity.item, "live_commentary")
+								end
 								app.state:model_activity(activity)
 								app:pump()
 							end,
@@ -2823,7 +2900,7 @@ function tui.run(options)
 					if session.messages[#session.messages] and session.messages[#session.messages].role == "user" then table.remove(session.messages) end
 					app.cancel_requested = false
 				elseif ok then
-					local final = protocol.strip_tool_results(protocol.strip_tool_calls(turn_result.text or ""))
+					local final = protocol.strip_tool_results(protocol.strip_tool_calls(app:final_response_text(turn_result)))
 					session:add_assistant(turn_result.text, turn_result._output_items)
 					local final_usage = type(turn_result._turn_usage) == "table" and turn_result._turn_usage
 						or type(turn_result._usage) == "table" and turn_result._usage or nil

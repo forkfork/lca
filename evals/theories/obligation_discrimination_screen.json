@@ -1,0 +1,49 @@
+{
+  "id": "obligation_discrimination_screen",
+  "study_kind": "screen",
+  "title": "Does derived obligation status outperform plain receipts?",
+  "hypothesis": "The full operational ledger improves continuation decisions after ordinary compaction compared with retaining ordered command receipts, enough to offset additional context and status logic.",
+  "falsified_if": "Ledger skips pending verification, changes correct code, or repeats already valid verification; or both arms make the same correct decisions without an offsetting ledger efficiency benefit.",
+  "source_ids": [],
+  "local_evidence": "research/decisions/2026-09-11-obligation-discrimination-offline.md records real unchanged-file histories: timeout changes preserve old failures and read-only run advances the ledger revision. Original state-loss evidence: research/decisions/2026-09-05-state-only-pilot.md and its archived state-0006/0008/0009. These are synthetic discriminators, not measured natural incidence.",
+  "control_variant": "receipts",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "obligation_pending",
+    "obligation_ready"
+  ],
+  "variants": [
+    {
+      "id": "receipts",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only",
+      "obligation_view": "receipts"
+    },
+    {
+      "id": "ledger",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only",
+      "obligation_view": "ledger"
+    }
+  ],
+  "deterministic_outcomes": [
+    "Independent external probe correctness and unchanged fixture hashes",
+    "Pending obtains successful documented check on final files",
+    "Ready does not repeat the already valid documented check",
+    "All invoked checks finish",
+    "Actual serialized context activation; identical pair summary and initial history"
+  ],
+  "efficiency_outcomes": [
+    "Continuation elapsed time, tool calls, model calls and tokens",
+    "All-attempt API-equivalent cost including shared checkpoint generation",
+    "Separate shared checkpoint cost and time; randomized first arm pays once for accounting only"
+  ],
+  "decision_rule": "Seed 91109; six serial continuation launches maximum plus at most one ordinary summary generation per coding pair within those workers; $3 between-run standard-equivalent threshold (one-run overshoot possible), 480 active seconds and 150 seconds per coding worker. Freeze executable source, scenarios and grader before calls. Stop on any artifact, discrimination, activation, protocol, missing usage or budget failure; no retries or expansions. First arm generates normal production summary from real seeded history and full operational record, shared unchanged with other arm. Both arms see same compacted history and original observations; only appended view differs. Ledger is unmodified production renderer; receipts retain last 24 run arguments/results without status derivation. This is a comparison of complete views, including output retention differences, not a pure stale-label ablation. Check output and artifacts are identical in meaning; timing text may differ. All fixtures start correct, inspection precedes checks, and final AST inspection is read-only. Ready repeat counts as discrimination failure on this narrowly specified workload; manually inspect command/final text for cause and report limitations. A ledger-only correctness advantage buys fresh validation, never adoption. A ledger failure rejects this implementation on this task. If both pass, compare paired continuation cost/time (shared summary generation excluded symmetrically); equal behavior and higher ledger costs argues for simpler receipts, not another harder screen. Never remove production code based solely on this screen. Preserve raw evidence and record decision; no default changes."
+}

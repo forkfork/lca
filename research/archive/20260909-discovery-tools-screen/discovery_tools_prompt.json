@@ -1,0 +1,6 @@
+{
+  "- Prefer targeted find/grep/read calls. Do not re-read content already returned unless it may have changed.": "- Use targeted shell commands through run for directory listing and content search; use read for tagged file slices. Do not re-read content already returned unless it may have changed.",
+  "- For edits, inspect the target with read or tagged grep evidence first, then use its exact line numbers and four-character tags. Make the smallest coherent change and run focused verification.": "- For edits, inspect the target with read first, then use its exact line numbers and four-character tags. Make the smallest coherent change and run focused verification.",
+  "- Prefer grep/find/ls over run for file exploration.": "- Use run for shell listing/search and read for focused file inspection.",
+  "- Avoid large tool outputs: use focused grep/read slices. If a long task approaches the context limit, finish the current step and summarize progress.": "- Avoid large tool outputs: use bounded shell searches and focused read slices. If a long task approaches the context limit, finish the current step and summarize progress."
+}

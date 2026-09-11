@@ -1,0 +1,187 @@
+diff --git a/evals/campaign.py b/evals/campaign.py
+index fbf57c7..af7b291 100644
+--- a/evals/campaign.py
++++ b/evals/campaign.py
+@@ -19,7 +19,7 @@ from analyze_state_pilot import audit_state_only
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ # Only interventions for which this runner has an activation contract are admitted.
+-VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope"}
++VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope", "discovery_tools"}
+ 
+ 
+ def read(path):
+@@ -83,6 +83,12 @@ def plan(theory, smoke, repetitions, seed, max_runs, max_cost, max_seconds):
+                 raise ValueError("unsupported audited prompt/context combination")
+         if "tool_scope" in variant and (variant["tool_scope"] not in {"all", "local_only"} or variant.get("context_mode", "normal") != "normal"):
+             raise ValueError("unsupported audited tool scope")
++        if "discovery_tools" in variant and (
++                variant["discovery_tools"] not in {"native", "shell"}
++                or variant.get("tool_scope") != "local_only"
++                or variant.get("context_mode", "normal") != "normal"
++                or "system_prompt_profile" in variant):
++            raise ValueError("unsupported audited discovery interface")
+         if "experience_mode" in variant or "experience_bundle" in variant:
+             from experience_context import load
+             for task in theory["scenarios"]:
+@@ -170,6 +176,9 @@ def inspect_result(directory, cell):
+     if "tool_scope" in variant:
+         from tool_scope import audit as audit_tool_scope
+         audit_tool_scope(directory, variant["tool_scope"], requests, trajectory)
++    if "discovery_tools" in variant:
++        from discovery_tools import audit as audit_discovery_tools
++        audit_discovery_tools(directory, variant["discovery_tools"], requests, trajectory)
+     if "lesson_policy" in variant:
+         from lesson_gate import load, PREFIX
+         expected = load(variant["lesson_policy"], cell["scenario"])
+diff --git a/evals/driver.lua b/evals/driver.lua
+index bf6676a..335dab6 100644
+--- a/evals/driver.lua
++++ b/evals/driver.lua
+@@ -20,7 +20,7 @@ if not options.root or not options["prompt-file"] or not options.credentials
+ end
+ 
+ -- Reject historical treatments before reading fixtures or making model calls.
+-for _, key in ipairs({ "delegate-readonly-enabled", "delegate-readonly-profile", "tool-dag-enabled", "readonly-fork-join-enabled" }) do
++for _, key in ipairs({ "delegate-readonly-enabled", "delegate-readonly-profile", "tool-dag-enabled", "readonly-fork-join-enabled", "file-tools" }) do
+ 	if options[key] ~= nil then error("retired experiment option: " .. key .. "; see research/archive/README.md") end
+ end
+ local retired_prompt_profiles = {
+@@ -187,6 +187,10 @@ if prompt_profile == "current" then
+ 		effective = session.system_prompt or full_system_prompt,
+ 	}))
+ end
++if options["discovery-tools"] then
++	dofile(options.root .. "/evals/discovery_tools.lua").apply(
++		options["discovery-tools"], session, options.root, assert(options.output:match("^(.*)/[^/]+$")))
++end
+ session:add_user(prompt)
+ 
+ local context_pilot
+diff --git a/evals/run.py b/evals/run.py
+index 67f6acb..33b5477 100644
+--- a/evals/run.py
++++ b/evals/run.py
+@@ -469,7 +469,7 @@ def validate_active_variant(variant: dict) -> None:
+     if variant.get("engine", "lca") != "lca":
+         return
+     retired = {"delegate_readonly_enabled", "delegate_readonly_profile",
+-               "tool_dag_enabled", "readonly_fork_join_enabled"}
++               "tool_dag_enabled", "readonly_fork_join_enabled", "file_tools"}
+     keys = sorted(retired.intersection(variant))
+     if variant.get("edit_tool_profile") == "exact":
+         keys.append("edit_tool_profile=exact")
+@@ -561,6 +561,8 @@ def run_once(
+         command.extend(["--system-prompt-append-file", str(append_path)])
+     if engine == "lca" and variant.get("tool_scope"):
+         command.extend(["--tool-scope", variant["tool_scope"]])
++    if engine == "lca" and variant.get("discovery_tools"):
++        command.extend(["--discovery-tools", variant["discovery_tools"]])
+     if engine == "lca" and variant.get("context_mode"):
+         command.extend(["--context-mode", variant["context_mode"]])
+     if engine == "lca" and "multi_edit_enabled" in variant:
+diff --git a/evals/scenarios/existing_codebase_edit/grade.py b/evals/scenarios/existing_codebase_edit/grade.py
+index 6b6d04b..33168da 100644
+--- a/evals/scenarios/existing_codebase_edit/grade.py
++++ b/evals/scenarios/existing_codebase_edit/grade.py
+@@ -7,11 +7,11 @@ import sys
+ from pathlib import Path
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+-from verification_evidence import verified_after_mutations
++from verification_evidence import verified_after_mutations, normalize
+ 
+ 
+ workspace = Path(sys.argv[1])
+-trajectory = json.loads(Path(sys.argv[2]).read_text())
++trajectory = normalize(json.loads(Path(sys.argv[2]).read_text()))
+ fixture = Path(__file__).with_name("fixture")
+ 
+ 
+diff --git a/evals/scenarios/multifile_order_cancellation/grade.py b/evals/scenarios/multifile_order_cancellation/grade.py
+index d6df53c..61f406a 100644
+--- a/evals/scenarios/multifile_order_cancellation/grade.py
++++ b/evals/scenarios/multifile_order_cancellation/grade.py
+@@ -7,10 +7,10 @@ import sys
+ from pathlib import Path
+ 
+ from grader_support import successful_test_evidence
+-
+-
++sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
++from verification_evidence import normalize
+ workspace = Path(sys.argv[1])
+-trajectory = json.loads(Path(sys.argv[2]).read_text())
++trajectory = normalize(json.loads(Path(sys.argv[2]).read_text()))
+ fixture = Path(__file__).with_name("fixture")
+ 
+ 
+@@ -150,12 +150,13 @@ successful_mutations = [
+     and not event["result"].get("is_error")
+ ]
+ first_mutation = successful_mutations[0][0] if successful_mutations else None
++last_mutation = successful_mutations[-1][0] if successful_mutations else None
+ green_after_edit = any(
+-    index > first_mutation
++    index > last_mutation
+     and event.get("name") in ("run", "shell", "command_execution")
+     and successful_test_evidence(event)
+     for index, event in completed
+-) if first_mutation is not None else False
++) if last_mutation is not None else False
+ reads_before_edit = {
+     event.get("args", {}).get("path") for index, event in completed
+     if first_mutation is not None and index < first_mutation and event.get("name") == "read"
+diff --git a/evals/tests/test_verification_evidence.py b/evals/tests/test_verification_evidence.py
+index 2b23c0e..d4497ac 100644
+--- a/evals/tests/test_verification_evidence.py
++++ b/evals/tests/test_verification_evidence.py
+@@ -31,3 +31,19 @@ class VerificationEvidenceTests(unittest.TestCase):
+         mutation = {"name": "edit", "result": {"content": "edited", "is_error": False}}
+         self.assertFalse(verified_after_mutations([self.event(), mutation]))
+         self.assertTrue(verified_after_mutations([mutation, self.event()]))
++
++    def test_observed_shell_mutations_require_later_verification(self):
++        from verification_evidence import normalize
++        mutation = dict(self.event(), file_changes=['sample.py'], file_boundary=1)
++        raw = {'events': [mutation]}
++        self.assertFalse(verified_after_mutations(normalize(raw)['events']))
++        self.assertEqual(len(raw['events']), 1)
++        self.assertTrue(verified_after_mutations(normalize({'events': [mutation, self.event()]})['events']))
++        mutation['result'] = {'is_error': True, 'content': 'partial write then failure'}
++        self.assertFalse(verified_after_mutations(normalize({'events': [self.event(), mutation]})['events']))
++
++    def test_retired_file_interface_cannot_silently_run_as_control(self):
++        from run import validate_active_variant
++        for mode in ('native', 'shell'):
++            with self.assertRaisesRegex(ValueError, 'retired experiment.*file_tools'):
++                validate_active_variant({'file_tools': mode})
+diff --git a/evals/verification_evidence.py b/evals/verification_evidence.py
+index 5d7eccc..4fb403f 100644
+--- a/evals/verification_evidence.py
++++ b/evals/verification_evidence.py
+@@ -28,3 +28,24 @@ def verified_after_mutations(events):
+                          if event.get("name") in MUTATIONS and event.get("result")
+                          and not event["result"].get("is_error")), default=-1)
+     return any(i > last_mutation and successful_unittest(event) for i, event in enumerate(events))
++
++
++def normalize(trajectory):
++    """Derive mutation events from harness-observed filesystem boundaries.
++
++    Preserve raw evidence. A command that both mutates and tests does not establish
++    post-mutation verification: a later, separate verification command is required.
++    Partial mutations count even when the command subsequently fails.
++    """
++    import copy
++    result = copy.deepcopy(trajectory)
++    events = []
++    for event in result.get('events', []):
++        events.append(event)
++        if event.get('file_changes'):
++            events.append({'name': 'mutation', 'phase': 'result',
++                           'args': {'paths': event['file_changes']},
++                           'result': {'is_error': False, 'content': 'Observed filesystem change'},
++                           'file_boundary': event.get('file_boundary')})
++    result['events'] = events
++    return result

@@ -53,6 +53,7 @@ build = {
 		["agent.effects.nightfall"] = "lua/agent/effects/nightfall.lua",
 		["agent.effects.duet"] = "lua/agent/effects/duet.lua",
 		["agent.compaction"] = "lua/agent/compaction.lua",
+		["agent.operational_state"] = "lua/agent/operational_state.lua",
 		["agent.config"] = "lua/agent/config.lua",
 		["agent.codex_oauth"] = "lua/agent/codex_oauth.lua",
 		["agent.core"] = "lua/agent/core.lua",

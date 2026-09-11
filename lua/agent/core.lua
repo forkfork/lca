@@ -7,6 +7,7 @@ local system_prompt = require("agent.system_prompt")
 local path_util = require("agent.util.path")
 local json = require("agent.util.json")
 local uv = require("luv")
+local operational_state = require("agent.operational_state")
 
 local core = {}
 
@@ -353,6 +354,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 	local turn_clock_ns = uv.hrtime()
 	control = control or {}
 	trace_turn = trace_turn + 1
+	operational_state.begin_turn(session)
 	trace("turn_start", { session_id = session.id, cwd = session.cwd, messages = session.messages })
 
 	log_separator("SESSION START")
@@ -582,7 +584,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 			service_tier = session.service_tier,
 			tool_scope = session.tool_scope,
 			system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd, model = session.model }),
-			messages = session.messages,
+			messages = operational_state.request_messages(session),
 			native_tool_calling = true,
 			native_tool_pair_closure = session.native_tool_pair_closure ~= false,
 			cancelled = is_cancelled,
@@ -869,6 +871,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 					end
 				end
 				events[#events + 1] = event
+				operational_state.observe(session, event)
 				trace("tool_event", { model_call_id = model_call_id, event = event })
 				if on_tool then
 					on_tool(event)
@@ -1056,7 +1059,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 		tool_scope = session.tool_scope,
 		native_tool_calling = true,
 		system_prompt = session.get_system_prompt and session:get_system_prompt() or system_prompt.build({ cwd = session.cwd, model = session.model }),
-		messages = session.messages,
+		messages = operational_state.request_messages(session),
 		cancelled = is_cancelled,
 		on_wait = on_wait,
 		on_activity = control.on_model_activity,

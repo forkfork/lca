@@ -19,7 +19,7 @@ from analyze_state_pilot import audit_state_only
 
 ROOT = Path(__file__).resolve().parent.parent
 # Only interventions for which this runner has an activation contract are admitted.
-VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope"}
+VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope", "operational_context", "obligation_view"}
 
 
 def read(path):
@@ -83,6 +83,12 @@ def plan(theory, smoke, repetitions, seed, max_runs, max_cost, max_seconds):
                 raise ValueError("unsupported audited prompt/context combination")
         if "tool_scope" in variant and (variant["tool_scope"] not in {"all", "local_only"} or variant.get("context_mode", "normal") != "normal"):
             raise ValueError("unsupported audited tool scope")
+        if "obligation_view" in variant:
+            if variant["obligation_view"] not in {"ledger", "receipts"} or variant.get("context_mode", "normal") != "normal" or "operational_context" in variant:
+                raise ValueError("unsupported obligation view")
+        if "operational_context" in variant:
+            if variant["operational_context"] not in {"with_state", "without_state"} or variant.get("context_mode", "normal") != "normal":
+                raise ValueError("unsupported operational context intervention")
         if "experience_mode" in variant or "experience_bundle" in variant:
             from experience_context import load
             for task in theory["scenarios"]:
@@ -170,6 +176,15 @@ def inspect_result(directory, cell):
     if "tool_scope" in variant:
         from tool_scope import audit as audit_tool_scope
         audit_tool_scope(directory, variant["tool_scope"], requests, trajectory)
+    if "obligation_view" in variant:
+        from obligation_discrimination import audit
+        try:
+            audit(directory, variant["obligation_view"], requests, trajectory)
+        except AssertionError as exc:
+            raise ValueError("obligation activation: " + str(exc)) from exc
+    if "operational_context" in variant:
+        from operational_screen import audit
+        audit(directory, variant["operational_context"], requests, trajectory)
     if "lesson_policy" in variant:
         from lesson_gate import load, PREFIX
         expected = load(variant["lesson_policy"], cell["scenario"])

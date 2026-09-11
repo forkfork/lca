@@ -187,6 +187,18 @@ if prompt_profile == "current" then
 		effective = session.system_prompt or full_system_prompt,
 	}))
 end
+local operational_screen
+if options["operational-context"] then
+	operational_screen = dofile(options.root .. "/evals/operational_screen.lua").setup(session,
+		options["operational-context"], options["operational-scenario"] or "simple_prompt",
+		assert(options.output:match("^(.*)/[^/]+$")))
+end
+local obligation_screen
+if options["obligation-view"] then
+	obligation_screen = dofile(options.root .. "/evals/obligation_discrimination.lua").setup(session,
+		options["obligation-view"], options["obligation-scenario"] or "simple_prompt",
+		assert(options.output:match("^(.*)/[^/]+$")))
+end
 session:add_user(prompt)
 
 local context_pilot
@@ -227,6 +239,15 @@ end
 
 local captured_events = {}
 local function eval_on_tool(event)
+	if operational_screen and operational_screen.scenario ~= "simple_prompt" and event.result then
+		local file = io.open("invoice.py", "rb")
+		if file then
+			local bytes = file:read("*a"); file:close()
+			event.workspace_sha256 = (require("agent.crypto").sha256(bytes):gsub(".", function(byte)
+				return string.format("%02x", byte:byte())
+			end))
+		end
+	end
 	captured_events[#captured_events + 1] = event
 	if recovery_mutation and not recovery_mutation.applied
 		and recovery_mutation.target_changed
@@ -312,6 +333,9 @@ write_file(options.output, json.encode({
 	ok = ok,
 	error = result.error,
 	context_pilot = context_pilot and context_pilot.report(),
+	operational_screen = operational_screen,
+	obligation_screen = obligation_screen,
+	checkpoint_usage = obligation_screen and obligation_screen.checkpoint_usage,
 	model = session.model,
 	reasoning_effort = session.reasoning_effort,
 	tool_scope = session.tool_scope,

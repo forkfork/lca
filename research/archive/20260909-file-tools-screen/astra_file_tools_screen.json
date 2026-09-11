@@ -1,0 +1,24 @@
+{
+  "id": "astra_file_tools_screen",
+  "study_kind": "screen",
+  "title": "File-tool value: specialized tools versus shell file operations",
+  "hypothesis": "Removing specialized file tools and translating only their interface instructions preserves correctness within 20% paired coding latency and cost overhead.",
+  "falsified_if": "A treatment artifact or verification gate fails, or either coding pair exceeds 20% cost or latency overhead. Invalid activation halts as invalid, not as a behavioral rejection.",
+  "source_ids": [],
+  "local_evidence": "User-proposed shell simplification. Inspected /tmp/lca/logs/lca-20260909-132048-286059.log.jsonl turn 1 model_call_id 1:1, tool_result sequences 34-37: four specialized reads emit tagged source. This is evidence of interface/format overhead, not evidence of wasted work or a failure. The matching readable log is /tmp/lca/logs/lca-20260909-132048-286059.log. Existing checkout and order fixtures test smaller and layered changes; neither is a reproduction of that research task.",
+  "control_variant": "native",
+  "minimum_runs_per_cell": 1,
+  "scenarios": ["simple_prompt", "existing_codebase_edit", "multifile_order_cancellation"],
+  "variants": [
+    {"id": "native", "model": "gpt-6-astra", "reasoning": "high", "tool_scope": "local_only", "file_tools": "native"},
+    {"id": "shell", "model": "gpt-6-astra", "reasoning": "high", "tool_scope": "local_only", "file_tools": "shell"}
+  ],
+  "task_suffixes": {
+    "simple_prompt": "\n\nThis task is self-contained; do not browse or use external network services.",
+    "existing_codebase_edit": "\n\nFile scope: change only checkout/models.py, checkout/config.py and checkout/pricing.py. Do not add files. Do not use background file writers. Run final verification in a separate command after all file mutations have completed. This task is self-contained; do not browse or use external network services.",
+    "multifile_order_cancellation": "\n\nFile scope: change only orders/__init__.py, orders/api.py, orders/models.py, orders/repository.py and orders/service.py. Do not add files. Do not use background file writers. Run final verification in a separate command after all file mutations have completed. This task is self-contained; do not browse or use external network services."
+  },
+  "deterministic_outcomes": ["public and hidden artifact correctness", "unchanged scope and architecture gates", "tool-neutral observed mutations with separate post-edit verification", "exact request tools and prompt transformation", "no tools on simple_prompt"],
+  "efficiency_outcomes": ["paired elapsed_ms", "all-attempt estimated_total_api_cost_usd", "tokens and cache usage", "tool and model calls", "raw shell commands, failures and retries"],
+  "decision_rule": "Seed 909. Six serial runs maximum, randomized adjacent pairs and coding order, simple_prompt first. $3 between-run standard-equivalent cost threshold (one-run overshoot possible), 720 active worker seconds. Test positive/negative graders and live activation before scaling. Stop on any screen task or protocol failure; preserve all attempts and unknown usage. Advance to fresh validation only if all six pass, simple_prompt uses no tools, and neither coding pair exceeds 20% treatment latency or cost overhead. A failed control or missing pair is inconclusive. Passing is feasibility evidence only, not evidence of code savings or adoption. Audit commands rather than treating fewer calls as less work. No subagents, no production defaults changed. Filesystem snapshots are per completed tool boundary, not an OS audit of transient writes; background writers are excluded."
+}

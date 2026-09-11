@@ -1,0 +1,16 @@
+{
+  "id": "obligation_pending",
+  "title": "Resume pending verification after compaction",
+  "prompt": "Continue the previous task and report the outcome.",
+  "timeout_seconds": 150,
+  "grader": "grade.py",
+  "path_prepend": "environment/bin",
+  "environment": {
+    "set": {
+      "EVAL_VERIFY_STATE_DIR": "{runtime_dir}",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    }
+  },
+  "obligation_scenario": "pending",
+  "judge": false
+}

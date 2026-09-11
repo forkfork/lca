@@ -24,6 +24,24 @@ assert(flags & 2048 == 0, "input polling made stdout nonblocking")
 for i = 1, 100 do
   app:commit_lines({"BEGIN_" .. i .. ":" .. string.rep("\27[38;2;72;151;153m⠤\27[0m", 220) .. ":END_" .. i})
 end
+app.state:submit("investigate reconnect")
+app.busy = true
+app:render(1 / 30)
+assert(app:commit_work_update({
+  text = "PTY_WORK_UPDATE: checking timer ownership",
+  _native_tool_calls = {{name = "read", args = {path = "timer.lua"}}}
+}))
+app:render(1 / 30)
+local fixture_file = assert(io.open("tests/fixtures/tui-work-updates.json"))
+local fixture = require("agent.util.json").decode(fixture_file:read("*a"))
+fixture_file:close()
+local codex = require("agent.providers.codex")
+codex._process_event_payload(fixture.commentary_event, function() end, nil,
+  codex._new_sse_stats(), nil, function(activity)
+    assert(app:commit_commentary(activity.item, "live_commentary"))
+    assert(not app:commit_work_update({_output_items = {activity.item}}))
+  end)
+app:render(1 / 30)
 app:commit_assistant("PTY_REPLY_OK")
 -- Exercise the independent input descriptor too, then a clean exit.
 local deadline = require("socket").gettime() + 4
@@ -73,7 +91,10 @@ def main():
             expected = ("BEGIN_" + str(i) + ":" + "\x1b[38;2;72;151;153m⠤\x1b[0m" * 220 + ":END_" + str(i) + "\r\n").encode()
             assert expected in data, f"colored output {i} was truncated"
         assert b"PTY_REPLY_OK" in data
-        print("PASS TUI PTY: blocking stdout, 100 intact colored lines under backpressure, Ctrl-D and cleanup")
+        assert data.count(b"PTY_WORK_UPDATE") == 1, "work update missing or duplicated"
+        assert data.count(b"basic tool calling") == 1, "captured hosted commentary missing or duplicated"
+        assert data.index(b"PTY_WORK_UPDATE") < data.index(b"PTY_REPLY_OK")
+        print("PASS TUI PTY: blocking stdout, backpressure, live work update, Ctrl-D and cleanup")
     finally:
         os.close(fd)
         if status is None:

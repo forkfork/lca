@@ -269,7 +269,7 @@ def transcript_metrics(path: Path) -> dict[str, int]:
 
 def trajectory_metrics(path: Path, transcript: Path | None = None, model: str | None = None) -> dict[str, int | float | str]:
     trajectory = json.loads(path.read_text())
-    usage = trajectory.get("usage", [])
+    usage = trajectory.get("usage", []) + trajectory.get("checkpoint_usage", [])
     hosted_search_ids = {
         str(activity.get("id") or activity.get("output_index"))
         for activity in trajectory.get("model_activities", [])
@@ -307,7 +307,7 @@ def trajectory_metrics(path: Path, transcript: Path | None = None, model: str | 
     ]
     metrics = {
         "tool_calls": int(trajectory.get("tool_calls", 0)),
-        "llm_calls": int(trajectory.get("llm_calls", 0)),
+        "llm_calls": int(trajectory.get("llm_calls", 0)) + len(trajectory.get("checkpoint_usage", [])),
         "elapsed_ms": int(trajectory.get("elapsed_ms", 0)),
         "hosted_web_searches": len(hosted_search_ids),
         "prompt_tokens": sum(int(item.get("prompt_tokens", 0)) for item in usage if isinstance(item, dict)),
@@ -563,6 +563,12 @@ def run_once(
         command.extend(["--tool-scope", variant["tool_scope"]])
     if engine == "lca" and variant.get("context_mode"):
         command.extend(["--context-mode", variant["context_mode"]])
+    if engine == "lca" and variant.get("obligation_view"):
+        command.extend(["--obligation-view", variant["obligation_view"],
+                        "--obligation-scenario", config.get("obligation_scenario", "simple_prompt")])
+    if engine == "lca" and variant.get("operational_context"):
+        command.extend(["--operational-context", variant["operational_context"],
+                        "--operational-scenario", config.get("operational_scenario", "simple_prompt")])
     if engine == "lca" and "multi_edit_enabled" in variant:
         command.extend(["--multi-edit-enabled", str(variant["multi_edit_enabled"]).lower()])
     if engine == "lca" and "edit_tool_profile" in variant:

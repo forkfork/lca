@@ -49,18 +49,22 @@ end
 
 io.write("\n" .. dim("═══ Context Limit Tests ═══") .. "\n\n")
 
-run_test("GPT-5.6 tiers share current context and maximum input limits", function()
+run_test("supported models compact at 150k with Codex-sized safety limits", function()
 	local limits = reload()
 	for _, model in ipairs({ "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna" }) do
-		assert_eq(limits.context_window(model), 1050000)
-		assert_eq(limits.max_input_tokens(model), 922000)
-		assert_eq(limits.auto_compact_threshold(model), 905616)
+		assert_eq(limits.context_window(model), 272000)
+		assert_eq(limits.max_input_tokens(model), 255616)
+		assert_eq(limits.auto_compact_threshold(model), 150000)
+		assert_eq(limits.should_compact(149999, model), false)
+		assert_eq(limits.should_compact(150000, model), true)
 	end
 end)
 
 run_test("unknown models receive the conservative GPT-5.6 window", function()
 	local limits = reload()
-	assert_eq(limits.context_window("unknown"), 1050000)
+	assert_eq(limits.context_window("unknown"), 272000)
+	assert_eq(limits.auto_compact_threshold("unknown"), 150000)
+	assert_eq(limits.should_compact(150000), true)
 end)
 
 

@@ -1,0 +1,9 @@
+{
+  "id": "compaction_stale_pass",
+  "title": "Resume after stale pass",
+  "prompt": "Continue and finish the work described in the checkpoint.",
+  "timeout_seconds": 120,
+  "grader": "grade.py",
+  "judge": false,
+  "operational_scenario": "stale_pass"
+}

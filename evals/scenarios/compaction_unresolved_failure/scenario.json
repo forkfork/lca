@@ -1,0 +1,9 @@
+{
+  "id": "compaction_unresolved_failure",
+  "title": "Resume after unresolved failure",
+  "prompt": "Continue and finish the work described in the checkpoint.",
+  "timeout_seconds": 120,
+  "grader": "grade.py",
+  "judge": false,
+  "operational_scenario": "unresolved_failure"
+}

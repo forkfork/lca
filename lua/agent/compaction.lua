@@ -1,6 +1,7 @@
 local providers = require("agent.providers")
 local context_limits = require("agent.context_limits")
 local protocol = require("agent.tool_protocol")
+local operational_state = require("agent.operational_state")
 
 local compaction = {}
 
@@ -103,6 +104,8 @@ local function build_summary_prompt(messages_to_summarize, previous_summary, ses
 	local conversation_text = serialize_messages(messages_to_summarize)
 
 	local prompt_text = "<conversation>\n" .. conversation_text .. "\n</conversation>\n\n"
+	local operational = operational_state.render(session or {})
+	if operational ~= "" then prompt_text = prompt_text .. operational .. "\n\n" end
 	local ast_block = recent_turn_ast_block(session)
 	if ast_block then
 		prompt_text = prompt_text .. ast_block .. "\n\n"
@@ -114,7 +117,13 @@ local function build_summary_prompt(messages_to_summarize, previous_summary, ses
 		prompt_text = prompt_text .. SUMMARIZATION_PROMPT
 	end
 
-	return prompt_text
+	return prompt_text .. [[
+
+Preserve unfinished obligations explicitly: required checks that have not run, unresolved failures, blocked work, and jobs whose results have not been inspected. Distinguish a historical failed attempt from an unresolved obligation using later evidence, including successful retries with changed tool options. Do not turn receipt retention into a requirement to repeat work.
+In Constraints & Preferences, retain explicit user non-goals, prohibitions, and scope limits; quote the critical wording and note any later instruction that superseded it. Do not silently drop them as irrelevant.
+In Key Decisions, retain the rejected alternative, why it was ruled out, and the evidence reference when available. Distinguish an observed fact from an agent hypothesis.
+In Critical Context, keep exact evidence references and their limits. A command that passed before a later relevant edit is historical evidence, not verification of the edited workspace. Read-only inspection alone does not invalidate a passing check. Do not promote an unexecuted check or a running job to success.
+Compress narrative before these obligations. Tool-derived operational state is supplied separately to the continuing agent; do not rewrite it into broader claims of completion.]]
 end
 
 function compaction.estimate_tokens(message)
@@ -585,6 +594,7 @@ function compaction.compact(session, opts)
 		messages_to_summarize[#messages_to_summarize + 1] = session.messages[i]
 	end
 	local file_details = compaction.file_operations(messages_to_summarize, session.compaction_details)
+	operational_state.refresh_jobs(session)
 
 	local summary = compaction.generate_summary(
 		messages_to_summarize,

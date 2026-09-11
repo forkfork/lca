@@ -3,12 +3,13 @@ session.__index = session
 
 local config = require("agent.config")
 local fs = require("agent.util.fs")
+local operational_state = require("agent.operational_state")
 
 local DEFAULT_SESSION_FILE = ".lca-session.json"
 local SESSION_ARCHIVE_DIR = ".lca-sessions"
 local DEFAULT_MODEL = config.default_model()
 local USAGE_HISTORY_LIMIT = 50
-local SYSTEM_PROMPT_VERSION = 28
+local SYSTEM_PROMPT_VERSION = 30
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -158,6 +159,8 @@ function session:clear()
 	self.system_prompt_version = nil
 	self.compaction_summary = nil
 	self.compaction_details = nil
+	self.operational_state = nil
+	self.operational_prompt_tokens = nil
 	self.plan = nil
 	self.journey = nil
 	self.last_usage = nil
@@ -222,6 +225,7 @@ end
 function session:record_usage(usage, message_index)
 	local normalized = normalize_usage(usage, message_index)
 	if normalized then
+		normalized.operational_tokens = self.operational_prompt_tokens or 0
 		self.last_usage = normalized
 		self.usage_history = self.usage_history or {}
 		self.usage_history[#self.usage_history + 1] = normalized
@@ -311,6 +315,7 @@ end
 
 function session:estimated_model_input_tokens()
 	return self:estimated_session_tokens() + self:estimated_system_prompt_tokens() + self:estimated_mcp_prompt_tokens()
+		+ operational_state.tokens(self)
 end
 
 function session:estimated_model_input_tokens_usage_aware()
@@ -327,7 +332,8 @@ function session:estimated_model_input_tokens_usage_aware()
 		trailing = trailing + estimate_text_tokens(message.text)
 		trailing = trailing + 6
 	end
-	return (tonumber(usage.total_tokens) or 0) + trailing, {
+	local state_growth = math.max(0, operational_state.tokens(self) - (tonumber(usage.operational_tokens) or 0))
+	return (tonumber(usage.total_tokens) or 0) + trailing + state_growth, {
 		usage_tokens = tonumber(usage.total_tokens) or 0,
 		trailing_tokens = trailing,
 		message_index = usage.message_index,
@@ -347,7 +353,7 @@ function session:load_message(path)
 	local session_tokens = self:estimated_session_tokens()
 	local system_tokens = self:estimated_system_prompt_tokens()
 	local mcp_tokens = self:estimated_mcp_prompt_tokens()
-	local model_tokens = session_tokens + system_tokens + mcp_tokens
+	local model_tokens = session_tokens + system_tokens + mcp_tokens + operational_state.tokens(self)
 
 	local details = self:turn_count() .. " turns, " .. format_token_estimate(model_tokens) .. ", " .. format_token_count(session_tokens) .. " session, " .. format_token_count(system_tokens) .. " system"
 	if mcp_tokens > 0 then
@@ -380,6 +386,7 @@ function session:serialize()
 		system_prompt_native_tools = self.system_prompt_native_tools,
 		compaction_summary = self.compaction_summary,
 		compaction_details = self.compaction_details,
+		operational_state = self.operational_state,
 		plan = self.plan,
 		last_usage = self.last_usage,
 		usage_history = self.usage_history,
@@ -514,6 +521,12 @@ function session:load(path)
 		self.system_prompt_native_tools = nil
 	end
 	-- Restore compaction summary
+	self.operational_state = type(data.operational_state) == "table" and data.operational_state.version == 1
+		and data.operational_state or nil
+	if self.operational_state then
+		-- Work may have changed outside this process while the session was closed.
+		self.operational_state.resumed = true
+	end
 	if data.compaction_summary and data.compaction_summary ~= require("cjson").null then
 		self.compaction_summary = data.compaction_summary
 	else

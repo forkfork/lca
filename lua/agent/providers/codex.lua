@@ -727,10 +727,14 @@ local function process_event_payload(payload, on_delta, on_usage, stats, on_outp
 			end
 		end
 	end
-	if event_type == "response.output_item.done" and on_output_item then
+	if event_type == "response.output_item.done" then
 		local ok, event = pcall(json.decode, payload)
 		if ok and type(event) == "table" and type(event.item) == "table" then
-			on_output_item(normalize_output_item(event.item))
+			local item = normalize_output_item(event.item)
+			if on_output_item then on_output_item(item) end
+			if on_activity and item.type == "message" and item.phase == "commentary" then
+				pcall(on_activity, { type = "assistant_commentary", item = item })
+			end
 		end
 	end
 	if on_activity and (event_type == "response.web_search_call.searching" or event_type == "response.web_search_call.completed") then
