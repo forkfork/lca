@@ -100,9 +100,20 @@ eval "$(luarocks --lua-version=5.5 --local path --bin)"
 # make local OPENSSL_DIR="$(brew --prefix openssl@3)"
 ```
 
-`make local` uses `luarocks` from your PATH. Override `LUAROCKS`, `LUA`, or
-`LUA_INCDIR` if your toolchain lives elsewhere. Build once before running Lua
-entry points directly from the checkout.
+`make local` uses `luarocks` from your PATH; `make test` uses `lua5.5`.
+Use LuaRocks 3.13 or newer for Lua 5.5: older versions can reject valid 5.5
+headers with "Lua header mismatches configured version". Pointing `LUA_INCDIR`
+at those same headers will not fix an outdated LuaRocks.
+
+Override `LUAROCKS`, `LUA`, or `LUA_INCDIR` on the make command line, or save
+machine-specific settings in the ignored `config.local.mk`, for example:
+
+```make
+LUAROCKS = /path/to/luarocks-3.13/bin/luarocks
+```
+
+Command-line overrides take precedence over this file. Build once before
+running Lua entry points directly from the checkout.
 
 ## Start working
 

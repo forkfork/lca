@@ -1,10 +1,9 @@
-local uv = require("luv")
+local shell = require("agent.util.shell")
 
 local run = {}
 
 local MAX_OUTPUT = 20000
 local DEFAULT_TIMEOUT_MS = 120000
-local DEFAULT_PROGRESS_INTERVAL_MS = 2000
 
 local function truncate_output(output)
 	if #output <= MAX_OUTPUT then
@@ -78,16 +77,6 @@ local function broad_git_command_reason(command)
 	return nil
 end
 
-local function kill_process_tree(pid, handle, signal)
-	signal = signal or "sigterm"
-	if pid then
-		os.execute("pkill -" .. (signal == "sigkill" and "KILL" or "TERM") .. " -P " .. tostring(pid) .. " >/dev/null 2>&1")
-	end
-	if handle and not handle:is_closing() then
-		pcall(uv.process_kill, handle, signal)
-	end
-end
-
 function run.execute(args, context)
 	if not args.command or args.command == "" then
 		return {
@@ -114,116 +103,17 @@ function run.execute(args, context)
 
 	local timeout_ms = tonumber(args.timeout) or DEFAULT_TIMEOUT_MS
 
-	-- Drain any pending libuv callbacks from previous operations
-	uv.run("nowait")
-
-	local stdout_pipe = uv.new_pipe(false)
-	local stderr_pipe = uv.new_pipe(false)
-	local chunks = {}
-	local output_bytes = 0
-	local output_chunks = 0
-	local exit_code = nil
-	local timed_out = false
-	local done = false
-
-	local handle, pid = uv.spawn("sh", {
-		args = { "-c", args.command },
+	local result = (context.executor or shell):run(args.command, {
 		cwd = context.cwd,
-		stdio = { nil, stdout_pipe, stderr_pipe },
-	}, function(code)
-		exit_code = code
-		done = true
-	end)
-
-	if not handle then
-		stdout_pipe:close()
-		stderr_pipe:close()
-		return {
-			is_error = true,
-			content = "failed to start command: " .. tostring(pid),
-			summary = "failed to start",
-		}
+		timeout = timeout_ms,
+		progress = context.progress,
+		progress_interval_ms = context.progress_interval_ms,
+		cancelled = context.cancelled,
+	})
+	if result.error then
+		return { is_error = true, content = "failed to start command: " .. result.error, summary = "failed to start" }
 	end
-
-	stdout_pipe:read_start(function(_, data)
-		if data then
-			chunks[#chunks + 1] = data
-			output_bytes = output_bytes + #data
-			output_chunks = output_chunks + 1
-		end
-	end)
-
-	stderr_pipe:read_start(function(_, data)
-		if data then
-			chunks[#chunks + 1] = data
-			output_bytes = output_bytes + #data
-			output_chunks = output_chunks + 1
-		end
-	end)
-
-	local progress_timer
-	if type(context.progress) == "function" then
-		local interval_ms = math.max(100, math.floor(tonumber(context.progress_interval_ms) or DEFAULT_PROGRESS_INTERVAL_MS))
-		local started_ns = uv.hrtime()
-		progress_timer = uv.new_timer()
-		progress_timer:start(interval_ms, interval_ms, function()
-			if done then return end
-			context.progress({
-				elapsed_ms = math.floor((uv.hrtime() - started_ns) / 1000000),
-				output_bytes = output_bytes,
-				output_chunks = output_chunks,
-			})
-		end)
-	end
-
-	local timer = uv.new_timer()
-	timer:start(timeout_ms, 0, function()
-		if not done then
-			timed_out = true
-			kill_process_tree(pid, handle, "sigterm")
-		end
-	end)
-
-	local function is_cancelled()
-		if type(context.cancelled) == "function" then
-			return context.cancelled() == true
-		end
-		return false
-	end
-	while not done do
-		uv.run("once")
-		if is_cancelled() then
-			timed_out = true  -- reuse timeout path for cleanup
-			kill_process_tree(pid, handle, "sigterm")
-			break
-		end
-	end
-
-	-- Wait for process to fully exit after kill
-	if not done then
-		for _ = 1, 50 do
-			uv.run("nowait")
-			if done then break end
-		end
-		if not done then
-			kill_process_tree(pid, handle, "sigkill")
-			for _ = 1, 50 do
-				uv.run("nowait")
-				if done then break end
-			end
-		end
-	end
-
-	timer:stop()
-	timer:close()
-	if progress_timer then progress_timer:stop(); progress_timer:close() end
-	stdout_pipe:read_stop()
-	stderr_pipe:read_stop()
-	stdout_pipe:close()
-	stderr_pipe:close()
-	handle:close()
-
-	local output = table.concat(chunks)
+	local output, exit_code, timed_out = result.output, result.code, result.timed_out
 	if is_curl_command(args.command) then
 		output = strip_curl_progress(output)
 	end
@@ -231,7 +121,7 @@ function run.execute(args, context)
 	output, truncated = truncate_output(output)
 
 	if timed_out then
-		if is_cancelled() then
+		if result.cancelled then
 			output = output .. "\n[cancelled by user]"
 			return {
 				is_error = true,

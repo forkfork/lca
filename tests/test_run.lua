@@ -39,6 +39,95 @@ end
 
 io.write("\n" .. dim("═══ Run Tool Tests ═══") .. "\n\n")
 
+local shell = require("agent.util.shell")
+
+test("local executor preserves combined streams and nonzero exit status", function()
+	local result = shell:run("printf stdout; printf stderr >&2; exit 7", { cwd = project_dir })
+	assert(result.output:find("stdout", 1, true))
+	assert(result.output:find("stderr", 1, true))
+	assert(result.code == 7)
+	assert(not result.error and not result.timed_out)
+	local tool = run_tool.execute({ command = "printf failure >&2; exit 7" }, { cwd = project_dir })
+	assert(tool.is_error and tool.content == "failure" and tool.summary == "exit 7")
+	local empty = run_tool.execute({ command = "true" }, { cwd = project_dir })
+	assert(not empty.is_error and empty.content == "(no output)" and empty.summary == "exit 0")
+end)
+
+test("capture keeps stdout-only output and throws on failure", function()
+	assert(shell.capture("printf captured") == "captured")
+	local result = shell:run("printf captured; printf diagnostic >&2", { inherit_stderr = true })
+	assert(result.output == "captured" and result.code == 0)
+	local ok, err = pcall(shell.capture, "exit 9")
+	assert(not ok and tostring(err):find("command failed (9)", 1, true))
+end)
+
+test("local executor respects cwd and reports spawn failure", function()
+	assert(shell:run("pwd", { cwd = "/tmp" }).output == "/tmp\n")
+	local result = shell:run("true", { cwd = "/this/lca/directory/does/not/exist" })
+	assert(result.error and result.code == 127)
+end)
+
+test("run accepts a plain fake and keeps formatting and guards", function()
+	local calls = 0
+	local progress, cancelled = function() end, function() return false end
+	local fake = { run = function(_, command, opts)
+		calls = calls + 1
+		assert(command == "pretend" and opts.cwd == "/remote")
+		assert(opts.timeout == 321 and opts.progress == progress and opts.cancelled == cancelled)
+		return { output = string.rep("x", 20001), code = 3 }
+	end }
+	local context = { cwd = "/remote", executor = fake, progress = progress, cancelled = cancelled }
+	local result = run_tool.execute({ command = "pretend", timeout = 321 }, context)
+	assert(result.is_error and result.summary == "exit 3, truncated")
+	assert(result.content == string.rep("x", 20000) .. "\n[truncated at 20000 bytes]")
+	assert(run_tool.execute({ command = "git add -A" }, context).summary == "blocked git command")
+	assert(calls == 1)
+end)
+
+test("fake execution preserves cancellation and launch error formatting", function()
+	local fake = { run = function() return { output = "partial", timed_out = true, cancelled = true } end }
+	local result = run_tool.execute({ command = "pretend" }, { executor = fake })
+	assert(result.summary == "cancelled" and result.content == "partial\n[cancelled by user]")
+	fake.run = function() return { output = "", code = 127, error = "unavailable" } end
+	result = run_tool.execute({ command = "pretend" }, { executor = fake })
+	assert(result.is_error and result.content == "failed to start command: unavailable")
+end)
+
+test("discovery tools and batches use a run-only fake", function()
+	local calls = {}
+	local fake = { run = function(_, command)
+		calls[#calls + 1] = command
+		if command:find("command -v rg", 1, true) then return { output = "", code = 0 } end
+		if command:find("rg ", 1, true) then return { output = "", code = 1 } end
+		return { output = "a.lua\nb.lua\n", code = 0 }
+	end }
+	local context = { cwd = "/remote", executor = fake }
+	local registry = require("agent.tool_registry")
+	assert(registry.execute("ls", {}, context).summary == "2 entries")
+	assert(registry.execute("find", {}, context).summary == "2 files")
+	assert(registry.execute("grep", { pattern = "absent" }, context).content == "(no matches)")
+	local results = require("agent.parallel").execute_batch({
+		{ name = "ls", args = {} }, { name = "find", args = {} },
+		{ name = "grep", args = { pattern = "absent" } },
+	}, context)
+	assert(results[1].summary == "2 entries" and results[2].summary == "2 files")
+	assert(results[3].content == "(no matches)")
+	assert(#calls == 7, "all commands and one cached capability probe must use the fake")
+	local fallback = { run = function(_, command)
+		if command:find("command -v rg", 1, true) then return { output = "", code = 1 } end
+		assert(command:find("grep -R", 1, true), "capability cache must be per executor")
+		return { output = "", code = 1 }
+	end }
+	assert(registry.execute("grep", { pattern = "absent" }, { cwd = "/remote", executor = fallback }).summary == "0 matches")
+end)
+
+test("session stores execution capability without serializing it", function()
+	local fake = { run = function() error("unexpected execution") end }
+	local session = require("agent.session").create({ executor = fake })
+	assert(session.executor == fake and session:serialize().executor == nil)
+	assert(require("agent.session").create().executor == shell)
+end)
+
 test("timeout kills child process", function()
 	local pid_file = "/tmp/lca_run_timeout_child_" .. tostring(os.time()) .. "_" .. tostring(math.random(1000000))
 	local result = run_tool.execute({

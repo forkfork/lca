@@ -374,46 +374,6 @@ local function pending_job_id_result()
 	}
 end
 
-local function spawn_and_collect(cmd, callback)
-	local stdout_pipe = uv.new_pipe()
-	local stderr_pipe = uv.new_pipe()
-	local chunks = {}
-	local handle
-
-	handle = uv.spawn("sh", {
-		args = { "-c", cmd },
-		stdio = { nil, stdout_pipe, stderr_pipe },
-	}, function(code)
-		stdout_pipe:close()
-		stderr_pipe:close()
-		handle:close()
-		callback(table.concat(chunks), code)
-	end)
-
-	if not handle then
-		stdout_pipe:close()
-		stderr_pipe:close()
-		callback("[error: failed to spawn process]", 127)
-		return
-	end
-
-	stdout_pipe:read_start(function(err, data)
-		if data then
-			chunks[#chunks + 1] = data
-		elseif not err then
-			stdout_pipe:read_stop()
-		end
-	end)
-
-	stderr_pipe:read_start(function(err, data)
-		if data then
-			chunks[#chunks + 1] = data
-		elseif not err then
-			stderr_pipe:read_stop()
-		end
-	end)
-end
-
 local function execute_flat_batch(tool_calls, context, on_tool)
 	local shell_batch = {}
 	local other_batch = {}
@@ -489,8 +449,9 @@ local function execute_flat_batch(tool_calls, context, on_tool)
 
 		for _, item in ipairs(shell_batch) do
 			emit_start(on_tool, item.tc, item.index)
-			spawn_and_collect(item.cmd, function(output, exit_code)
-				local result = format_result(item.tc.name, item.tc.args, output, exit_code, context)
+			local executor = context.executor or shell_util
+			local function collected(execution)
+				local result = format_result(item.tc.name, item.tc.args, execution.output, execution.code, context)
 				results[item.index] = result
 				for _, duplicate_index in ipairs(item.duplicates or {}) do
 					results[duplicate_index] = result
@@ -499,7 +460,12 @@ local function execute_flat_batch(tool_calls, context, on_tool)
 					on_tool({ type = "tool", call_id = event_call_id(item.tc, item.index), model_index = item.index, name = item.tc.name, args = item.tc.args, result = result })
 				end
 				pending_shell = pending_shell - 1
-			end)
+			end
+			if executor.run_async then
+				executor:run_async(item.cmd, {}, collected)
+			else
+				collected(executor:run(item.cmd, {}))
+			end
 		end
 		while pending_shell > 0 do
 			uv.run("once")

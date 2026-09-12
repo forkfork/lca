@@ -5,7 +5,7 @@ local source_evidence = require("agent.tools.source_evidence")
 local grep = {}
 
 local MAX_BYTES = 20000
-local cached_has_rg
+local cached_has_rg = setmetatable({}, { __mode = "k" })
 
 local function truncate(output)
 	if #output <= MAX_BYTES then
@@ -14,17 +14,15 @@ local function truncate(output)
 	return output:sub(1, MAX_BYTES) .. "\n[truncated at " .. MAX_BYTES .. " bytes]", true
 end
 
-local function has_rg()
-	if cached_has_rg ~= nil then
-		return cached_has_rg
+local function has_rg(executor)
+	if cached_has_rg[executor] == nil then
+		cached_has_rg[executor] = executor:run("command -v rg >/dev/null 2>&1").code == 0
 	end
-	local ok, why, code = os.execute("command -v rg >/dev/null 2>&1")
-	cached_has_rg = ok == true or ok == 0 or (why == "exit" and code == 0)
-	return cached_has_rg
+	return cached_has_rg[executor]
 end
 
-local function grep_command(args, target)
-	if has_rg() then
+local function grep_command(args, target, executor)
+	if has_rg(executor) then
 		if args.glob and args.glob ~= "" then
 			return "rg --with-filename --line-number --color=never --glob " .. shell.quote(args.glob) .. " -- " .. shell.quote(args.pattern) .. " " .. shell.quote(target) .. " 2>&1"
 		end
@@ -41,7 +39,7 @@ end
 -- Both direct execution and the asynchronous batch executor use these helpers.
 function grep.command(args, context)
 	if not args.pattern or args.pattern == "" then return nil end
-	return grep_command(args, path.resolve(args.path or ".", context.cwd or "."))
+	return grep_command(args, path.resolve(args.path or ".", context.cwd or "."), context.executor or shell)
 end
 
 function grep.format_result(output, code, context)
@@ -80,13 +78,11 @@ function grep.execute(args, context)
 	if not command then
 		return { is_error = true, content = "pattern is required", summary = "missing pattern" }
 	end
-	local handle = io.popen(command, "r")
-	if not handle then
+	local result = (context.executor or shell):run(command)
+	if result.error then
 		return { is_error = true, content = "failed to start grep", summary = "failed" }
 	end
-	local output = handle:read("*a") or ""
-	local ok, _, code = handle:close()
-	return grep.format_result(output, ok and 0 or (code or 2), context)
+	return grep.format_result(result.output, result.code or 2, context)
 end
 
 return grep

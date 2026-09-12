@@ -96,6 +96,7 @@ function session.create(options)
 	local resolved_model = resolve_model(options)
 	return setmetatable({
 		id = options.session_id or create_session_id(cwd),
+		executor = options.executor or require("agent.util.shell"),
 		credentials_path = options.credentials_path or config.default_credentials_path(),
 		model = resolved_model,
 			reasoning_effort = resolve_reasoning_effort(options.reasoning_effort, resolved_model),

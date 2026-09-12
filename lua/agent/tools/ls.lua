@@ -6,10 +6,10 @@ local ls = {}
 function ls.execute(args, context)
 	local target = path.resolve(args.path or ".", context.cwd)
 	local command = "ls -1 " .. shell.quote(target) .. " 2>/dev/null"
-	local ok, output = pcall(shell.capture, command)
+	local ok, output = pcall(shell.capture, command, context.executor)
 	if not ok then
-		local exists_ok, _, exists_code = os.execute("test -e " .. shell.quote(target))
-		if not (exists_ok == true or exists_ok == 0 or exists_code == 0) then
+		local exists = (context.executor or shell):run("test -e " .. shell.quote(target))
+		if exists.code ~= 0 then
 			return {
 				is_error = false,
 				content = target .. " does not exist",

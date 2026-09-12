@@ -22,7 +22,7 @@ function find_tool.execute(args, context)
 	end
 	command = command .. " | sort"
 
-	local ok, output = pcall(shell.capture, command)
+	local ok, output = pcall(shell.capture, command, context.executor)
 	if not ok then
 		return {
 			is_error = true,

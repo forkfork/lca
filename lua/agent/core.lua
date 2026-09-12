@@ -881,6 +881,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 
 			trace("tool_batch", { model_call_id = model_call_id, calls = batch })
 			local batch_results = parallel.execute_batch(batch, {
+				executor = session.executor,
 				cwd = session.cwd,
 				session = session,
 				recent_read_keys = recent_read_keys(session),

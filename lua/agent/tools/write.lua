@@ -70,7 +70,7 @@ function write.execute(args, context)
 	end
 
 	local target = path.resolve(args.path, context.cwd)
-	local mkdir_ok, mkdir_error = pcall(shell.capture, "mkdir -p " .. shell.quote(dirname(target)))
+	local mkdir_ok, mkdir_error = pcall(shell.capture, "mkdir -p " .. shell.quote(dirname(target)), context.executor)
 	if not mkdir_ok then
 		return {
 			is_error = true,

@@ -58,7 +58,7 @@ lua/agent/
     fs.lua                 file I/O helpers
     json.lua               JSON extraction helpers
     path.lua               path resolution
-    shell.lua              shell quoting
+    shell.lua              local command execution and shell quoting
 ```
 
 ## Runtime Flow
@@ -89,6 +89,43 @@ prompt it exits after auto-saving the session.
 `lca run <prompt>` delegates to `bin/agent.lua`. That entrypoint creates a fresh
 session, adds the prompt as a user message, calls `core.run_session`, prints the
 final text, and exits. It uses the same tool loop as the REPL.
+
+## Command execution
+
+`session.create({ executor = ... })` accepts a plain table; the default is
+`agent.util.shell`. The core passes it into tool context. No executor state is
+serialized with the conversation, and there is no backend mode flag or class.
+
+`executor:run(command, opts)` returns `{ output, code }`, with stdout and stderr
+combined in arrival order, matching the existing run tool. A launch failure adds
+`error`; timeout/cancellation adds `timed_out`/`cancelled`. Options are `cwd`,
+`timeout` in milliseconds, `cancelled` (a predicate), `progress` (a callback), and
+`progress_interval_ms`. No timeout applies unless requested; the run tool still
+supplies its 120-second default. `inherit_stderr` preserves the stdout-only
+behavior of the existing throwing `shell.capture(command, executor)` helper.
+Git guards, curl cleanup, truncation, and tool-result formatting remain in tools.
+
+The same capability handles run, ls, find, grep (including its per-executor
+ripgrep probe), and write's directory creation. Concurrent discovery batches use
+optional `executor:run_async(command, { cwd = ... }, callback)`, whose callback
+receives `{ output, code, error? }`; this moves the existing libuv batch helper
+without changing its scheduling. An executor with only `run` works too, executing
+those commands sequentially. Async implementations must deliver callbacks through
+LCA's libuv loop, or synchronously.
+
+This is a command boundary, not a remote workspace implementation. Direct file
+I/O, source-evidence reads, temporary-file linting, project indexing, background
+job supervision, MCP stdio processes, terminal control, and login/launcher
+commands remain local. Before this change, command execution was split between
+`util.shell.capture` (`io.popen`), the run tool's libuv lifecycle, the parallel
+batch libuv helper, and direct grep/ls subprocess calls; the tool command paths
+now share `util.shell` as their default execution capability.
+
+A future MicroVM implementation can provide a table with `run` returning the same
+result and honoring the command options. Application/session construction can
+inject it using the existing `executor` option. It can optionally provide
+`run_async` to retain discovery concurrency without changing those tools.
+Remote file access and persistent jobs will still require separate, explicit work.
 
 ## Core Tool Loop
 

@@ -1,7 +1,9 @@
+-include config.local.mk
+
 ROCKSPEC ?= lca-dev-1.rockspec
 LUAROCKS ?= luarocks
 LUA_VERSION ?= 5.5
-LUA ?= lua
+LUA ?= lua$(LUA_VERSION)
 # LuaRocks discovers headers by default; override LUA_INCDIR if needed.
 
 .PHONY: local rock test check eval eval-list
