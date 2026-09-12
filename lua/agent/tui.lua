@@ -2560,8 +2560,8 @@ function App:_handle_action(action)
 	elseif action.type == "focus_next" then self:focus_next()
 	elseif action.type == "submit" then
 		if action.text ~= "" then
-			if action.text:match("^/background%s*$") or action.text:match("^/bg%s*$") then
-				self.background_requested = true
+			if action.text:match("^/background%s*$") or action.text:match("^/bg%s*$") or action.text:match("^/cloud%s*$") then
+				self.background_requested = action.text:match("^/cloud") and "/cloud" or "/background"
 			else self.submitted[#self.submitted + 1] = action.text end
 			if self.on_queue then self.on_queue(self.submitted) end
 		end
@@ -2657,7 +2657,7 @@ function App:next_submission()
 		if self.fatal_error then error(self.fatal_error) end
 	end
 	if self.exit_requested then return nil end
-	if self.background_requested then self.background_requested = false; return "/background" end
+	if self.background_requested then local command=self.background_requested;self.background_requested=false;return command end
 	return table.remove(self.submitted, 1)
 end
 
@@ -2796,7 +2796,7 @@ function tui.run(options)
 	local background = require("agent.background")
 	app.submitted = background.load_queue(session)
 	app.on_queue = function(queue) background.save_queue(session, queue) end
-	local background_checkpoint
+	local background_checkpoint, cloud_attach
 	local facade = command_ui(app)
 	local last_auto_compact_messages = 0
 	local function auto_save()
@@ -2825,12 +2825,12 @@ function tui.run(options)
 			app.state:listen()
 			local line = app:next_submission()
 			if not line then break end
-			if line == "/background" or line == "/bg" then
+			if line == "/background" or line == "/bg" or line == "/cloud" then
 				local ok, value = pcall(function()
                     background.preflight()
                     return background.checkpoint(session, app.submitted)
                 end)
-				if ok then background_checkpoint = value; break end
+				if ok then background_checkpoint = value; cloud_attach = line == "/cloud"; break end
 				app.state:notice(tostring(value), "error")
 				goto continue
 			end
@@ -2965,7 +2965,7 @@ function tui.run(options)
 	if app.recording then app.recording:close() end
 	if background_checkpoint then
 		local command=background.command()
-		local ok=os.execute(command.." background --checkpoint "..require("agent.util.shell").quote(background_checkpoint))
+		local ok=os.execute(command.." background --checkpoint "..require("agent.util.shell").quote(background_checkpoint)..(cloud_attach and " --attach" or ""))
 		if not ok then
             local marker=io.open(session.cwd.."/.lca-handoff.json")
             if marker then marker:close();return nil,"handoff did not complete; session remains paused; use lca recover" end

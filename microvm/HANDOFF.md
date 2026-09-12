@@ -6,7 +6,7 @@ reattach to a single headless agent inside a prepared MicroVM.
 
 ## Configure
 
-The first `/bg` prepares a reusable image automatically. It selects Sydney by
+The first `/cloud` or `/bg` prepares a reusable image automatically. It selects Sydney by
 default (or `AWS_REGION` / `AWS_DEFAULT_REGION`), creates the build and execution
 roles and private backup storage, uploads only packaged LCA source, and waits for
 AWS to build and snapshot the image. The terminal explains that this first build
@@ -46,7 +46,8 @@ lca
 ```
 
 Start at your project root. Queue follow-up prompts
-while LCA works, then type `/background` (or `/bg`). It takes precedence over
+while LCA works, then type `/cloud` to move and stay attached, or `/bg`
+(`/background`) to move and detach. Both take precedence over
 queued input, waits for the current turn to finish, and transfers the remaining
 queue. Active durable background jobs must be finished or stopped first.
 For a new project, `/bg` initializes Git and creates an empty initial commit
@@ -90,7 +91,8 @@ turns with tool calls. Restored tool counts come from session history; historica
 timings are not reconstructed. Repeated polling does not duplicate those turns.
 Remote slash-command output remains visible separately. The plain view still
 shows the accumulated worker log.
-Ctrl-C or Ctrl-D detaches; it does not cancel remote work.
+Ctrl-C, Ctrl-D or `/bg` detaches; it does not cancel remote work. `/cloud`
+while already remote keeps the current attachment and does not create another VM.
 Initial queued input executes in order; later submissions have
 stable IDs and a local outbox so reconnect can resend the same item safely.
 Supported remote slash commands: `/test`, `/status`, `/context`, `/reasoning`,

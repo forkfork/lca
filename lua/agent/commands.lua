@@ -3,7 +3,8 @@ local context_limits = require("agent.context_limits")
 local jobs = require("agent.jobs")
 
 local HELP = [[
-/background           move this session and queued input to the configured background host
+/cloud                move this session to a MicroVM and stay attached
+/bg                   move this session to a MicroVM and detach (/background also works)
 /help                 show commands
 /status               show cwd, model, credentials, and turn count
 /context [n]          show context/token breakdown and largest messages

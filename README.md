@@ -40,7 +40,8 @@ The aim is to make each rough edge easier to notice, explain, and smooth away.
 
 ## Let a session keep working in the cloud
 
-Start locally, then use `/bg` to move the session into an AWS Lambda MicroVM.
+Start locally, then use `/cloud` to move the session into an AWS Lambda MicroVM
+and stay attached. Use `/bg` to move it and drop back to your shell.
 The agent, project files, conversation, plan, and queued requests go together;
 commands run inside the VM. You can close your laptop while it keeps working,
 free up your local machine, or leave a longer task running while you do something else.
@@ -52,7 +53,7 @@ and tool execution run inside the MicroVM; your terminal is the interface. Use
 `/local` to bring the session and its changes back to your project and terminate
 the VM.
 
-This is experimental and needs an AWS account. The first `/bg` builds a reusable
+This is experimental and needs an AWS account. The first `/cloud` or `/bg` builds a reusable
 LCA image and explains the extra wait; later handoffs reuse it. Backup storage is
 set up automatically, with S3 checkpoints for recovery if the VM dies.
 Local-only use needs no AWS setup. See the [MicroVM guide](microvm/HANDOFF.md)

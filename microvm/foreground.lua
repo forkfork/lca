@@ -99,9 +99,11 @@ function M.run(command_path,event_fd)
     if effect then
      local changed,why=pcall(app.set_effect,app,effect)
      if not changed then app.state:notice(tostring(why),'error') end
+    elseif line=='/bg' or line=='/background' then send('/detach');break
+    elseif line=='/cloud' then app.state:notice('Already attached to the cloud session.')
     elseif line=='/detach' or line=='/local' then send(line);break
     elseif line:sub(1,1)=='/' and not ({test=true,status=true,context=true,reasoning=true,['service-tier']=true})[line:match('^/(%S+)')] then
-     app.state:notice('Remote commands: /test, /status, /context, /reasoning, /service-tier, /local, /detach','error')
+     app.state:notice('Remote commands: /test, /status, /context, /reasoning, /service-tier, /local, /bg, /detach','error')
     else send(line);app.state:notice('Submitting input…') end
    end
   end

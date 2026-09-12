@@ -22,7 +22,7 @@ def configure(path,emit=lambda text:print(text,flush=True)):
    updated=setup(cfg)
    if updated!=cfg:atomic(path,updated)
    return updated
-  emit('First /bg: preparing your reusable LCA image. This can take several minutes; future /bg launches reuse it and are much faster.')
+  emit('First cloud handoff: preparing your reusable LCA image. This can take several minutes; future handoffs reuse it and are much faster.')
   cfg.setdefault('region',os.getenv('AWS_REGION') or os.getenv('AWS_DEFAULT_REGION') or 'ap-southeast-2')
   cfg.setdefault('setup_id',uuid.uuid4().hex[:12]);atomic(path,cfg)
   identity=api(cfg,'sts','get-caller-identity');account=identity['Account']

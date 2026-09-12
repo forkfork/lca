@@ -148,7 +148,7 @@ def record(project):
     path=Path(project)/'.lca-handoff.json'
     return path,json.loads(path.read_text())
 def connection(cfg,rec):return Link(cfg,rec['vm'])
-def background(cfg,checkpoint):
+def background(cfg,checkpoint,attach=False):
     lifetime=duration(cfg)
     idle=cfg.get('idle_suspend_seconds',300)
     if not isinstance(idle,int) or isinstance(idle,bool) or idle<1:raise ValueError('idle_suspend_seconds must be a positive integer')
@@ -220,7 +220,7 @@ def background(cfg,checkpoint):
         # Fail closed: local execution is fenced BEFORE the worker can start.
         rec['phase']='remote';atomic(marker,rec)
         link.put(REMOTE+'/commit',b'committed\n')
-    print('Session backgrounded. Use lca fg to reconnect; /local brings it home. '+expiry(rec))
+    print('Session moved to the cloud. Attaching…' if attach else 'Session backgrounded. Use lca fg to reconnect; /local brings it home. '+expiry(rec))
 def fg(cfg,marker,rec):
     assert rec['phase']=='remote','session is not remote'
     with Foreground() as ui, connection(cfg,rec) as link:
@@ -250,7 +250,8 @@ def fg(cfg,marker,rec):
                     ui.notice('MicroVM is sleeping. Enter a prompt to wake it, /local to return, or /detach.')
             line=ui.readline()
             if line is not None:
-                if not line or line.strip()=='/detach':ui.notice(expiry(rec));return
+                if not line or line.strip() in ('/detach','/bg','/background'):ui.notice(expiry(rec));return
+                if line.strip()=='/cloud':ui.notice('Already attached to the cloud session.');continue
                 if line.strip()=='/local':
                     if dormant:wait_for_suspension(cfg,rec['vm'])
                     return 'local'
@@ -374,7 +375,7 @@ def recover(cfg,marker,rec,merge=False):
     marker.unlink();print('Local checkpoint restored. Use /resume in LCA.')
 def main():
     os.umask(0o077)
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('command',choices=['background','fg','local','collect','stop','recover','gc']);p.add_argument('directory',nargs='?');p.add_argument('--checkpoint');p.add_argument('--discard',action='store_true');p.add_argument('--apply',action='store_true');p.add_argument('--merge',action='store_true');p.add_argument('--config',default=os.getenv('LCA_MICROVM_CONFIG',str(Path.home()/'.config/lca/microvm.json')))
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('command',choices=['background','fg','local','collect','stop','recover','gc']);p.add_argument('directory',nargs='?');p.add_argument('--checkpoint');p.add_argument('--attach',action='store_true');p.add_argument('--discard',action='store_true');p.add_argument('--apply',action='store_true');p.add_argument('--merge',action='store_true');p.add_argument('--config',default=os.getenv('LCA_MICROVM_CONFIG',str(Path.home()/'.config/lca/microvm.json')))
     args=p.parse_args()
     if args.command=='gc':
         from image_gc import run as gc
@@ -387,9 +388,11 @@ def main():
             marker,rec=record(Path(data['cwd']))
             if rec['phase']=='prepared' and not rec.get('vm'):recover({},marker,rec)
             raise
-        background(cfg,args.checkpoint)
+        background(cfg,args.checkpoint,attach=args.attach)
         from image_gc import schedule
-        schedule(args.config);return
+        schedule(args.config)
+        if not args.attach:return
+        args.command='fg'
     if args.command=='fg':
         from image_gc import schedule
         schedule(args.config)
