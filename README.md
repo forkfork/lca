@@ -12,31 +12,22 @@ The model brings the reasoning. LCA provides the working environment: files,
 tools, conversation state, background jobs, and a readable account of what happened.
 Use it to understand a codebase, make a change, and check the result.
 
-## A harness that gets better with use
+## Why
 
-When LCA does a poor job, I want enough evidence to fix the harness—not just
-rephrase the prompt and hope. Tool calls, arguments, results, and the raw model
-exchange are logged together, so a clumsy run can become a concrete repair:
-find where things went wrong, replay the awkward case, and keep a regression test.
-The logs are there to work from while the annoyance is still fresh.
+LCA is a place to experiment with coding-agent harness ideas that feel too
+bleeding-edge for Codex: high-risk approaches, unusual interactions, and things
+that might fail before they become useful. A small personal harness gives me room
+to try them, measure what happens, and throw away what doesn't work.
 
-That feedback loop is the heart of the project. Better inspection, clearer tool
-results, fewer ways to make the same mistake twice. Tagged reads and edits are
-one example: a replacement is tied to the source the agent actually saw.
+Self-improvement is part of that experiment: use evidence from real runs to find
+where the harness gets in the model's way, test a change, and make the next run
+better. Logs, regression tests, and experiments in `research/` help distinguish
+an improvement from something that merely sounds clever.
 
-We benchmark improvements carefully on example tasks, often running the same work
-through other harnesses to see what they do better and where LCA still stumbles.
-Experiment notes live in `research/`, including what we tried, what happened, and
-what was worth keeping.
-
-The terminal gets the same care. Beautiful little animations follow what the
-tools are doing; they aren't a screensaver laid over the work. Activity changes
-their rhythm, and failures disturb the pattern with turbulence and fractured
-marks. Even the ornament should tell you something. There is room for a little
-charm in a tool you spend all day with.
-
-LCA is a personal, evolving harness, kept small enough to understand and repair.
-The aim is to make each rough edge easier to notice, explain, and smooth away.
+Another idea is making a session independent of the machine it started on. Start
+locally, move to the cloud mid-session, keep interacting while the agent works
+there, then bring the session and its changes home. The aim is for that handoff
+to feel seamless, with your conversation, plan, and queued work coming along.
 
 ## Let a session keep working in the cloud
 
