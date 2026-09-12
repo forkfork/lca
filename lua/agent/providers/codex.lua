@@ -153,7 +153,9 @@ local function normalize_array_field(container, field, normalize_entry)
 	end
 	local values = container[field]
 	if next(values) == nil then
-		container[field] = cjson.empty_array
+		-- lua-cjson's lightuserdata sentinel truncates high pointer bits on
+		-- some ARM64 layouts. Its table metatable preserves [] portably.
+		container[field] = setmetatable({}, cjson.empty_array_mt)
 		return
 	end
 	if normalize_entry then

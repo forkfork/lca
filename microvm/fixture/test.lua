@@ -1,0 +1,7 @@
+local clamp = require("clamp")
+assert(clamp(5, 1, 9) == 5)
+assert(clamp(0, 1, 9) == 1)
+assert(clamp(10, 1, 9) == 9)
+assert(clamp(1, 1, 9) == 1)
+assert(clamp(9, 1, 9) == 9)
+print("clamp tests passed")

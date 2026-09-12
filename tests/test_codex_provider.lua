@@ -264,6 +264,25 @@ test("native reasoning replay preserves empty array fields", function()
 	end
 end)
 
+test("native replay preserves empty arrays without the lightuserdata sentinel", function()
+	local cjson = require("cjson")
+	local json = require("agent.util.json")
+	-- The ARM64 MicroVM log had annotations/logprobs encoded as no bytes:
+	-- lua-cjson masks its sentinel pointer to 47 bits but compares it unmasked.
+	-- Make that sentinel unavailable to exercise the portable representation.
+	local sentinel = cjson.empty_array
+	cjson.empty_array = nil
+	local ok, err = pcall(function()
+		local item = json.decode('{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I’ll read README.md and check the working tree without editing files.\\n","logprobs":[],"annotations":[]}]}')
+		local encoded = json.encode(codex._normalize_output_item(item))
+		json.decode(encoded)
+		assert(encoded:find('"annotations":%[%]'), encoded)
+		assert(encoded:find('"logprobs":%[%]'), encoded)
+	end)
+	cjson.empty_array = sentinel
+	assert(ok, err)
+end)
+
 test("native input repairs legacy object-shaped empty response arrays", function()
 	local json = require("agent.util.json")
 	local reasoning = json.decode('{"type":"reasoning","id":"rs_legacy","summary":{},"content":{}}')
