@@ -1,11 +1,34 @@
 # Whole LCA inside a Lambda MicroVM
 
-Experimental packaging only. LCA, workspace and tools all live in the application
-container inside the VM. The readiness listener does not execute agent tasks.
-See [the registered screen](EXPERIMENT.md) for gates and evidence.
+Experimental packaging and whole-session handoff. LCA, workspace and tools all
+live in the application container inside the VM. See [the handoff guide](HANDOFF.md)
+for `/cloud`, `/bg`, setup and recovery, and [the original registered screen](EXPERIMENT.md)
+for the initial deployment experiment.
 
 The [completed results](RESULTS.md) document successful AL2027 snapshots and a
 real coding task in Sydney, including the native ARM64 portability fix.
+
+## Why both Lua and Python?
+
+This directory contains code for two machines: the user's local host and the
+MicroVM. File language alone does not tell you where a file runs.
+
+| Where | Language | Responsibility |
+| --- | --- | --- |
+| Local host | Python | AWS setup and image builds (`first_run.py`, `storage_setup.py`, `package.py`), shell transport and handoff (`handoff.py`), workspace transfer/reconciliation, backup recovery, and image GC |
+| Local host | Lua | Animated remote-session UI (`foreground.lua`), driven by the Python transport (`foreground.py`) |
+| MicroVM | Lua | Readiness/resume hooks (`bootstrap.lua`), the LCA agent loop and queue (`worker.lua`), S3 checkpoints (`checkpoint.lua`), and idle suspension (`lifecycle.lua`) |
+
+Python was an expedient choice for the experiment's archive handling, AWS CLI
+orchestration, and WebSocket transport. It is not an architectural requirement.
+The tradeoff is a second host runtime and control code split across two languages.
+The host currently needs Python 3.12+, `websockets` 15+, and a current AWS CLI for
+remote mode; ordinary local LCA sessions do not use this Python control path.
+
+**Python and the AWS CLI are not required inside the MicroVM.** The whole agent
+runs there in Lua and executes commands against its local workspace. Its small
+AWS lifecycle/checkpoint helpers use curl with temporary execution-role credentials.
+The bootstrap readiness listener does not execute agent tasks.
 
 ## Discovered dependencies
 
@@ -22,7 +45,7 @@ real coding task in Sydney, including the native ARM64 portability fix.
 | Writable | HOME `/root`, `/workspace`, `/tmp/lca/logs`; workspace sessions/jobs write dotfiles/directories |
 | Config | Normally `~/.lca-credentials.json`; use explicit temporary `--credentials` for this screen. No host MCP config copied |
 | Terminal | Interactive frontend needs a PTY, `/dev/tty`, `stty` and ANSI terminal; batch `lca run` needs no PTY |
-| Excluded | Node, Python, AWS CLI, wget, SSH server are not runtime requirements for this Codex-backed slice. Python is needed on the host for packaging/testing wrappers |
+| Excluded | Node, Python, AWS CLI, wget, SSH server are not runtime requirements for this Codex-backed slice. Python is needed on the host for remote setup, transport, transfer, recovery and testing |
 
 The source has no `lca --version`: that flag goes to the interactive argument
 parser. Use `luarocks show lca --mversion` and `source-manifest.json` to identify
