@@ -40,18 +40,17 @@ The aim is to make each rough edge easier to notice, explain, and smooth away.
 
 ## Let a session keep working in the cloud
 
-Start locally, then use `/cloud` to move the session into an AWS Lambda MicroVM
-and stay attached. Use `/bg` to move it and drop back to your shell.
-The agent, project files, conversation, plan, and queued requests go together;
-commands run inside the VM. You can close your laptop while it keeps working,
-free up your local machine, or leave a longer task running while you do something else.
+**Use `/cloud` to move your current session to an AWS Lambda MicroVM and keep
+working in the same terminal.** You stay attached automatically: keep chatting,
+queue more requests, and watch the same animations. The indicator turns orange,
+and the agent loop, model calls, and tool execution now run inside the MicroVM.
+Your project files, conversation, plan, and queued requests move with the agent.
 
-You can keep interacting with the session after moving it to the cloud. Run
-`lca fg` to reconnect, see recent work, and send more requests—with the same local
-terminal animations and an orange `remote` indicator. The agent loop, model calls,
-and tool execution run inside the MicroVM; your terminal is the interface. Use
-`/local` to bring the session and its changes back to your project and terminate
-the VM.
+Use `/bg` when you want to move the session to the cloud and drop back to your
+shell instead. You can close your laptop while the agent keeps working, freeing
+up your machine for other things. If already remote, `/bg` simply detaches.
+Run `lca fg` whenever you want to reconnect. Use `/local` to bring the session and
+its changes home, terminate the VM, and keep working locally.
 
 This is experimental and needs an AWS account. The first `/cloud` or `/bg` builds a reusable
 LCA image and explains the extra wait; later handoffs reuse it. Backup storage is
