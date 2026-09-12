@@ -15,7 +15,14 @@ while true do
     local method, path = request:match("^(%S+) (%S+)")
     local ready = method == "POST" and
         path == "/aws/lambda-microvms/runtime/v1/ready"
-    local status = ready and "200 OK" or "404 Not Found"
+    local resumed = method == "POST" and path == "/aws/lambda-microvms/runtime/v1/resume"
+    if resumed then
+        local root='/tmp/lca-handoff'
+        if require('luv').fs_stat(root) then
+            require('agent.background').atomic(root..'/resumed.json',{time=os.time()})
+        end
+    end
+    local status = (ready or resumed) and "200 OK" or "404 Not Found"
     client:send("HTTP/1.1 " .. status .. "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
     client:close()
 end

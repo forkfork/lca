@@ -99,6 +99,8 @@ Usage:
   lca [--tui-effect drift|mycelium|cytoplasm|ink|duet|contours|squall|auto] [--tool-stage|--no-tool-stage] [options]
   lca repl [--tui-effect drift|mycelium|cytoplasm|ink|duet|contours|squall|auto] [--tool-stage|--no-tool-stage] [options]
   lca run <prompt> [--model model] [--credentials path] [--reasoning effort] [--service-tier tier]
+  lca fg | local | collect <directory> | stop [--discard] | recover
+  lca gc [--apply]     preview or delete obsolete managed MicroVM image versions
   lca login [--out path]
   lca auth <login|refresh> [auth options]
 
@@ -128,6 +130,21 @@ if subcommand == "--help" or subcommand == "help" then
 elseif not subcommand or subcommand:sub(1, 2) == "--" then
 	subcommand = "repl"
 	start_index = 1
+end
+
+if subcommand == "fg" or subcommand == "local" or subcommand == "collect" or subcommand == "stop" or subcommand == "recover" or subcommand == "gc" then
+    local command=os.getenv("LCA_BACKGROUND_COMMAND")
+    if not command then
+        command = "lca-background"
+        for _,name in ipairs({"background.lua", "lca-background"}) do
+            local path=script_dir.."/"..name;local f=io.open(path)
+            if f then f:close();command=lua_command_prefix(false).." "..shell_quote(path);break end
+        end
+    end
+    local parts={command,subcommand}
+    for i=start_index,#arg do parts[#parts+1]=shell_quote(arg[i]) end
+    local ok,_,code=os.execute(table.concat(parts," "))
+    os.exit(ok and 0 or code or 1)
 end
 
 local target = commands[subcommand]

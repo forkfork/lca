@@ -349,6 +349,7 @@ local function recent_read_keys(session)
 end
 
 function core.run_session(session, on_token, on_tool, on_thinking, on_wait, control)
+	require("agent.background").assert_local(session)
 	local provider = get_provider(session.credentials_path)
 	local events = {}
 	local turn_clock_ns = uv.hrtime()

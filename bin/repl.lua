@@ -26,7 +26,10 @@ end
 
 local index = 1
 while index <= #arg do
-	if arg[index] == "--credentials" then
+	if arg[index] == "--resume" then
+        options.resume_path = assert(arg[index + 1], "--resume requires a session file")
+        index = index + 2
+	elseif arg[index] == "--credentials" then
 		options.credentials_path = arg[index + 1]
 		index = index + 2
 	elseif arg[index] == "--model" then
@@ -59,6 +62,14 @@ while index <= #arg do
 	else
 		usage()
 	end
+end
+
+if options.resume_path then
+    local file=assert(io.open(options.resume_path));local data=require("cjson").decode(file:read("*a"));file:close()
+    options.model=options.model or data.model
+    options.reasoning_effort=options.reasoning_effort or data.reasoning_effort
+    options.service_tier=options.service_tier or data.service_tier
+    for key,value in pairs(data.continuation_options or {}) do options[key]=value end
 end
 
 local login = require("agent.login")
@@ -124,6 +135,11 @@ core.debug_log(
 -- Initialize MCP servers
 local mcp_tools = registry.init_mcp(options.mcp_config)
 options.mcp_tool_count = #mcp_tools
+if options.resume_path then
+    options.session=require("agent.session").create(options)
+    local loaded, load_err=options.session:load(options.resume_path)
+    if not loaded then io.stderr:write(tostring(load_err).."\n");os.exit(1) end
+end
 local frontend = require("agent.tui")
 local ok, result, frontend_err = pcall(function()
 	return frontend.run(options)

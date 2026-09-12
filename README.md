@@ -38,6 +38,22 @@ charm in a tool you spend all day with.
 LCA is a personal, evolving harness, kept small enough to understand and repair.
 The aim is to make each rough edge easier to notice, explain, and smooth away.
 
+## Let a session keep working in the cloud
+
+Start locally, then use `/bg` to move the session into an AWS Lambda MicroVM.
+The agent, project files, conversation, plan, and queued requests go together;
+commands run inside the VM. You can close your laptop while it keeps working,
+free up your local machine, or leave a longer task running while you do something else.
+
+Run `lca fg` to reconnect, see recent work, and send more requests—with the same
+local terminal animations and an orange `remote` indicator. Use `/local` to bring
+the session and its changes back to your project and terminate the VM.
+
+This is experimental and needs an AWS account and a prepared LCA image. Backup
+storage is set up automatically, with S3 checkpoints for recovery if the VM dies.
+Local-only use needs no AWS setup. See the [MicroVM guide](microvm/HANDOFF.md)
+for setup, lifetime limits, recovery, and what gets uploaded.
+
 ## Install
 
 LCA needs Lua 5.5, LuaRocks, a POSIX terminal, a C compiler, and OpenSSL 3+

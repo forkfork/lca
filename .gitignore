@@ -23,3 +23,7 @@ regex_parser.py
 # Native Lua module build products
 *.o
 *.so
+
+.lca-handoff.json
+.lca-queue.json
+.lca-handoff.json.lock

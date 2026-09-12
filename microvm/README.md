@@ -41,7 +41,7 @@ still requires checking that distribution's package names and compatibility.
 Lambda's managed VM base is separate:
 `arn:aws:lambda:ap-southeast-2:aws:microvm-image:al2023-1`.
 The API currently exposes `ARM_64`. Local validation therefore uses ARM64 too.
-The snapshotted process loads only LuaSocket and serves the readiness hook on
+The snapshotted process loads only LuaSocket and serves readiness and resume hooks on
 9000. No credentials or live model/TLS session exist at snapshot time. LCA is
 launched fresh through AWS's provided shell after restore.
 
@@ -103,7 +103,9 @@ Both roles trust `lambda.amazonaws.com` for `sts:AssumeRole` and `sts:TagSession
 with `aws:SourceAccount` constrained to your account. The build role needs
 `s3:GetObject` only for the artifact bucket and CloudWatch log creation/writes
 for this image's log group. The execution role needs no application permissions
-for this Codex/HTTPS fixture. See the execution report for exact resource names.
+for the basic Codex/HTTPS fixture. The session handoff extension adds
+image-scoped `lambda:SuspendMicrovm` permission; see HANDOFF.md. See the
+execution report for exact resource names.
 
 ```bash
 export AWS_REGION=ap-southeast-2
@@ -140,3 +142,10 @@ when the experiment ends to avoid leaving snapshot storage behind.
 - [Snapshot/OpenSSL requirements](https://docs.aws.amazon.com/lambda/latest/dg/microvms-images-snapshots.html)
 - [AWS shell ingress example](https://github.com/aws/agent-toolkit-for-aws/blob/main/skills/specialized-skills/serverless-skills/aws-lambda-microvms/SKILL.md)
 - [Docker ARM64 emulation](https://docs.docker.com/build/building/multi-platform/)
+
+## Session handoff experiment
+
+[HANDOFF.md](HANDOFF.md) describes `/background`, foreground reattachment,
+queued input, automatic idle suspension/resume, ownership, recovery and return
+to the original checkout. This is an
+opt-in extension of the deployment slice, not part of its original success claim.

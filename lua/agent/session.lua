@@ -389,6 +389,9 @@ function session:serialize()
 		compaction_details = self.compaction_details,
 		operational_state = self.operational_state,
 		plan = self.plan,
+		pending_inputs = self.pending_inputs,
+		test_command = self.test_command,
+		continuation_options = { tool_scope=self.tool_scope, grep_evidence=self.grep_evidence, stale_edit_evidence=self.stale_edit_evidence, intra_turn_compaction=self.intra_turn_compaction, context_compaction_threshold=self.context_compaction_threshold, context_hard_limit=self.context_hard_limit, compaction_keep_recent_tokens=self.compaction_keep_recent_tokens },
 		last_usage = self.last_usage,
 		usage_history = self.usage_history,
 		last_turn_ast_summary = self.last_turn_ast_summary,
@@ -503,6 +506,9 @@ function session:load(path)
 	elseif not self.id or self.id == "" then
 		self.id = create_session_id(self.cwd)
 	end
+	require("agent.background").assert_local(self)
+	self.pending_inputs = type(data.pending_inputs) == "table" and data.pending_inputs or {}
+	self.test_command = data.test_command
 	-- Restore messages
 	if type(data.messages) == "table" then
 		self.messages, self.native_history_repairs = repair_orphan_native_calls(data.messages)

@@ -2110,6 +2110,9 @@ function App:draw()
 		end
 	end
 	screen:write(divider_row, 1, string.rep("─", width), rgb(49, 65, 76), width)
+	if self.session_badge then
+		screen:write(divider_row, 3, " " .. self.session_badge .. " ", rgb(255, 153, 0, { "bold" }), math.max(0, width - 4))
+	end
 	screen:write(input_row, 2, "input › ", rgb(105, 222, 222, { "bold" }), width - 2)
 	for index, line in ipairs(input_lines) do
 		screen:write(input_row + index - 1, 10, line, rgb(224, 219, 229), width - 10)
@@ -2117,6 +2120,7 @@ function App:draw()
 	local displayed_phase = frame.displayed_phase
 	local status = self.busy and "working · Ctrl-C cancels · input may be queued"
 		or "listening · Enter submits · Ctrl-D exits"
+	status = self.input_hint or status
 	local active_count = #self.state:active_tools()
 	if active_count > 0 then status = status .. " · " .. tostring(active_count) .. " tools active" end
 	if self.tool_stage and #staged_tools > 0 then
@@ -2555,7 +2559,12 @@ function App:_handle_action(action)
 	elseif action.type == "redraw" then self.redraw_requested = true
 	elseif action.type == "focus_next" then self:focus_next()
 	elseif action.type == "submit" then
-		if action.text ~= "" then self.submitted[#self.submitted + 1] = action.text end
+		if action.text ~= "" then
+			if action.text:match("^/background%s*$") or action.text:match("^/bg%s*$") then
+				self.background_requested = true
+			else self.submitted[#self.submitted + 1] = action.text end
+			if self.on_queue then self.on_queue(self.submitted) end
+		end
 	end
 end
 
@@ -2643,11 +2652,12 @@ function App:pump()
 end
 
 function App:next_submission()
-	while #self.submitted == 0 and not self.exit_requested do
+	while #self.submitted == 0 and not self.exit_requested and not self.background_requested do
 		uv.run("once")
 		if self.fatal_error then error(self.fatal_error) end
 	end
 	if self.exit_requested then return nil end
+	if self.background_requested then self.background_requested = false; return "/background" end
 	return table.remove(self.submitted, 1)
 end
 
@@ -2697,21 +2707,23 @@ local function command_ui(app)
 	local state = app.state
 	local facade = {}
 	local direct_test = false
+	local command_label = "test"
 	function facade.muted(text) state:notice(text) end
 	function facade.error(text) state:notice("error: " .. tostring(text), "error") end
 	function facade.block(text)
 		if not direct_test then state:notice(text); return end
 		local lines = {}
 		for line in (tostring(text) .. "\n"):gmatch("(.-)\n") do
-			lines[#lines + 1] = "test › " .. response_text(line, 4000)
+			lines[#lines + 1] = command_label .. " › " .. response_text(line, 4000)
 		end
 		app:commit_lines(lines)
 	end
-	function facade.test_begin(command)
+	function facade.test_begin(command,label)
+		command_label = label or "test"
 		direct_test = true
 		app.busy, app.cancel_requested = true, false
 		state.prompt = compact_text(command, 240)
-		state.model_phase = "running tests · Ctrl-C cancels · no model calls"
+		state.model_phase = "running " .. command_label .. " · Ctrl-C cancels · no model calls"
 		app:drive_frame()
 	end
 	function facade.test_poll()
@@ -2781,6 +2793,10 @@ function tui.run(options)
 		effect = options.tui_effect or os.getenv("LCA_TUI_EFFECT"),
 		tool_stage = tool_stage,
 	})
+	local background = require("agent.background")
+	app.submitted = background.load_queue(session)
+	app.on_queue = function(queue) background.save_queue(session, queue) end
+	local background_checkpoint
 	local facade = command_ui(app)
 	local last_auto_compact_messages = 0
 	local function auto_save()
@@ -2800,7 +2816,7 @@ function tui.run(options)
 	local result, err = tui.with_terminal(app.terminal, app.renderer, function()
 		local record_path = options.record_path or os.getenv("LCA_TUI_RECORD")
 		if record_path and record_path ~= "" then app:start_recording(record_path) end
-		app.state:notice("fresh session · /resume restores the last session for this project")
+		app.state:notice(options.session and "session resumed locally" or "fresh session · /resume restores the last session for this project")
 		last_auto_compact_messages = #session.messages
 		jobs.prune(session.cwd)
 		if options.mcp_tool_count and options.mcp_tool_count > 0 then app.state:notice(tostring(options.mcp_tool_count) .. " MCP tools connected") end
@@ -2809,8 +2825,19 @@ function tui.run(options)
 			app.state:listen()
 			local line = app:next_submission()
 			if not line then break end
+			if line == "/background" or line == "/bg" then
+				local ok, value = pcall(function()
+                    background.preflight()
+                    return background.checkpoint(session, app.submitted)
+                end)
+				if ok then background_checkpoint = value; break end
+				app.state:notice(tostring(value), "error")
+				goto continue
+			end
+			session.pending_inputs = app.submitted
+			if not line:match("^/resume") then background.save_queue(session, app.submitted) end
 			app:commit_user(line)
-			if line:sub(1, 1) == "/" then
+			if line:sub(1, 1) == "/" or line:sub(1, 1) == "!" then
 				app.state.prompt = compact_text(line, 240)
 				app.state.model_phase = "running command"
 				app:drive_frame()
@@ -2849,6 +2876,7 @@ function tui.run(options)
 					goto continue
 				end
 				local command_result = commands.dispatch(line, session, facade)
+				if line:match("^/resume") then app.submitted = background.load_queue(session) end
 				if command_result == true then break end
 				if command_result ~= "run" then goto continue end
 				line = ""
@@ -2926,6 +2954,8 @@ function tui.run(options)
 				app:drive_frame()
 			end
 			::continue::
+			session.pending_inputs = app.submitted
+			auto_save()
 		end
 		app:stop_io()
 		auto_save()
@@ -2933,6 +2963,11 @@ function tui.run(options)
 		return true
 	end)
 	if app.recording then app.recording:close() end
+	if background_checkpoint then
+		local command=background.command()
+		local ok=os.execute(command.." background --checkpoint "..require("agent.util.shell").quote(background_checkpoint))
+		if not ok then return nil,"handoff did not complete; session remains paused; use lca recover" end
+	end
 	if not result then
 		core.debug_log("[tui] exiting after fatal error: %s", tostring(err))
 		return nil, err

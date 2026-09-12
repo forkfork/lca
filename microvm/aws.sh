@@ -14,7 +14,7 @@ case "${1:-}" in
             --base-image-arn "arn:aws:lambda:$AWS_REGION:aws:microvm-image:al2023-1" \
             --cpu-configurations '[{"architecture":"ARM_64"}]' \
             --resources '[{"minimumMemoryInMiB":1024}]' \
-            --hooks '{"port":9000,"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":60}}' ;;
+            --hooks '{"port":9000,"microvmHooks":{"resume":"ENABLED","resumeTimeoutInSeconds":15},"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":60}}' ;;
     status)
         "$AWS_CLI" lambda-microvms get-microvm-image --image-identifier "${2:?image-arn}"
         "$AWS_CLI" lambda-microvms get-microvm-image-version \
@@ -26,7 +26,7 @@ case "${1:-}" in
             --build-role-arn "${4:?build-role-arn}" \
             --cpu-configurations '[{"architecture":"ARM_64"}]' \
             --resources '[{"minimumMemoryInMiB":1024}]' \
-            --hooks '{"port":9000,"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":60}}' ;;
+            --hooks '{"port":9000,"microvmHooks":{"resume":"ENABLED","resumeTimeoutInSeconds":15},"microvmImageHooks":{"ready":"ENABLED","readyTimeoutInSeconds":60}}' ;;
     run)
         "$AWS_CLI" lambda-microvms run-microvm \
             --image-identifier "${2:?image-arn}" --image-version "${3:?version}" \

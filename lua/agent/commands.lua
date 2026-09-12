@@ -3,10 +3,12 @@ local context_limits = require("agent.context_limits")
 local jobs = require("agent.jobs")
 
 local HELP = [[
+/background           move this session and queued input to the configured background host
 /help                 show commands
 /status               show cwd, model, credentials, and turn count
 /context [n]          show context/token breakdown and largest messages
 /test [command]       run tests without a model; remember command for this session
+!command              run a shell command here without a model; retain its output
 /jobs [--all]         list background jobs
 /job <id>             show durable job status
 /job-output <id> [n]  show last n stdout lines for a durable job
@@ -334,18 +336,22 @@ local function dispatch_job_command(name, rest, session, ui)
 	return true
 end
 
-local function dispatch_test(rest, session, ui)
+local function dispatch_test(rest, session, ui, shell_command)
+	local label = shell_command and "shell" or "test"
 	local command = rest ~= "" and rest or session.test_command
+	if shell_command then command = rest ~= "" and rest or nil end
 	if not command then
-		ui.error("no test command selected; use /test <shell command> (for example /test make test)")
+		ui.error(shell_command and "usage: !command (for example !ls)" or "no test command selected; use /test <shell command> (for example /test make test)")
 		return
 	end
-	session.test_command = command
+	if not shell_command then session.test_command = command end
 	local job, err = jobs.start({ command = command }, { cwd = session.cwd })
 	if not job then ui.error(err); return end
+	local captured = {}
+	local function output(text) captured[#captured+1]=text;ui.block(text) end
 	local ok, failure = xpcall(function()
-		if ui.test_begin then ui.test_begin(command) end
-		ui.block("test · " .. job.id .. " · " .. command .. " · no model calls")
+		if ui.test_begin then ui.test_begin(command,label) end
+		output(label .. " · " .. job.id .. " · " .. command .. " · no model calls")
 		while job.status == "starting" or job.status == "running" do
 			if ui.test_poll and ui.test_poll() then
 				job, err = jobs.stop(session.cwd, job.id)
@@ -361,21 +367,28 @@ local function dispatch_test(rest, session, ui)
 			local output, output_err = jobs.output(session.cwd, job.id, { stream = stream, tail = 30 })
 			if not output then error(output_err) end
 			if output ~= "" then
-				ui.block(stream .. " (tail, at most 4000 bytes):\n" .. output:sub(-4000))
+				local text=stream .. " (tail, at most 4000 bytes):\n" .. output:sub(-4000)
+				captured[#captured+1]=text;ui.block(text)
 			end
 		end
 		local summary = job.status == "exited" and ("exit " .. tostring(job.exit_code)) or job.status
-		ui.block("test · " .. summary .. " · " .. job.id .. " · no model calls\n"
+		output(label .. " · " .. summary .. " · " .. job.id .. " · no model calls\n"
 			.. "stdout: " .. job.stdout .. "\nstderr: " .. job.stderr)
 	end, debug.traceback)
 	if not ok then
 		jobs.stop(session.cwd, job.id)
 	end
 	if ui.test_end then ui.test_end() end
+	if shell_command then
+		session:add_user("!" .. command)
+		session:add_user("User-requested shell command result:\n" .. table.concat(captured,"\n") .. (not ok and ("\n"..tostring(failure)) or ""))
+		session.messages[#session.messages].shell_result=true
+	end
 	if not ok then ui.error(failure) end
 end
 
 function commands.dispatch(line, session, ui)
+	if line:sub(1,1)=="!" then dispatch_test(trim(line:sub(2)),session,ui,true);return false end
 	local name, rest = line:match("^/([^%s]+)%s*(.*)$")
 	if not name then
 		return false
