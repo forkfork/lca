@@ -1,6 +1,5 @@
 """Provision private recovery storage on first remote use."""
 import json,subprocess
-from pathlib import Path
 from durable import s3
 from retention import ensure
 
@@ -36,9 +35,3 @@ def setup(cfg):
   {'Effect':'Allow','Action':['s3:DeleteObject'],'Resource':resource+'*/snapshots/*'}]}
  api(cfg,'iam','put-role-policy','--role-name',role.rsplit('/',1)[-1],'--policy-name','lca-recovery-storage','--policy-document',json.dumps(policy))
  return {**cfg,'checkpoint_bucket':bucket}
-
-def configure(path):
- from handoff import atomic
- path=Path(path);cfg=json.loads(path.read_text());updated=setup(cfg)
- if updated!=cfg:atomic(path,updated)
- return updated

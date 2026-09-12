@@ -21,13 +21,7 @@ local function checkpoint_and_restore()
     assert(uv.fs_unlink(path));assert(uv.fs_unlink(root..'/.lca-handoff.json'))
 end
 local config_path=root..'/microvm.json'
-local function preflight_rejected(config)
-    if config then bg.atomic(config_path,config) end
-    local ok,err=pcall(bg.preflight,config_path)
-    assert(not ok and tostring(err):find('session remains local',1,true))
-    assert(not uv.fs_stat(root..'/.lca-handoff.json'))
-end
-preflight_rejected()
+assert(pcall(bg.preflight,config_path),'first /bg must work without configuration')
 bg.atomic(config_path,{image_arn='image',execution_role_arn='role'})
 assert(pcall(bg.preflight,config_path),'bucket selection must be automatic')
 bg.atomic(config_path,{image_arn='image',execution_role_arn='role',checkpoint_bucket='bucket'})

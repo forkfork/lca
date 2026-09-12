@@ -45,12 +45,16 @@ The agent, project files, conversation, plan, and queued requests go together;
 commands run inside the VM. You can close your laptop while it keeps working,
 free up your local machine, or leave a longer task running while you do something else.
 
-Run `lca fg` to reconnect, see recent work, and send more requests—with the same
-local terminal animations and an orange `remote` indicator. Use `/local` to bring
-the session and its changes back to your project and terminate the VM.
+You can keep interacting with the session after moving it to the cloud. Run
+`lca fg` to reconnect, see recent work, and send more requests—with the same local
+terminal animations and an orange `remote` indicator. The agent loop, model calls,
+and tool execution run inside the MicroVM; your terminal is the interface. Use
+`/local` to bring the session and its changes back to your project and terminate
+the VM.
 
-This is experimental and needs an AWS account and a prepared LCA image. Backup
-storage is set up automatically, with S3 checkpoints for recovery if the VM dies.
+This is experimental and needs an AWS account. The first `/bg` builds a reusable
+LCA image and explains the extra wait; later handoffs reuse it. Backup storage is
+set up automatically, with S3 checkpoints for recovery if the VM dies.
 Local-only use needs no AWS setup. See the [MicroVM guide](microvm/HANDOFF.md)
 for setup, lifetime limits, recovery, and what gets uploaded.
 

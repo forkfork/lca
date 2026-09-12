@@ -6,22 +6,36 @@ reattach to a single headless agent inside a prepared MicroVM.
 
 ## Configure
 
-Build an image from the current `microvm/Dockerfile` using the existing artifact
-and AWS recipes in README.md. It must include `worker.lua`, `lifecycle.lua`, and `publish.lua`, and enable
-the resume lifecycle hook (`microvm/aws.sh` does this). Use a private local
-configuration file, for example `~/.config/lca/microvm.json`:
+The first `/bg` prepares a reusable image automatically. It selects Sydney by
+default (or `AWS_REGION` / `AWS_DEFAULT_REGION`), creates the build and execution
+roles and private backup storage, uploads only packaged LCA source, and waits for
+AWS to build and snapshot the image. The terminal explains that this first build
+can take several minutes. Later handoffs reuse the saved image without rebuilding.
+
+You need working AWS credentials with permission to create/pass IAM roles,
+configure the S3 bucket, and build/run Lambda MicroVMs. LCA does not install the
+AWS CLI or obtain AWS credentials. Local-only use performs no AWS setup.
+Configuration is saved privately at `~/.config/lca/microvm.json`; no configuration
+file is required initially. Optional overrides can be supplied there beforehand:
 
 ```json
 {
   "aws_cli": "/path/to/current/aws",
   "region": "ap-southeast-2",
-  "image_arn": "arn:aws:lambda:ap-southeast-2:ACCOUNT:microvm-image:IMAGE",
-  "image_version": "1.0",
-  "execution_role_arn": "arn:aws:iam::ACCOUNT:role/EXECUTION_ROLE",
   "maximum_duration": 28800,
   "idle_suspend_seconds": 300
 }
 ```
+
+A configured `image_arn`, `image_version`, and `execution_role_arn` keep the manual
+prepared-image workflow. Automatic builds use a local setup lock and persist their
+request token and pending image before waiting. An interrupted wait is resumed on
+the next `/bg`; an uncertain create response is retried with the same token.
+Setup errors restore the local checkpoint before reporting failure. Builds that
+AWS marks failed retain diagnostics and require investigation, rather than
+creating replacement images in a loop. A 30-minute wait timeout leaves the build
+available for the next attempt. Upgrading local LCA does not automatically rebuild
+an already configured image.
 
 The host needs Python 3.12+, `websockets` 15+, Git and the current AWS CLI.
 The MicroVM needs only the existing Lua environment. `make local` installs the

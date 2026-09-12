@@ -2966,7 +2966,11 @@ function tui.run(options)
 	if background_checkpoint then
 		local command=background.command()
 		local ok=os.execute(command.." background --checkpoint "..require("agent.util.shell").quote(background_checkpoint))
-		if not ok then return nil,"handoff did not complete; session remains paused; use lca recover" end
+		if not ok then
+            local marker=io.open(session.cwd.."/.lca-handoff.json")
+            if marker then marker:close();return nil,"handoff did not complete; session remains paused; use lca recover" end
+            return nil,"background setup failed; session is local; use lca --resume .lca-session.json"
+        end
 	end
 	if not result then
 		core.debug_log("[tui] exiting after fatal error: %s", tostring(err))

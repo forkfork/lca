@@ -44,10 +44,8 @@ end
 function M.preflight(config_path)
     config_path = config_path or os.getenv('LCA_MICROVM_CONFIG')
         or ((os.getenv('HOME') or '.')..'/.config/lca/microvm.json')
-    local cfg = read(config_path)
-    if not (cfg and cfg.image_arn and cfg.execution_role_arn) then
-        error('MicroVM mode is not configured; session remains local',0)
-    end
+    -- Missing configuration is normal on first /bg; the host prepares it.
+    read(config_path) -- Still reject malformed JSON before pausing.
 end
 function M.checkpoint(session,queue)
     M.assert_local(session)

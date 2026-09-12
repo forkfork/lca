@@ -380,8 +380,14 @@ def main():
         from image_gc import run as gc
         gc(aws,args.config,apply=args.apply);return
     if args.command=='background':
-        from storage_setup import configure
-        background(configure(args.config),args.checkpoint)
+        from first_run import configure
+        try:cfg=configure(args.config)
+        except Exception:
+            data=json.loads(Path(args.checkpoint).read_text())
+            marker,rec=record(Path(data['cwd']))
+            if rec['phase']=='prepared' and not rec.get('vm'):recover({},marker,rec)
+            raise
+        background(cfg,args.checkpoint)
         from image_gc import schedule
         schedule(args.config);return
     if args.command=='fg':

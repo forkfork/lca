@@ -105,7 +105,7 @@ build = {
 		["agent.util.path"] = "lua/agent/util/path.lua",
 		["agent.util.shell"] = "lua/agent/util/shell.lua",
 	},
-	copy_directories = { "microvm" },
+	copy_directories = { "microvm", "c", "bin", "scripts" },
 	install = {
 		bin = {
 			["lca"] = "bin/lca",
