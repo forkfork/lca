@@ -18,6 +18,10 @@ def configure(path,emit=lambda text:print(text,flush=True)):
  with os.fdopen(fd,'w') as lock:
   fcntl.flock(lock,fcntl.LOCK_EX)
   cfg=json.loads(path.read_text()) if path.exists() else {}
+  from aws_cli import resolve
+  resolved=resolve(cfg)
+  if cfg.get('aws_cli')!=resolved:
+   cfg['aws_cli']=resolved;atomic(path,cfg)
   if cfg.get('image_arn'):
    updated=setup(cfg)
    if updated!=cfg:atomic(path,updated)

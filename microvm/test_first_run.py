@@ -3,9 +3,11 @@ from pathlib import Path
 from unittest.mock import patch
 from first_run import configure
 class FirstRunTests(unittest.TestCase):
+ def setUp(self):
+  self.cli=patch('aws_cli.resolve',return_value='aws');self.cli.start();self.addCleanup(self.cli.stop)
  def test_prepared_image_reused_without_build_or_message(self):
   with tempfile.TemporaryDirectory() as tmp:
-   p=Path(tmp)/'config.json';cfg={'image_arn':'ready','checkpoint_bucket':'bucket'};p.write_text(json.dumps(cfg))
+   p=Path(tmp)/'config.json';cfg={'image_arn':'ready','checkpoint_bucket':'bucket','aws_cli':'aws'};p.write_text(json.dumps(cfg))
    with patch('first_run.setup',return_value=cfg),patch('first_run.api') as api,patch('handoff.aws') as aws:
     messages=[];self.assertEqual(configure(p,messages.append),cfg)
     self.assertEqual(messages,[]);api.assert_not_called();aws.assert_not_called()

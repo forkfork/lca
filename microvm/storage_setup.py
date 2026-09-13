@@ -1,10 +1,11 @@
 """Provision private recovery storage on first remote use."""
+from aws_cli import resolve
 import json,subprocess
 from durable import s3
 from retention import ensure
 
 def api(cfg,service,*args):
- r=subprocess.run([cfg.get('aws_cli','aws'),service,*args,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=120)
+ r=subprocess.run([resolve(cfg),service,*args,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=120)
  if r.returncode:raise RuntimeError('Recovery setup: '+r.stderr)
  return json.loads(r.stdout) if r.stdout.strip() else {}
 

@@ -1,10 +1,11 @@
 """S3 recovery objects. Only complete immutable archives become latest checkpoints."""
+from aws_cli import resolve
 import hashlib,json,os,shutil,subprocess,tarfile,tempfile,uuid
 from pathlib import Path
 from workspace import extract_proof
 
 def s3(cfg,op,*args):
- r=subprocess.run([cfg.get('aws_cli','aws'),'s3api',op,*args,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=120)
+ r=subprocess.run([resolve(cfg),'s3api',op,*args,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=120)
  if r.returncode:raise RuntimeError('Checkpoint storage: '+r.stderr)
  return json.loads(r.stdout) if r.stdout.strip() else {}
 def put(cfg,store,key,data):

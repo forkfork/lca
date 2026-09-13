@@ -1,4 +1,5 @@
 """GC for one explicitly managed image. No workspace, VM or S3 deletion."""
+from aws_cli import resolve
 import json,time
 from pathlib import Path
 from datetime import datetime
@@ -147,7 +148,7 @@ if __name__=='__main__':
  parser.add_argument('--config',default=os.getenv('LCA_MICROVM_CONFIG',str(Path.home()/'.config/lca/microvm.json')))
  args=parser.parse_args()
  def aws(cfg,*parts):
-  result=subprocess.run([cfg.get('aws_cli','aws'),'lambda-microvms',*parts,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=60)
+  result=subprocess.run([resolve(cfg),'lambda-microvms',*parts,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=60)
   if result.returncode:raise RuntimeError(result.stderr)
   return json.loads(result.stdout) if result.stdout.strip() else {}
  try:run(aws,args.config,args.apply,automatic=args.automatic)

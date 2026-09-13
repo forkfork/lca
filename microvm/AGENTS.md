@@ -1,5 +1,7 @@
 # MicroVM maintenance lessons
 
+- Never persist temporary tool paths in user configuration. Install required
+  host tools in persistent locations and probe CLI capability before provisioning.
 - Verify lifecycle outcomes with AWS `GetMicrovm`, using bounded polling.
   A worker's `suspending` phase, terminal message, or successful API response
   does not prove that AWS has reached `SUSPENDED`. Avoid fixed-delay assertions.

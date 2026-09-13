@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Experimental whole-session handoff over AWS shell ingress. Host Python only."""
+from aws_cli import resolve
 import argparse, base64, json, os, select, shlex, subprocess, sys, tarfile, tempfile, time, uuid
 from pathlib import Path
 from websockets.sync.client import connect
@@ -35,7 +36,7 @@ def atomic(path,data):
     finally:
         if os.path.exists(name):os.unlink(name)
 def aws(cfg,*args):
-    r=subprocess.run([cfg.get('aws_cli','aws'),'lambda-microvms',*args,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=60)
+    r=subprocess.run([resolve(cfg),'lambda-microvms',*args,'--region',cfg.get('region','ap-southeast-2'),'--output','json','--no-cli-pager'],capture_output=True,text=True,timeout=60)
     if r.returncode:raise RuntimeError(r.stderr)
     return json.loads(r.stdout) if r.stdout.strip() else {}
 def ensure_awake(cfg,vm):

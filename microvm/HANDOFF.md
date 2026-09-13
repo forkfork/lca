@@ -38,6 +38,15 @@ available for the next attempt. Upgrading local LCA does not automatically rebui
 an already configured image.
 
 The host needs Python 3.12+, `websockets` 15+, Git and the current AWS CLI.
+CLI discovery checks the configured `aws_cli`, an LCA-specific installation at
+`$XDG_DATA_HOME/lca/tools/aws` (default `~/.local/share/lca/tools/aws`), then PATH.
+It probes MicroVM support locally without using credentials or network requests;
+a missing or outdated configured CLI can fall back to a compatible installation.
+The resolved path is saved during setup. Keep configured installations outside
+`/tmp`, whose cleanup can otherwise break future handoffs. LCA does not download
+or upgrade AWS CLI automatically; missing compatible tools produce a concise error
+and setup restores the local session before returning.
+
 The MicroVM needs only the existing Lua environment. `make local` installs the
 client alongside LCA; no command environment variable is needed:
 
