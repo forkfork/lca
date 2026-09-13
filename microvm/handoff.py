@@ -132,9 +132,13 @@ class Link:
                 self.close()
                 if attempt==2:raise
                 self.__init__(self.cfg,self.vm)
-    def _get(self,path):
+    def _get(self,path,offset=None):
         tag='DATA_'+uuid.uuid4().hex
-        out=self.command("printf '\\n"+tag+"\\n'; base64 -w0 "+shlex.quote(path)+"; _lca_data_rc=$?; printf '\\nEND_"+tag+"\\n'; test \"$_lca_data_rc\" = 0")
+        source='base64 -w0 '+shlex.quote(path)
+        if offset is not None:
+            assert isinstance(offset,int) and offset>=0
+            source='(set -o pipefail; dd if='+shlex.quote(path)+' bs=262144 skip='+str(offset)+' count=262144 iflag=skip_bytes,count_bytes status=none | base64 -w0)'
+        out=self.command("printf '\\n"+tag+"\\n'; "+source+"; _lca_data_rc=$?; printf '\\nEND_"+tag+"\\n'; test \"$_lca_data_rc\" = 0")
         return base64.b64decode(out.split((tag+'\r\n').encode(),1)[1].split(('\r\nEND_'+tag).encode(),1)[0],validate=True)
     def state(self):return json.loads(self.get(REMOTE+'/state.json'))
     def close(self):self.ws.close()
@@ -225,7 +229,7 @@ def background(cfg,checkpoint,attach=False):
 def fg(cfg,marker,rec):
     assert rec['phase']=='remote','session is not remote'
     with Foreground() as ui, connection(cfg,rec) as link:
-        cursor=0;dormant=False;state={}
+        cursor=0;dormant=False;state={};last_state_read=0
         pending=rec.get('outbox')
         if pending:
             from durable import submit
@@ -235,12 +239,19 @@ def fg(cfg,marker,rec):
         while True:
             if not dormant:
                 try:
-                    state=json.loads(link._get(REMOTE+'/state.json'));ui.state(state)
+                    if time.monotonic()-last_state_read>=.75:
+                        state=json.loads(link._get(REMOTE+'/state.json'));last_state_read=time.monotonic()
+                    ui.live(state,lambda path,offset:link._get(path,offset))
+                    ui.state(state)
                     if state['phase']=='suspending':dormant=True
                     else:
-                        data=link._get(REMOTE+'/output.log')
-                        ui.output(data[cursor:].decode(errors='replace'));cursor=len(data)
-                        if state['phase'] in ['failed','stopped']:ui.notice('Worker: '+state['phase']+' '+state.get('error',''));return
+                        if not (state.get('capabilities',{}).get('live_events') and state.get('live') and not state['live'].get('error') and ui.process):
+                            data=link._get(REMOTE+'/output.log')
+                            ui.output(data[cursor:].decode(errors='replace'));cursor=len(data)
+                        stream=getattr(ui,'live_stream',None)
+                        draining=isinstance(stream,dict) and not stream['finished']
+                        if state['phase'] in ['failed','stopped'] and not draining:
+                            ui.notice('Worker: '+state['phase']+' '+state.get('error',''));return
                 except (ConnectionClosed,TimeoutError,OSError):
                     vm_state=aws(cfg,'get-microvm','--microvm-identifier',rec['vm']['microvmId'])['state']
                     if vm_state in ('SUSPENDING','SUSPENDED'):dormant=True
@@ -249,7 +260,7 @@ def fg(cfg,marker,rec):
                     link.close() # Release ingress before AWS finishes suspension.
                     ui.state({'phase':'suspending'})
                     ui.notice('MicroVM is sleeping. Enter a prompt to wake it, /local to return, or /detach.')
-            line=ui.readline()
+            line=ui.readline(timeout=.15 if state.get('capabilities',{}).get('live_events') else 1)
             if line is not None:
                 if not line or line.strip() in ('/detach','/bg','/background'):ui.notice(expiry(rec));return
                 if line.strip()=='/cloud':ui.notice('Already attached to the cloud session.');continue

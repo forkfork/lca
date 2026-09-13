@@ -22,7 +22,7 @@ session.cwd=assert(uv.cwd());session.credentials_path=opts.credentials_path
 session.system_prompt=nil -- Regenerate machine context; retain messages and memory.
 session.operational_checkpoint_pending=true
 session.pending_inputs={}
-local state={version=1,capabilities={shell_commands=true,durable_checkpoints=true},session_id=session.id,phase='ready',completed={},session=session:serialize()}
+local state={version=1,capabilities={shell_commands=true,durable_checkpoints=true,live_events=true},session_id=session.id,phase='ready',completed={},session=session:serialize()}
 local function save() bg.atomic(root..'/state.json',state) end
 save()
 while not uv.fs_stat(root..'/commit') do uv.sleep(100) end
@@ -44,6 +44,13 @@ while not uv.fs_stat(root..'/stop') do
         assert(type(item.id)=='string' and type(item.text)=='string')
         if not state.completed[item.id] then
             if not checkpoint.required(root,storage,state,function() checkpoint.attempt(root,storage,item) end) then break end
+            local number=1
+            for _,message in ipairs(session.messages) do
+                if message.role=='user' and not message.tool_name and not message.operational_snapshot and not message.shell_result then number=number+1 end
+            end
+            local journal=require('events').open(root,item.id,{prompt=item.text,number=number,session_id=session.id,command=item.text:sub(1,1)=='/' or item.text:sub(1,1)=='!'})
+            local function emit(kind,payload) if journal then journal:emit(kind,payload) end end
+            state.live=journal and {id=item.id,number=number,prompt=item.text,complete=false} or nil
             state.phase='running';state.active=item.id;save()
             print('\n> '..item.text)
             local ok,result=pcall(function()
@@ -51,15 +58,33 @@ while not uv.fs_stat(root..'/stop') do
                     local cmd=item.text:match('^/(%S+)')
                     assert(item.text:sub(1,1)=='!' or ({test=true,status=true,context=true,reasoning=true,['service-tier']=true})[cmd],
                         'unsupported remote command; use prompts or /test, /status, /context, /reasoning, /service-tier')
-                    local ui=require('headless').ui()
+                    local command_failed=false
+                    local ui=require('headless').ui(function(text)
+                        local code=tostring(text):match(' · exit (%d+)');if code and tonumber(code)~=0 then command_failed=true end
+                        print(text);emit('command_output',{text=text})
+                    end)
+                    ui.test_begin=function(command)
+                        emit('tool',{event={phase='start',name='run',call_id=item.id,args={command=command}}})
+                    end
+                    ui.test_end=function() emit('tool',{event={phase='end',name='run',call_id=item.id,result={summary=command_failed and 'Command failed; see output' or 'Command finished; see output',is_error=command_failed}}}) end
                     require('agent.commands').dispatch(item.text,session,ui)
                 else
                     session:add_user(item.text)
-                    local r=require('agent.core').run_session(session)
+                    local r=require('agent.core').run_session(session,
+                        function(text) if journal then journal:token(text) end end,
+                        function(event) emit('tool',{event=event}) end,
+                        function(info) emit('thinking',{info=info}) end,
+                        function() if journal then journal:tick() end end,
+                        {on_response=function(response)
+                            emit('response',{response={text=response.text,_output_items=response._output_items,_native_tool_calls=response._native_tool_calls}})
+                         end,on_model_activity=function(activity) emit('activity',{activity=activity}) end})
+                    emit('answer',{response={text=r.text,_output_items=r._output_items},usage=r._turn_usage or r._usage})
                     session:add_assistant(r.text,r._output_items)
                     print(r.text or '')
                 end
             end)
+            emit('finish',{error=not ok and tostring(result) or nil})
+            if journal then journal:close();state.live.complete=true;state.live.error=journal.failed;state.live.bytes=journal.bytes end
             if not ok then state.phase='failed';state.error=tostring(result);save();error(result) end
             last_activity=os.time()
             state.completed[item.id]=true;state.active=nil;state.phase='idle';state.session=session:serialize();save()

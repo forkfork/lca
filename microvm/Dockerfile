@@ -43,7 +43,7 @@ COPY microvm/ microvm/
 RUN luarocks make lca-dev-1.rockspec \
     && lua5.5 -e 'require("agent.core"); require("agent.ui"); require("agent.crypto")' \
     && rm -rf /tmp/build
-COPY microvm/worker.lua microvm/lifecycle.lua microvm/publish.lua microvm/headless.lua microvm/checkpoint.lua /opt/lca-microvm/
+COPY microvm/worker.lua microvm/lifecycle.lua microvm/publish.lua microvm/headless.lua microvm/checkpoint.lua microvm/events.lua /opt/lca-microvm/
 COPY microvm/bootstrap.lua /opt/lca-microvm/bootstrap.lua
 COPY microvm/fixture/ /opt/lca-microvm/fixture/
 COPY microvm/smoke.sh /opt/lca-microvm/smoke.sh

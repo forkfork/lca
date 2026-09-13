@@ -34,7 +34,7 @@ end
 for directory, pattern in [("lua", "*.lua"), ("c", "*.c"), ("bin", "*")]:
     files += [p.relative_to(root) for p in (root / directory).rglob(pattern) if p.is_file()]
 files += [Path("scripts") / name for name in ("auth.lua", "login.lua")]
-files += [Path("microvm") / name for name in ("bootstrap.lua", "smoke.sh", "worker.lua", "lifecycle.lua", "publish.lua", "headless.lua", "checkpoint.lua")]
+files += [Path("microvm") / name for name in ("bootstrap.lua", "smoke.sh", "worker.lua", "lifecycle.lua", "publish.lua", "headless.lua", "checkpoint.lua", "events.lua")]
 files += [p.relative_to(root) for p in (root / "microvm/fixture").iterdir() if p.is_file()]
 files += [Path("microvm/Dockerfile")]
 revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True)

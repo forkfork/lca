@@ -17,7 +17,7 @@ MicroVM. File language alone does not tell you where a file runs.
 | --- | --- | --- |
 | Local host | Python | AWS setup and image builds (`first_run.py`, `storage_setup.py`, `package.py`), shell transport and handoff (`handoff.py`), workspace transfer/reconciliation, backup recovery, and image GC |
 | Local host | Lua | Animated remote-session UI (`foreground.lua`), driven by the Python transport (`foreground.py`) |
-| MicroVM | Lua | Readiness/resume hooks (`bootstrap.lua`), the LCA agent loop and queue (`worker.lua`), S3 checkpoints (`checkpoint.lua`), and idle suspension (`lifecycle.lua`) |
+| MicroVM | Lua | Readiness/resume hooks (`bootstrap.lua`), the LCA agent loop and queue (`worker.lua`), display-event journal (`events.lua`), S3 checkpoints (`checkpoint.lua`), and idle suspension (`lifecycle.lua`) |
 
 Python was an expedient choice for the experiment's archive handling, AWS CLI
 orchestration, and WebSocket transport. It is not an architectural requirement.

@@ -90,16 +90,30 @@ an updated prepared image before they can accept `!command`.
 Animation and input editing run locally; the agent and tools still run in the VM.
 A persistent orange remote badge above the input identifies the remote session and shows
 connecting, ready, working, sleeping, waking or reconnecting status.
-Use `/effect drift` (or another local effect) to change the animation.
+Use `/effect drift` (or another local effect) to change the animation, and
+`/tools on|off` to show or hide the tool panels, as in local mode.
+`/river` inspects the tool activity received by this attachment.
 `LCA_REMOTE_PLAIN=1 lca fg` retains the plain terminal view, also used for pipes.
-The current display follows worker running/idle/sleeping state and completed
-session snapshots; it does not yet stream model tokens or show individual tool animations.
+Live model text, commentary, tool starts/results and failures feed the same local
+renderer used by local sessions. The worker writes display events to a small
+per-input journal; the host reads new bytes through the existing AWS shell
+connection. Frames continue locally between reads, and the worker continues
+without an attached terminal. No animation runs in the guest.
 Reattachment restores the last three conversation turns, including work done
 locally before handoff, using the normal framed replies and river artwork for
 turns with tool calls. Restored tool counts come from session history; historical
 timings are not reconstructed. Repeated polling does not duplicate those turns.
 Remote slash-command output remains visible separately. The plain view still
 shows the accumulated worker log.
+
+Reconnecting an active attachment resumes its byte cursor. A fresh `lca fg`
+restores recent completed history and replays the current turn's available live
+activity. Input IDs and sequence numbers prevent duplicate display. Journals
+retain three inputs, capped at approximately 8 MiB each; individual previews are
+bounded too. They are display data, excluded from durable workspace checkpoints.
+Completed conversation remains the fallback if older activity has been pruned.
+Images built before live-event support keep the coarse running/idle display;
+bring those sessions home and move them to a newly built image to get live tools.
 Ctrl-C, Ctrl-D or `/bg` detaches; it does not cancel remote work. `/cloud`
 while already remote keeps the current attachment and does not create another VM.
 Initial queued input executes in order; later submissions have
@@ -217,7 +231,7 @@ Offline checks:
 
 ```bash
 make local
-make test TESTS='tests/test_background.lua tests/test_session.lua tests/test_tui.lua microvm/test_lifecycle.lua microvm/test_foreground.lua'
+make test TESTS='tests/test_background.lua tests/test_session.lua tests/test_tui.lua microvm/test_lifecycle.lua microvm/test_foreground.lua microvm/test_events.lua'
 eval "$(luarocks --lua-version=5.5 path --bin)"
 python3 -m unittest discover -s microvm -p 'test_*.py'
 ```

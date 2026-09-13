@@ -18,10 +18,20 @@ class TerminalTests(unittest.TestCase):
     while time.monotonic()<until:
      if select.select([master],[],[],.05)[0]:output.extend(os.read(master,65536))
    try:
-    events.write(json.dumps({'type':'state','phase':'running','active':'one'})+'\n');events.flush()
+    for event in [
+     {'type':'live','event':{'id':'one','seq':1,'kind':'begin','prompt':'fix it','number':1,'session_id':'pty'}},
+     {'type':'live','event':{'id':'one','seq':2,'kind':'tool','event':{'phase':'start','name':'read','call_id':'read-1','args':{'path':'main.lua'}}}},
+     {'type':'state','phase':'running','active':'one','live_events':True}]:
+     events.write(json.dumps(event)+'\n')
+    events.flush()
     drain(.5)
     size=len(output);drain(.3)
     self.assertGreater(len(output),size,'local frames continue without remote events: '+output.decode(errors='replace'))
+    self.assertIn(b'main.lua',output,'the real tool event reaches the visible local tool stage')
+    events.write(json.dumps({'type':'live','event':{'id':'one','seq':3,'kind':'finish'}})+'\n');events.flush()
+    os.write(master,b'/tools off\r');drain(.1)
+    os.write(master,b'/river\r');drain(.1)
+    self.assertEqual(commands.read_text(),'','display controls remain local')
     events.write(json.dumps({'type':'state','phase':'suspending','active':None})+'\n');events.flush()
     os.write(master,b'/status\r');drain(.4)
     self.assertIn('/status',[json.loads(line)['text'] for line in commands.read_text().splitlines()])

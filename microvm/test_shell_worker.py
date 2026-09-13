@@ -20,6 +20,11 @@ class ShellWorkerTests(unittest.TestCase):
       time.sleep(.05)
      self.assertEqual(len(state.get('completed',{})),2,(root/'log').read_text())
      self.assertTrue(state['capabilities']['shell_commands'])
+     self.assertTrue(state['capabilities']['live_events'])
+     events=[json.loads(line) for line in (root/'events/initial-1.jsonl').read_text().splitlines()]
+     self.assertEqual(events[0]['kind'],'begin');self.assertEqual(events[-1]['kind'],'finish')
+     self.assertTrue(any(e['kind']=='tool' and e['event']['phase']=='start' for e in events))
+     self.assertTrue(any(e['kind']=='command_output' and 'exit 7' in e['text'] for e in events))
      self.assertEqual((root/'project'/'marker').read_text(),'firstsecond')
      self.assertIn('exit 7',(root/'log').read_text())
      self.assertEqual(sum(bool(m.get('shell_result')) for m in state['session']['messages']),2)
