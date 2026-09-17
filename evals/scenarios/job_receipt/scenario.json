@@ -1,0 +1,8 @@
+{
+  "id": "job_receipt",
+  "title": "Fix aggregation and verify through a durable job",
+  "prompt": "Fix summarize.py so total sums amounts only for rows whose status is 'ok'. Change only summarize.py; do not modify verify.py. Verify the final file by starting `python3 verify.py` with job_start, then use job_wait to observe its terminal status, exit code, and output before answering. Verification creates .receipt; do not write that file yourself. The test harness adds a verbose non-executable comment to job metadata in both arms. Do not use external services.",
+  "timeout_seconds": 120,
+  "grader": "grade.py",
+  "judge": false
+}

@@ -5,19 +5,14 @@ local job_status = {}
 
 local function format_job(job)
 	local lines = {
-		"id: " .. tostring(job.id),
-		"status: " .. tostring(job.status),
-		"command: " .. tostring(job.command),
+		jobs.describe(job),
 		"cwd: " .. tostring(job.cwd),
 		"pid: " .. tostring(job.pid),
 		"pgid: " .. tostring(job.pgid),
 		"alive: " .. tostring(job.alive),
 		"started_at: " .. tostring(job.started_at),
 	}
-	if job.finished_at then lines[#lines + 1] = "finished_at: " .. tostring(job.finished_at) end
-	if job.exit_code ~= nil then lines[#lines + 1] = "exit_code: " .. tostring(job.exit_code) end
 	if job.timeout ~= nil then lines[#lines + 1] = "timeout: " .. tostring(job.timeout) .. "ms" end
-	if job.start_error then lines[#lines + 1] = "start_error: " .. tostring(job.start_error) end
 	return table.concat(lines, "\n")
 end
 

@@ -1,0 +1,8 @@
+{
+  "id": "job_failure_recovery",
+  "title": "job failure recovery",
+  "prompt": "First start the verification command below with job_start against the current code and inspect its failure with job_wait/job_output. Then fix inventory.available so it subtracts reservations from stock and clamps negative availability to zero. Change only inventory.py. Run the same command again as a job and observe the successful terminal exit and BUILD VERIFIED output before answering. Stdout is noisy; the failure diagnostic is on stderr. Do not modify build.py or write .verified.json yourself. No external services.\n\npython3 build.py --target inventory --check-reservations --check-negative-stock --emit-receipt .verified.json --stdout-lines 1500 --stderr-diagnostics detailed --log-format plain --receipt-format json",
+  "timeout_seconds": 150,
+  "grader": "grade.py",
+  "judge": false
+}

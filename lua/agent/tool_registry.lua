@@ -115,7 +115,7 @@ local native_tool_specs = {
 	run = { "Execute a bounded shell command and return combined stdout and stderr.", object_schema({
 		command = { type = "string" }, timeout = { type = "integer", minimum = 1, description = "Timeout in milliseconds; default 120000." },
 	}, { "command" }) },
-	job_start = { "Start a durable background command and return its job id. Stdout and stderr are captured automatically; monitor them with job_output or job_wait with tail. Avoid redirecting output to separate files unless the task requires those files, since redirected output is absent from job tails.", object_schema({
+	job_start = { "Start a durable background command and return its job id. Stdout and stderr are captured automatically; monitor them with job_wait, or inspect tails/search with job_output. Avoid redirecting output to separate files unless the task requires those files, since redirected output is absent from job tails.", object_schema({
 		command = { type = "string" }, cwd = { type = "string" }, timeout = { type = "integer", minimum = 1 }, temporary = { type = "boolean" },
 	}, { "command" }) },
 	job_status = { "Inspect a durable background job.", object_schema({ id = { type = "string" }, cwd = { type = "string" } }, { "id" }) },
@@ -124,8 +124,10 @@ local native_tool_specs = {
 		tail = { type = "integer", minimum = 1 }, offset = { type = "integer", minimum = 0 }, limit = { type = "integer", minimum = 1 }, search = { type = "string" },
 	}, { "id" }) },
 	job_stop = { "Stop a durable background job process group.", object_schema({ id = { type = "string" }, cwd = { type = "string" } }, { "id" }) },
-	job_wait = { "Wait briefly for a durable job and return its status and recent output.", object_schema({
-		id = { type = "string" }, cwd = { type = "string" }, timeout_ms = { type = "integer", minimum = 1 }, tail = { type = "integer", minimum = 1 }, stream = { type = "string", enum = { "stdout", "stderr" } },
+	job_wait = { "Wait up to 30 seconds by default, returning early on completion. Returns status, exit code when available, and bounded stdout/stderr. Pass returned stdout_offset/stderr_offset on the next wait to read only new bytes (initially 0). Explicit tail selects recent lines instead. Waiting remains cancellable and does not stop the job.", object_schema({
+		id = { type = "string" }, cwd = { type = "string" }, timeout_ms = { type = "integer", minimum = 0, description = "Wait deadline in milliseconds; default 30000. Use 0 to inspect immediately." },
+		stdout_offset = { type = "integer", minimum = 0 }, stderr_offset = { type = "integer", minimum = 0 },
+		limit = { type = "integer", minimum = 1, maximum = 20000, description = "Maximum bytes per stream; default 20000. Advance returned offsets to drain remaining output, including after exit." }, tail = { type = "integer", minimum = 1 }, stream = { type = "string", enum = { "stdout", "stderr" } },
 	}, { "id" }) },
 	update_plan = { "Create or replace the execution checklist. For substantial work, plan concrete changes and how to verify them. First gather one bounded inspection batch; avoid generic inspection steps. Call this at most once; the harness closes the checklist with the final answer. Use at most one in_progress item.", object_schema({
 		plan = { type = "array", items = object_schema({ step = { type = "string" }, status = { type = "string", enum = { "pending", "in_progress", "completed" } } }, { "step", "status" }) },

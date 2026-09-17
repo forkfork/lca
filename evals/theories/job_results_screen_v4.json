@@ -1,0 +1,47 @@
+{
+  "id": "job_results_screen_v4",
+  "study_kind": "screen",
+  "title": "Compact durable-job result format",
+  "hypothesis": "Removing the full command from repeated job results reduces model input without losing verification evidence or worsening task completion.",
+  "falsified_if": "Activation fails, either arm fails artifact or completion verification, or compact results regress latency or estimated cost beyond the registered tolerance.",
+  "source_ids": [],
+  "local_evidence": "/tmp/lca/logs/lca-20260916-191522-707162.log and matching JSONL, calls 26:5, 26:7, 26:8, 26:10. Four waits returned 9729\u201310410 characters dominated by a 9694-character command. Offline replay preserved status/output while reducing responses to 217\u2013898 bytes. Version 1 failed before any model request because the eval launcher selected system Lua 5.4. Version 2 pins the required Lua 5.5 executable and preserves the original failed campaign without retrying its cells. Version 2 completed both simple controls and produced a correct, independently verified coding artifact, but failed activation because the model changed the padding-comment repetition count. Version 3 keeps the executable command fixed, requires >=8000 characters, allows only that comment-line variation, and audits actual generated commands in serialized results. Old grades remain unchanged. Version 3 passed all coding artifact/verification gates but did not activate the large-command condition because the agent collapsed the comment to one line. Version 4 deterministically expands the literal python3 verify.py command with the same fixed non-executable padding in BOTH arms; agents no longer have to reproduce padding. The sole between-arm difference remains job result command rendering. Earlier raw evidence and grades are preserved.",
+  "control_variant": "full_command",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "job_receipt"
+  ],
+  "variants": [
+    {
+      "id": "full_command",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only",
+      "job_results": "full_command"
+    },
+    {
+      "id": "compact",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only",
+      "job_results": "compact"
+    }
+  ],
+  "deterministic_outcomes": [
+    "independent aggregation correctness",
+    "successful durable verification of final artifact",
+    "terminal exit/output actually observed",
+    "serialized tool-result activation"
+  ],
+  "efficiency_outcomes": [
+    "end-to-end elapsed_ms",
+    "model and tool calls",
+    "prompt/output/cache tokens",
+    "all-attempt estimated cost",
+    "job result bytes"
+  ],
+  "decision_rule": "Seed 917; four runs, one per arm and scenario; simple control first and adjacent coding pair randomized. Freeze all source including C, fixture/grader and prompt/config hashes in campaign manifest before live calls. Change only command formatting via eval-only jobs.describe wrapper; execution, wait deadlines, tool schemas, models and prompts are identical. Maximum four launches, $2 standard-equivalent between-run cost threshold (one-run overshoot possible), 300 active seconds. Stop on any artifact, protocol or activation failure; retain failed resources. Advance only if every run passes, coding job-result bytes decrease at least 80%, coding elapsed time and estimated cost each are no more than 10% worse, and coding model calls do not increase. Otherwise record mixed/negative evidence and no efficiency adoption claim. Screen can only justify fresh broader validation; it cannot establish long-task improvements or justify notifications. Existing user-authorized correctness fixes remain separate from this formatter-only comparison. The workload is synthetic and explicitly requests a verbose verification command; any conclusion is limited to this mechanism. Command equality ignores only the designated padding comment, never executable code. For v4, activation requires actual stored job command metadata from the eval-only wrapper to match the frozen verbose command. The fixture protects verify.py; copied workspaces can be independently regraded using relative log paths. This is the final fixture repair in this screen series; any further invalidation parks the live experiment for design review."
+}

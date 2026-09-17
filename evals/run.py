@@ -538,7 +538,7 @@ def run_once(
         ]
     elif engine == "lca":
         command = [
-            "lua", str(EVAL_ROOT / "driver.lua"),
+            "lua5.5", str(EVAL_ROOT / "driver.lua"),
             "--root", str(PROJECT_ROOT),
             "--prompt-file", str(prompt_path),
             "--credentials", str(Path(args.credentials).expanduser()),
@@ -563,6 +563,8 @@ def run_once(
         command.extend(["--tool-scope", variant["tool_scope"]])
     if engine == "lca" and variant.get("context_mode"):
         command.extend(["--context-mode", variant["context_mode"]])
+    if engine == "lca" and variant.get("job_results"):
+        command.extend(["--job-results", variant["job_results"], "--job-results-scenario", config["id"]])
     if engine == "lca" and variant.get("obligation_view"):
         command.extend(["--obligation-view", variant["obligation_view"],
                         "--obligation-scenario", config.get("obligation_scenario", "simple_prompt")])

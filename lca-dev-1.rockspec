@@ -30,6 +30,7 @@ external_dependencies = {
 build = {
 	type = "builtin",
 	modules = {
+		["agent.file_lock"] = { sources = { "c/file_lock.c" } },
 		["agent.crypto"] = {
 			sources = { "c/crypto.c" },
 			libraries = { "crypto" },

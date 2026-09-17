@@ -8,7 +8,7 @@ function job_stop.execute(args, context)
 	if not id then return id_error end
 	local job, err = jobs.stop(args.cwd or context.cwd, id)
 	if not job then
-		return { is_error = true, content = err, summary = "unknown job" }
+		return { is_error = true, content = err, summary = "stop failed" }
 	end
 	return {
 		is_error = false,

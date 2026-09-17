@@ -199,6 +199,10 @@ if options["obligation-view"] then
 		options["obligation-view"], options["obligation-scenario"] or "simple_prompt",
 		assert(options.output:match("^(.*)/[^/]+$")))
 end
+local job_results
+if options["job-results"] then
+	job_results = dofile(options.root .. "/evals/job_results.lua").setup(options["job-results"], options["job-results-scenario"], options.root)
+end
 session:add_user(prompt)
 
 local context_pilot
@@ -334,6 +338,7 @@ write_file(options.output, json.encode({
 	error = result.error,
 	context_pilot = context_pilot and context_pilot.report(),
 	operational_screen = operational_screen,
+	job_results = job_results,
 	obligation_screen = obligation_screen,
 	checkpoint_usage = obligation_screen and obligation_screen.checkpoint_usage,
 	model = session.model,

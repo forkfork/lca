@@ -167,6 +167,119 @@ test("job_wait tails include stderr unless a stream is selected", function()
 	assert(not selected.content:find("stderr:\nerror-detail", 1, true), "explicit stdout must exclude stderr")
 end)
 
+test("large commands stay on disk rather than filling tool results", function()
+	local command = "printf compact-output # " .. string.rep("large-script ", 900)
+	local started = job_start.execute({ command = command }, { cwd = tmp_dir })
+	assert(not started.is_error, started.content)
+	local id = assert(extract_id(started))
+	assert(#started.content < 1000, "start echoed the full script")
+	local waited = job_wait.execute({ id = id, timeout_ms = 3000 }, { cwd = tmp_dir })
+	assert(waited.summary == "exited", waited.content)
+	assert(#waited.content < 600 and waited.content:find("compact%-output"))
+	assert(#job_status.execute({ id = id }, { cwd = tmp_dir }).content < 1000)
+	assert(jobs.load(tmp_dir, id).command == command, "full command must remain inspectable")
+end)
+
+test("wait cursors drain both streams without repeats after failure", function()
+	local started = job_start.execute({ command = "printf abcdef; printf uvwxyz >&2; exit 7" }, { cwd = tmp_dir })
+	local id = assert(extract_id(started))
+	local first = job_wait.execute({ id = id, timeout_ms = 3000, limit = 3 }, { cwd = tmp_dir })
+	assert(first.content:find("exit_code: 7", 1, true))
+	assert(first.content:find("stdout:\nabc", 1, true) and first.content:find("stderr:\nuvw", 1, true))
+	local out = assert(tonumber(first.content:match("stdout_offset: (%d+)")))
+	local err = assert(tonumber(first.content:match("stderr_offset: (%d+)")))
+	assert(out == 3 and err == 3)
+	assert(first.content:find("stdout_more: true", 1, true) and first.content:find("stderr_more: true", 1, true))
+	local second = job_wait.execute({ id = id, stdout_offset = out, stderr_offset = err, limit = 3 }, { cwd = tmp_dir })
+	assert(second.content:find("stdout:\ndef", 1, true) and second.content:find("stderr:\nxyz", 1, true))
+	assert(not second.content:find("stdout:\nabc", 1, true))
+	local empty = job_wait.execute({ id = id, stdout_offset = 6, stderr_offset = 6 }, { cwd = tmp_dir })
+	assert(not empty.content:find("stdout:\n", 1, true) and not empty.content:find("stderr:\n", 1, true))
+	assert(empty.content:find("wait_reason: completed", 1, true))
+	assert(empty.content:find("stdout_more: false", 1, true))
+	local output = job_output.execute({ id = id, offset = 3, limit = 3 }, { cwd = tmp_dir })
+	assert(output.content:find("exit_code: 7", 1, true) and output.content:find("next_offset: 6", 1, true))
+end)
+
+test("default wait waits past one second and includes output", function()
+	local started = job_start.execute({ command = "sleep 1.2; printf finished-default" }, { cwd = tmp_dir })
+	local waited = job_wait.execute({ id = assert(extract_id(started)) }, { cwd = tmp_dir })
+	assert(waited.summary == "exited", waited.content)
+	assert(waited.content:find("stdout:\nfinished-default", 1, true))
+end)
+
+test("zero deadline reports running and invalid stream fails before waiting", function()
+	local started = job_start.execute({ command = "sleep 30" }, { cwd = tmp_dir })
+	local id = assert(extract_id(started))
+	wait_for(tmp_dir, id, "running", 5)
+	local waited = job_wait.execute({ id = id, timeout_ms = 0 }, { cwd = tmp_dir })
+	local invalid = job_wait.execute({ id = id, stream = "invalid" }, {
+		cwd = tmp_dir, on_wait = function() error("invalid stream must fail before polling") end,
+	})
+	job_stop.execute({ id = id }, { cwd = tmp_dir })
+	assert(waited.summary == "running" and waited.content:find("wait_reason: deadline", 1, true))
+	assert(invalid.is_error and invalid.summary == "invalid stream")
+end)
+
+test("wait reports missing output instead of silently hiding it", function()
+	local started = job_start.execute({ command = "true" }, { cwd = tmp_dir })
+	local id = assert(extract_id(started))
+	local job = wait_for(tmp_dir, id, "exited", 5)
+	assert(os.remove(job.stderr))
+	local waited = job_wait.execute({ id = id }, { cwd = tmp_dir })
+	assert(waited.is_error and waited.content:find("missing output file", 1, true))
+end)
+
+test("incremental reads enforce byte limit even for oversized requests", function()
+	local started = job_start.execute({ command = "head -c 25000 /dev/zero | tr '\\0' x" }, { cwd = tmp_dir })
+	local id = assert(extract_id(started))
+	wait_for(tmp_dir, id, "exited", 5)
+	local output, err, offset = jobs.output(tmp_dir, id, { offset = 0, limit = 1000000 })
+	assert(output, err)
+	assert(#output == 20000 and offset == 20000)
+	local rest = jobs.output(tmp_dir, id, { offset = offset })
+	assert(#rest == 5000)
+end)
+
+test("tails stay bounded and retain failure diagnostics after huge lines", function()
+	local started = job_start.execute({ command = "head -c 90000 /dev/zero | tr '\\0' x; printf '\\nFINAL FAILURE\\n'; exit 7" }, { cwd = tmp_dir })
+	local id = assert(extract_id(started))
+	wait_for(tmp_dir, id, "exited", 5)
+	for _,lines in ipairs({2, 1000000}) do
+		local output = assert(jobs.output(tmp_dir, id, {tail=lines}))
+		assert(#output <= 20000, "tail bypassed output byte limit")
+		assert(output:find("FINAL FAILURE", 1, true), "tail lost final diagnostic")
+		assert(output:find("[earlier output omitted]", 1, true), "truncation was not disclosed")
+	end
+	local waited = job_wait.execute({id=id, tail=2}, {cwd=tmp_dir})
+	assert(not waited.is_error and waited.content:find("exit_code: 7", 1, true))
+	assert(#waited.content < 21000 and waited.content:find("FINAL FAILURE", 1, true))
+	assert(jobs.output(tmp_dir, id, {tail=1}) == "FINAL FAILURE", "complete last line needs no truncation marker")
+	local offset = 0
+	repeat
+		local body, err, next_offset, more = jobs.output(tmp_dir, id, {offset=offset})
+		assert(body, err); offset = next_offset
+		if not more then break end
+	until false
+	assert(offset == 90015, "bounded tail must not truncate the stored log")
+end)
+
+test("supervisor launch failure is recorded in the caller store", function()
+	local uv = require("luv")
+	local caller = tmp_dir .. "/failed-caller"
+	local app = tmp_dir .. "/failed-app"
+	os.execute("mkdir -p " .. shell.quote(caller) .. " " .. shell.quote(app))
+	local original = uv.spawn
+	uv.spawn = function() return nil, "injected spawn failure" end
+	local ok, job, err = pcall(jobs.start, { command = "true", cwd = app }, { cwd = caller })
+	uv.spawn = original
+	assert(ok, job)
+	assert(not job and err:find("injected spawn failure", 1, true))
+	local recorded = assert(jobs.load(caller, "job_1"))
+	assert(recorded.status == "failed_to_start" and recorded.start_error == "injected spawn failure")
+	assert(not jobs.load(app, "job_1"), "failure must not create a conflicting job record")
+end)
+
 test("job tools resolve jobs started in another cwd", function()
 	local caller_dir = tmp_dir .. "/caller"
 	local app_dir = tmp_dir .. "/app"

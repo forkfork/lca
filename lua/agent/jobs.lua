@@ -2,6 +2,7 @@ local json = require("agent.util.json")
 local path_util = require("agent.util.path")
 local shell = require("agent.util.shell")
 local uv = require("luv")
+local file_lock = require("agent.file_lock")
 
 local jobs = {}
 local activity_cache = {}
@@ -53,8 +54,10 @@ local function write_file(path, body)
 	if not file then
 		return nil, err
 	end
-	file:write(body)
-	file:close()
+	local written, write_err = file:write(body)
+	local closed, close_err = file:close()
+	if not written then return nil, write_err end
+	if not closed then return nil, close_err end
 	return true
 end
 
@@ -82,6 +85,32 @@ end
 
 local function jobs_root(cwd)
 	return path_util.resolve(JOBS_DIR, cwd or ".")
+end
+
+local held_locks = {}
+
+-- All writers in a store share one lock. Nested calls in this process reuse it;
+-- callbacks must not yield or service the event loop while holding the lock.
+function jobs.with_lock(cwd, fn)
+	local root = jobs_root(cwd)
+	if held_locks[root] then return fn() end
+	local ok, err = mkdir_p(root)
+	if not ok then return nil, err end
+	local deadline = uv.hrtime() + 5000000000
+	local lock
+	repeat
+		lock, err = file_lock.acquire(root .. "/.state.lock")
+		if lock then break end
+		if err ~= "busy" then return nil, err end
+		if uv.hrtime() >= deadline then return nil, "timed out locking job store: " .. root end
+		uv.sleep(5)
+	until false
+	held_locks[root] = true
+	local result = table.pack(pcall(fn))
+	held_locks[root] = nil
+	lock:close()
+	if not result[1] then error(result[2], 0) end
+	return table.unpack(result, 2, result.n)
 end
 
 local function job_dir(cwd, id)
@@ -144,37 +173,41 @@ local function summarize(job)
 end
 
 local function upsert_index_job(cwd, job)
-	local index = load_index(cwd)
-	local store_cwd = job.store_cwd or job.cwd
-	local found = false
-	for i, item in ipairs(index.jobs) do
-		local item_store_cwd = item.store_cwd or item.cwd
-		if item.id == job.id and item_store_cwd == store_cwd then
-			index.jobs[i] = summarize(job)
-			found = true
-			break
+	return jobs.with_lock(cwd, function()
+		local index = load_index(cwd)
+		local store_cwd = job.store_cwd or job.cwd
+		local found = false
+		for i, item in ipairs(index.jobs) do
+			local item_store_cwd = item.store_cwd or item.cwd
+			if item.id == job.id and item_store_cwd == store_cwd then
+				index.jobs[i] = summarize(job)
+				found = true
+				break
+			end
 		end
-	end
-	if not found then
-		index.jobs[#index.jobs + 1] = summarize(job)
-	end
-	return save_index(cwd, index)
+		if not found then
+			index.jobs[#index.jobs + 1] = summarize(job)
+		end
+		return save_index(cwd, index)
+	end)
 end
 
 local function remove_index_job(cwd, id)
-	local index = load_index(cwd)
-	local kept = {}
-	local changed = false
-	for _, item in ipairs(index.jobs) do
-		if item.id == id then
-			changed = true
-		else
-			kept[#kept + 1] = item
+	return jobs.with_lock(cwd, function()
+		local index = load_index(cwd)
+		local kept = {}
+		local changed = false
+		for _, item in ipairs(index.jobs) do
+			if item.id == id then
+				changed = true
+			else
+				kept[#kept + 1] = item
+			end
 		end
-	end
-	if not changed then return true end
-	index.jobs = kept
-	return save_index(cwd, index)
+		if not changed then return true end
+		index.jobs = kept
+		return save_index(cwd, index)
+	end)
 end
 
 local function resolve_job(cwd, id)
@@ -203,12 +236,77 @@ local function resolve_job(cwd, id)
 	return nil, cwd
 end
 
-local function process_alive(pid)
-	if not pid then return false end
+local boot_id = (read_file("/proc/sys/kernel/random/boot_id") or ""):match("%S+")
+
+local function linux_proc_stat(pid)
+	local body = read_file("/proc/" .. tostring(math.floor(tonumber(pid) or 0)) .. "/stat")
+	local after = body and body:match("^%d+%s+.*%)%s+(.+)$")
+	if not after then return nil end
+	local fields = {}
+	for field in after:gmatch("%S+") do fields[#fields + 1] = field end
+	return { state = fields[1], pgid = tonumber(fields[3]), session = tonumber(fields[4]),
+		start_ticks = fields[20], cpu_ticks = (tonumber(fields[12]) or 0) + (tonumber(fields[13]) or 0) }
+end
+
+local function live_stat(stat)
+	return stat and stat.state ~= "Z" and stat.state ~= "X"
+end
+
+function jobs.process_identity(pid)
+	local stat = linux_proc_stat(pid)
+	if stat then return stat.start_ticks, boot_id end
+end
+
+local function process_alive(pid, start_ticks, expected_boot)
 	local numeric_pid = tonumber(pid)
-	if not numeric_pid then return false end
-	local ok, reason, code = os.execute("kill -0 " .. shell.quote(tostring(math.floor(numeric_pid))) .. " >/dev/null 2>&1")
-	return ok == true or code == 0 or (reason == "exit" and code == 0)
+	if not numeric_pid or numeric_pid <= 0 then return false end
+	local ok, _, code = uv.kill(math.floor(numeric_pid), 0)
+	if not ok and code ~= "EPERM" then return false end
+	-- kill(0) also succeeds for zombies, which cannot supervise or do work.
+	local stat = linux_proc_stat(numeric_pid)
+	if start_ticks and (not stat or stat.start_ticks ~= tostring(start_ticks) or expected_boot ~= boot_id) then return false end
+	return not stat or live_stat(stat)
+end
+
+-- A process group can outlive its leader. On Linux, verify the recorded boot
+-- and start time before signalling; never trust a recycled numeric PID alone.
+function jobs.group_alive(job)
+	local target = tonumber(job.pgid or job.pid)
+	if not target or target <= 0 then return false end
+	if not boot_id then return process_alive(job.pid) end
+	local leader = linux_proc_stat(target)
+	if job.boot_id and job.boot_id ~= boot_id then return false, "process identity belongs to another boot" end
+	if leader and job.process_start_ticks and leader.start_ticks ~= tostring(job.process_start_ticks) then
+		return false, "process identity changed; refusing reused PID"
+	end
+	if live_stat(leader) and leader.pgid == target then return true end
+	local entries = uv.fs_scandir("/proc")
+	if entries then
+		while true do
+			local name = uv.fs_scandir_next(entries)
+			if not name then break end
+			if name:match("^%d+$") then
+				local stat = linux_proc_stat(name)
+				if live_stat(stat) and stat.pgid == target and stat.session == target then return true end
+			end
+		end
+	end
+	return false
+end
+
+function jobs.signal_group(job, signal)
+	local alive, err = jobs.group_alive(job)
+	if err then return nil, err end
+	if not alive then return true end
+	if boot_id and not job.process_start_ticks then
+		return nil, "process identity unavailable for legacy job; cannot safely signal its group. "
+			.. "Inspect job_status, job logs and `ps -o pid,pgid,lstart,args -p " .. tostring(job.pid)
+			.. "` to identify the original command before stopping it in your process manager. "
+			.. "Start its replacement with job_start to restore managed stopping."
+	end
+	local ok, kill_err, code = uv.kill(-tonumber(job.pgid or job.pid), signal)
+	if not ok and code ~= "ESRCH" then return nil, kill_err end
+	return true
 end
 
 local function parse_iso(value)
@@ -235,6 +333,22 @@ local function compact_command(value, limit)
 		return value:sub(1, limit - 3) .. "..."
 	end
 	return value
+end
+
+-- Keep model-facing status bounded; the full command remains in job.json.
+function jobs.describe(job)
+	local lines = {
+		"id: " .. tostring(job.id),
+		"status: " .. tostring(job.status),
+		"command: " .. compact_command(job.command, 160),
+	}
+	if job.exit_code ~= nil then lines[#lines + 1] = "exit_code: " .. tostring(job.exit_code) end
+	if job.signal then lines[#lines + 1] = "signal: " .. tostring(job.signal) end
+	if job.finished_at then lines[#lines + 1] = "finished_at: " .. tostring(job.finished_at) end
+	if job.start_error then lines[#lines + 1] = "start_error: " .. tostring(job.start_error) end
+	if job.state_error then lines[#lines + 1] = "state_error: " .. tostring(job.state_error) end
+	if job.supervisor_lost then lines[#lines + 1] = "supervisor_lost: true" end
+	return table.concat(lines, "\n")
 end
 
 local function short_age(seconds)
@@ -297,31 +411,12 @@ local function command_label(command)
 end
 
 local function is_finished_status(status)
-	return status == "exited" or status == "timed_out" or status == "stopped" or status == "failed_to_start"
+	return status == "exited" or status == "timed_out" or status == "stopped" or status == "failed_to_start" or status == "lost"
 end
 
 local function file_size(path)
 	local stat = path and uv.fs_stat(path)
 	return stat and stat.size or 0
-end
-
-local function linux_proc_stat(pid)
-	local path = "/proc/" .. tostring(math.floor(tonumber(pid) or 0)) .. "/stat"
-	local body = read_file(path)
-	if not body then return nil end
-	local after = body:match("^%d+%s+%b()%s+(.+)$")
-	if not after then return nil end
-	local fields = {}
-	for field in after:gmatch("%S+") do
-		fields[#fields + 1] = field
-	end
-	local state = fields[1]
-	local utime = tonumber(fields[12]) or 0
-	local stime = tonumber(fields[13]) or 0
-	return {
-		state = state,
-		cpu_ticks = utime + stime,
-	}
 end
 
 local function is_linux()
@@ -384,7 +479,7 @@ local function supervisor_probe(candidate, env)
 			end
 		end
 	end
-	local probe = "require('luv'); require('cjson')"
+	local probe = "require('luv'); require('cjson'); require('agent.file_lock')"
 	return command_succeeds(prefix .. shell.quote(candidate) .. " -e " .. shell.quote(probe) .. " >/dev/null 2>&1")
 end
 
@@ -443,25 +538,29 @@ local function supervisor_package_path()
 end
 
 function jobs.allocate_id(cwd)
-	local root = jobs_root(cwd)
-	local ok, err = mkdir_p(root)
-	if not ok then return nil, err end
-	local index = load_index(cwd)
-	local next_id = math.floor(tonumber(index.next_id) or 1)
-	local id = "job_" .. tostring(next_id)
-	index.next_id = next_id + 1
-	local saved, save_err = save_index(cwd, index)
-	if not saved then return nil, save_err end
-	return id
+	return jobs.with_lock(cwd, function()
+		local root = jobs_root(cwd)
+		local ok, err = mkdir_p(root)
+		if not ok then return nil, err end
+		local index = load_index(cwd)
+		local next_id = math.floor(tonumber(index.next_id) or 1)
+		local id = "job_" .. tostring(next_id)
+		index.next_id = next_id + 1
+		local saved, save_err = save_index(cwd, index)
+		if not saved then return nil, save_err end
+		return id
+	end)
 end
 
 function jobs.save(cwd, job)
-	local dir = job_dir(cwd, job.id)
-	local ok, err = mkdir_p(dir)
-	if not ok then return nil, err end
-	local saved, save_err = write_json(dir .. "/job.json", job)
-	if not saved then return nil, save_err end
-	return upsert_index_job(cwd, job)
+	return jobs.with_lock(cwd, function()
+		local dir = job_dir(cwd, job.id)
+		local ok, err = mkdir_p(dir)
+		if not ok then return nil, err end
+		local saved, save_err = write_json(dir .. "/job.json", job)
+		if not saved then return nil, save_err end
+		return upsert_index_job(cwd, job)
+	end)
 end
 
 function jobs.load(cwd, id)
@@ -490,6 +589,7 @@ function jobs.start(args, context)
 		pid = nil,
 		pgid = nil,
 		started_at = now_iso(),
+		boot_id = boot_id,
 		finished_at = nil,
 		status = "starting",
 		exit_code = nil,
@@ -510,36 +610,67 @@ function jobs.start(args, context)
 	for name, value in pairs(lua.env or {}) do
 		env[#env + 1] = name .. "=" .. value
 	end
-	local handle, pid_or_err = uv.spawn(lua.executable, {
-		args = { "-e", supervisor_code },
-		cwd = cwd,
-		detached = true,
-		stdio = { nil, nil, nil },
-		env = #env > 0 and env or nil,
-	})
+	local current, launch_err = jobs.with_lock(store_cwd, function()
+		local handle, pid_or_err = uv.spawn(lua.executable, {
+			args = { "-e", supervisor_code },
+			cwd = cwd,
+			detached = true,
+			stdio = { nil, nil, nil },
+			env = #env > 0 and env or nil,
+		})
 
-	if not handle then
-		job.status = "failed_to_start"
-		job.finished_at = now_iso()
-		job.start_error = tostring(pid_or_err)
-		jobs.save(cwd, job)
-		return nil, "failed to start supervisor: " .. tostring(pid_or_err)
-	end
+		if not handle then
+			job.status = "failed_to_start"
+			job.finished_at = now_iso()
+			job.start_error = tostring(pid_or_err)
+			jobs.save(store_cwd, job)
+			return nil, "failed to start supervisor: " .. tostring(pid_or_err)
+		end
 
-	local current = jobs.load(store_cwd, id) or job
-	current.supervisor_pid = pid_or_err
-	jobs.save(store_cwd, current)
+		local current = jobs.load(store_cwd, id) or job
+		current.supervisor_pid = pid_or_err
+		current.supervisor_start_ticks = jobs.process_identity(pid_or_err)
+		local saved, save_err = jobs.save(store_cwd, current)
+		if not saved then
+			uv.kill(pid_or_err, "sigkill")
+			handle:close()
+			return nil, save_err
+		end
+		handle:unref()
+		return current
+	end)
+	if not current then return nil, launch_err end
 	if cwd ~= base_cwd then
 		upsert_index_job(cwd, current)
 	end
-	handle:unref()
-	return job
+	return current
 end
 
 function jobs.status(cwd, id)
-	local job = resolve_job(cwd, id)
+	local job, store = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
-	job.alive = job.status == "running" and process_alive(job.pid)
+	job.alive = job.status == "running" and jobs.group_alive(job)
+	if (job.status == "running" or job.status == "starting")
+		and job.supervisor_pid and not process_alive(job.supervisor_pid, job.supervisor_start_ticks, job.boot_id) then
+		return jobs.with_lock(store, function()
+			local current = jobs.load(store, id)
+			if not current then return nil, "unknown job: " .. tostring(id) end
+			current.alive = jobs.group_alive(current)
+			if (current.status == "starting" or current.status == "running")
+				and current.supervisor_pid and not process_alive(current.supervisor_pid, current.supervisor_start_ticks, current.boot_id) then
+				current.state_error = "supervisor exited without recording completion; exit code unknown"
+				if current.alive then
+					current.supervisor_lost = true
+				else
+					current.status = "lost"
+					current.finished_at = now_iso()
+					local saved, err = jobs.save(store, current)
+					if not saved then return nil, err end
+				end
+			end
+			return current
+		end)
+	end
 	return job
 end
 
@@ -668,20 +799,19 @@ function jobs.remove(cwd, id, opts)
 	opts = opts or {}
 	local job, resolved_cwd = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
-	job.alive = job.status == "running" and process_alive(job.pid)
-	if job.status == "running" and job.alive and not opts.force then
+	job.alive = job.status == "running" and jobs.group_alive(job)
+	if (job.status == "starting" or job.status == "running") and not opts.force then
 		return nil, "job is running: " .. tostring(id)
 	end
 	if job.status == "running" and job.alive and opts.stop then
 		jobs.stop(resolved_cwd, id)
 	end
 
-	local removed, remove_err = remove_tree(job_dir(resolved_cwd, id))
-	if not removed then
-		return nil, remove_err
-	end
-
-	local saved, save_err = remove_index_job(resolved_cwd, id)
+	local saved, save_err = jobs.with_lock(resolved_cwd, function()
+		local removed, remove_err = remove_tree(job_dir(resolved_cwd, id))
+		if not removed then return nil, remove_err end
+		return remove_index_job(resolved_cwd, id)
+	end)
 	if not saved then return nil, save_err end
 	if resolved_cwd ~= cwd then
 		local ref_saved, ref_err = remove_index_job(cwd, id)
@@ -707,8 +837,7 @@ function jobs.prune(cwd, opts)
 
 	local finished = {}
 	for _, job in ipairs(jobs.list(cwd)) do
-		local running = job.status == "running" and job.alive
-		if not running then
+		if is_finished_status(job.status) then
 			local finished_at = parse_iso(job.finished_at) or parse_iso(job.started_at) or 0
 			job._finished_at_epoch = finished_at
 			finished[#finished + 1] = job
@@ -741,7 +870,7 @@ end
 function jobs.wait(cwd, id, args, context)
 	args = args or {}
 	context = context or {}
-	local timeout_ms = math.max(0, math.floor(tonumber(args.timeout) or tonumber(args.timeout_ms) or 1000))
+	local timeout_ms = math.max(0, math.floor(tonumber(args.timeout) or tonumber(args.timeout_ms) or 30000))
 	local started_ms = uv.hrtime() / 1000000
 	local deadline = started_ms + timeout_ms
 	local next_progress_ms = started_ms
@@ -755,6 +884,7 @@ function jobs.wait(cwd, id, args, context)
 		end
 		job, err = jobs.status(cwd, id)
 		if not job then return nil, err end
+		if job.supervisor_lost then return job, nil, "supervisor_lost" end
 		if job.status ~= "starting" and job.status ~= "running" then
 			return job
 		end
@@ -775,9 +905,12 @@ local function tail_lines(path, lines)
 	local file = io.open(path, "r")
 	if not file then return nil, "missing output file: " .. path end
 	local size = file:seek("end")
-	local read_size = math.min(size, math.max(65536, lines * 512))
+	local omitted = "[earlier output omitted]\n"
+	local clipped = size > DEFAULT_OUTPUT_LIMIT
+	local read_size = math.min(size, DEFAULT_OUTPUT_LIMIT - (clipped and #omitted or 0))
 	file:seek("set", size - read_size)
-	local body = file:read("*a") or ""
+	-- Read only the bounded snapshot, even if the writer is still appending.
+	local body = file:read(read_size) or ""
 	file:close()
 
 	local collected = {}
@@ -787,22 +920,32 @@ local function tail_lines(path, lines)
 	if collected[#collected] == "" then
 		table.remove(collected)
 	end
-	while #collected > lines do
-		table.remove(collected, 1)
-	end
-	return table.concat(collected, "\n")
+	local first = math.max(1, #collected - lines + 1)
+	local prefix = clipped and first == 1 and omitted or ""
+	return prefix .. table.concat(collected, "\n", first)
 end
 
 local function read_since(path, offset, limit)
 	offset = math.max(0, math.floor(tonumber(offset) or 0))
-	limit = math.max(1, math.floor(tonumber(limit) or DEFAULT_OUTPUT_LIMIT))
+	limit = math.min(DEFAULT_OUTPUT_LIMIT, math.max(1, math.floor(tonumber(limit) or DEFAULT_OUTPUT_LIMIT)))
 	local file = io.open(path, "r")
 	if not file then return nil, "missing output file: " .. path end
-	file:seek("set", offset)
+	local size, size_err = file:seek("end")
+	if not size then file:close(); return nil, "cannot size output file: " .. tostring(size_err) end
+	if offset > size then
+		file:close()
+		return nil, "offset " .. tostring(offset) .. " exceeds current output size " .. tostring(size)
+			.. "; use the last returned cursor for this stream, or offset 0 to reread"
+	end
+	local position, seek_err = file:seek("set", offset)
+	if not position then file:close(); return nil, "cannot seek output file: " .. tostring(seek_err) end
 	local body = file:read(limit) or ""
 	local next_offset = file:seek()
+	local final_size, final_err = file:seek("end")
 	file:close()
-	return body, nil, next_offset
+	if not next_offset or not final_size then return nil, "cannot locate output cursor: " .. tostring(final_err) end
+	local more = final_size > next_offset
+	return body, nil, next_offset, more
 end
 
 local function search_file(path, pattern, limit)
@@ -845,13 +988,22 @@ end
 function jobs.stop(cwd, id)
 	local job, resolved_cwd = resolve_job(cwd, id)
 	if not job then return nil, "unknown job: " .. tostring(id) end
-	if job.status ~= "running" and job.status ~= "starting" then
-		return job
-	end
-
-	job.status = "stopped"
-	job.finished_at = now_iso()
-	jobs.save(resolved_cwd, job)
+	local err, stopping
+	job, err = jobs.with_lock(resolved_cwd, function()
+		local current = jobs.load(resolved_cwd, id)
+		if not current then return nil, "unknown job: " .. tostring(id) end
+		if current.status ~= "running" and current.status ~= "starting" then return current end
+		local signalled, signal_err = jobs.signal_group(current, "sigterm")
+		if not signalled then return nil, signal_err end
+		current.status = "stopped"
+		current.finished_at = now_iso()
+		local saved, save_err = jobs.save(resolved_cwd, current)
+		if not saved then return nil, save_err end
+		stopping = true
+		return current
+	end)
+	if not job then return nil, err end
+	if not stopping then return job end
 	if resolved_cwd ~= cwd then
 		upsert_index_job(cwd, job)
 	end
@@ -859,11 +1011,10 @@ function jobs.stop(cwd, id)
 	local target = job.pgid or job.pid
 	if target then
 		target = tostring(math.floor(tonumber(target)))
-		os.execute("/bin/kill -TERM -- -" .. target .. " >/dev/null 2>&1")
 		uv.sleep(200)
-		if process_alive(job.pid) then
-			os.execute("/bin/kill -KILL -- -" .. target .. " >/dev/null 2>&1")
-		end
+		-- The leader may exit on TERM while a descendant ignores it.
+		local killed, kill_err = jobs.signal_group(job, "sigkill")
+		if not killed then return nil, kill_err end
 	end
 
 	return job

@@ -17,7 +17,7 @@ function job_start.execute(args, context)
 		job = job,
 		content = table.concat({
 			"started " .. job.id,
-			"command: " .. job.command,
+			jobs.describe(job),
 			"cwd: " .. job.cwd,
 			"timeout: " .. (job.timeout and tonumber(job.timeout) and tonumber(job.timeout) > 0 and (tostring(math.floor(tonumber(job.timeout) / 1000)) .. "s") or "none"),
 			"stdout: " .. job.stdout,

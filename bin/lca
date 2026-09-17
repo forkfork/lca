@@ -93,8 +93,9 @@ local function lua_command_prefix(require_tui)
 	os.exit(1)
 end
 
-local function usage()
-	io.stderr:write([[
+local function usage(code)
+	local output = code == 0 and io.stdout or io.stderr
+	output:write([[
 Usage:
   lca [--tui-effect drift|mycelium|cytoplasm|ink|duet|contours|squall|auto] [--tool-stage|--no-tool-stage] [options]
   lca repl [--tui-effect drift|mycelium|cytoplasm|ink|duet|contours|squall|auto] [--tool-stage|--no-tool-stage] [options]
@@ -112,7 +113,7 @@ Examples:
   lca run "Explain this project"
   lca login
 ]])
-	os.exit(2)
+	os.exit(code or 2)
 end
 
 local script_dir = arg[0]:match("^(.*)/[^/]+$") or "."
@@ -126,7 +127,7 @@ local commands = {
 local subcommand = arg[1]
 local start_index = 2
 if subcommand == "--help" or subcommand == "help" then
-	usage()
+	usage(0)
 elseif not subcommand or subcommand:sub(1, 2) == "--" then
 	subcommand = "repl"
 	start_index = 1

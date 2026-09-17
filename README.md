@@ -157,6 +157,50 @@ Ctrl-C cancels the process group. The terminal shows exit status and bounded
 output tails; full output is in the displayed job logs, subject to job pruning.
 The command waits for completion or cancellation, with no automatic timeout.
 
+### Durable command jobs
+
+The agent uses `job_start` for long-running commands. Job metadata and complete
+stdout/stderr logs live under `.lca/jobs` in the caller's project, even when the
+command runs in another directory. Tool responses abbreviate the command; the
+full command remains in `job.json`.
+
+`job_wait` waits up to 30 seconds by default and returns early when the job
+finishes. The UI remains responsive, and cancelling a wait leaves the job running.
+Set `timeout_ms` to override the wait deadline, or to `0` for an immediate check;
+this is separate from the command timeout supplied to `job_start`.
+
+By default, waits return up to 20,000 bytes from each stream, starting at byte 0.
+Pass the returned `stdout_offset` and `stderr_offset` into the next wait to read
+only new output. Offsets are explicit, so separate readers do not consume each
+other's output. A stream's `_more: true` flag means more bytes were available at
+read time; continue draining even after the job exits. Explicit `tail` selects
+recent lines instead of cursor reads. `job_output` also supports tail, search,
+and byte-offset inspection, and includes the observed job status and exit code.
+Tail reads also cap each stream at 20,000 bytes, keeping its end and marking a
+byte-truncated tail with `[earlier output omitted]`; full logs remain on disk.
+An empty read with `_more: false` on a running job only means the stream is
+currently drained; reuse its cursor after more output arrives. Offsets beyond
+the current stream size return an error instead of skipping future output.
+
+A wait deadline can return a still-running job. Treat terminal status and exit
+code, together with the output, as completion evidence; a tool call succeeding
+only means the job was inspected successfully.
+
+Job-store updates use OS-managed locks, released automatically if a writer dies.
+Stopping during startup either prevents the command from launching or targets its
+published process group. Stop and timeout escalation also kill descendants that
+ignore `TERM`, even if the shell exits first. Signal exits include the signal
+number and a nonzero exit code (`128 + signal`).
+
+If a supervisor disappears, a wait returns control instead of polling indefinitely.
+A surviving command stays running and stoppable, with `supervisor_lost: true`.
+If both supervisor and command have disappeared, the job is marked `lost`; its exit
+code is unknown, not assumed successful. Startup jobs are excluded from pruning.
+On Linux, process-group checks include surviving descendants and recorded boot/
+process start identifiers. Stop refuses a mismatched identity or a live legacy
+job without identity metadata. These checks reduce stale-PID risk; they are not
+an atomic process-tree ownership boundary such as a cgroup.
+
 ## Providers and models
 
 **Codex/OpenAI and Bedrock both default to GPT-6 Astra.**

@@ -39,6 +39,6 @@ class CachePrefixTests(unittest.TestCase):
                 'p.on_request(request)',
                 'request.on_request_body([[{ "z": 1, "a": { "y": 2, "b": 3 } }]])',
             ])
-            subprocess.run(['lua','-'],input=script,text=True,cwd=root,check=True,capture_output=True)
+            subprocess.run(['lua5.5','-'],input=script,text=True,cwd=root,check=True,capture_output=True)
             self.assertEqual((Path(tmp)/'provider-request-0001.json').read_text(),
                              '{ "z": 1, "a": { "y": 2, "b": 3 } }\n')

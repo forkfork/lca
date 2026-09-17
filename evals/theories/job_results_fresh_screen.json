@@ -1,0 +1,48 @@
+{
+  "id": "job_results_fresh_screen",
+  "study_kind": "screen",
+  "title": "Fresh task job-result acceptance screen",
+  "hypothesis": "Compact job metadata preserves failure recovery, overlapping-job completion and independent edits without material time or cost regression on fresh tasks.",
+  "falsified_if": "Activation fails, either arm fails artifact or completion verification, or compact results regress latency or estimated cost beyond the registered tolerance.",
+  "source_ids": [],
+  "local_evidence": "Follow-up to research/decisions/2026-09-17-job-results-screen.md and original log calls 26:5/7/8/10. The previous synthetic formatter screen passed; this comparison uses real command options and no inserted padding. Offline acceptance checks separately cover restart, legacy recovery, large cursor drains, isolation and process death.",
+  "control_variant": "full_command",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "job_failure_recovery",
+    "job_overlap_edit"
+  ],
+  "variants": [
+    {
+      "id": "full_command",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only",
+      "job_results": "full_command"
+    },
+    {
+      "id": "compact",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only",
+      "job_results": "compact"
+    }
+  ],
+  "deterministic_outcomes": [
+    "independent aggregation correctness",
+    "successful durable verification of final artifact",
+    "terminal exit/output actually observed",
+    "serialized tool-result activation"
+  ],
+  "efficiency_outcomes": [
+    "end-to-end elapsed_ms",
+    "model and tool calls",
+    "prompt/output/cache tokens",
+    "all-attempt estimated cost",
+    "job result bytes"
+  ],
+  "decision_rule": "Seed 918, six screen cells (one per arm and scenario), randomized adjacent pairs after the simple control pair. Model GPT-6 Astra/high and all execution, cursors, deadlines, schemas and prompts are identical across arms; only command rendering differs. No synthetic command expansion in either fresh task. Freeze source/fixtures/graders before launch; validate positive/negative graders and serialized result formatting. Maximum six launches, $3 standard-equivalent between-run cost threshold (one-run overshoot possible), 420 active seconds. Stop on artifact/protocol/activation failure, preserve evidence, fix defects and register any rerun separately. Correctness gate: all tasks pass independent artifacts, required observed terminal output, protected scope and no abandoned jobs. Efficiency gate: aggregate coding time and estimated cost no more than 20% worse and neither task more than 35% worse. Report per-task model/tool calls, tokens/cache and costs alongside artifacts; simple-control spend included but simple timing excluded from coding gate. A positive screen supports fresh validation only; it cannot establish general efficiency adoption. Deterministic acceptance and clean-install results are reported separately. No notification architecture is introduced."
+}

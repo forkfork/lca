@@ -19,7 +19,7 @@ from analyze_state_pilot import audit_state_only
 
 ROOT = Path(__file__).resolve().parent.parent
 # Only interventions for which this runner has an activation contract are admitted.
-VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope", "operational_context", "obligation_view"}
+VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope", "operational_context", "obligation_view", "job_results"}
 
 
 def read(path):
@@ -42,7 +42,7 @@ def digest(value):
 
 def source_digest():
     result = hashlib.sha256()
-    for directory in ("lua", "bin", "scripts", "evals", "tests"):
+    for directory in ("lua", "c", "bin", "scripts", "evals", "tests"):
         for path in sorted((ROOT / directory).rglob("*")):
             relative = path.relative_to(ROOT)
             if not path.is_file() or any(part in {"results", "__pycache__", ".pytest_cache"} for part in relative.parts):
@@ -83,6 +83,8 @@ def plan(theory, smoke, repetitions, seed, max_runs, max_cost, max_seconds):
                 raise ValueError("unsupported audited prompt/context combination")
         if "tool_scope" in variant and (variant["tool_scope"] not in {"all", "local_only"} or variant.get("context_mode", "normal") != "normal"):
             raise ValueError("unsupported audited tool scope")
+        if "job_results" in variant and variant["job_results"] not in {"compact", "full_command"}:
+            raise ValueError("unsupported job result format")
         if "obligation_view" in variant:
             if variant["obligation_view"] not in {"ledger", "receipts"} or variant.get("context_mode", "normal") != "normal" or "operational_context" in variant:
                 raise ValueError("unsupported obligation view")
@@ -173,6 +175,9 @@ def inspect_result(directory, cell):
     if "system_prompt_profile" in variant:
         from prompt_profiles import audit
         audit(directory, variant["system_prompt_profile"], requests, trajectory)
+    if "job_results" in variant:
+        from job_results import audit as audit_job_results
+        audit_job_results(directory, variant["job_results"], requests, trajectory)
     if "tool_scope" in variant:
         from tool_scope import audit as audit_tool_scope
         audit_tool_scope(directory, variant["tool_scope"], requests, trajectory)

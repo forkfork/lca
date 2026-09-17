@@ -1,0 +1,8 @@
+{
+  "id": "job_overlap_edit",
+  "title": "job overlap edit",
+  "prompt": "Start BOTH worker commands below with job_start before editing. While they are running, fix labels.label to return 'id: ' followed by the stripped, lowercased input. Change only labels.py. After the edit, create an empty .ready file to release both workers. Then observe each worker's successful terminal status and its own VERIFIED output; also verify the label function. Do not modify worker.py or write the receipt files yourself. No external services. The jobs must both be finished before your final answer.\n\npython3 worker.py --name alpha --receipt .alpha.json --release-file .ready --stdout-records 80 --stderr-records 20 --poll-interval-ms 50 --deadline-seconds 90 --log-format plain --receipt-format json\n\npython3 worker.py --name beta --receipt .beta.json --release-file .ready --stdout-records 80 --stderr-records 20 --poll-interval-ms 50 --deadline-seconds 90 --log-format plain --receipt-format json",
+  "timeout_seconds": 150,
+  "grader": "grade.py",
+  "judge": false
+}

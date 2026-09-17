@@ -1,0 +1,4 @@
+[
+  "python3 worker.py --name alpha --receipt .alpha.json --release-file .ready --stdout-records 80 --stderr-records 20 --poll-interval-ms 50 --deadline-seconds 90 --log-format plain --receipt-format json",
+  "python3 worker.py --name beta --receipt .beta.json --release-file .ready --stdout-records 80 --stderr-records 20 --poll-interval-ms 50 --deadline-seconds 90 --log-format plain --receipt-format json"
+]
