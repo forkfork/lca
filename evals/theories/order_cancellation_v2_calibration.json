@@ -1,0 +1,41 @@
+{
+  "id": "order_cancellation_v2_calibration",
+  "study_kind": "calibration",
+  "title": "Current tagged-edit baseline on durable multi-layer order cancellation",
+  "hypothesis": "The expanded SQLite order fixture is solvable with the current tagged-edit harness and exercises substantial multi-file changes before any edit-tool comparison.",
+  "falsified_if": "Independent correctness, scope or observed final verification fails; or successful runs remain too shallow to exercise multi-file editing. A passing baseline does not establish comparative edit-tool quality.",
+  "source_ids": [],
+  "local_evidence": "User-requested workload expansion. Original fixture at commit e65ce9d contained 7 files and 244 lines. Preserved trajectory evals/results/20260905T044831Z-multifile_order_cancellation-normal-1/trajectory.json passed with 16 tool operations and only four edit calls across three files. Version 2 adds SQLite migration, atomic inventory/payment/audit/outbox/receipt effects, durable replay, optimistic concurrency, batch commands, API/CLI and reporting. The original scenario and trace are preserved externally; version-1 outcomes must not be pooled with version 2.",
+  "control_variant": "current_tagged",
+  "minimum_runs_per_cell": 2,
+  "scenarios": [
+    "simple_prompt",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "current_tagged",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only"
+    }
+  ],
+  "deterministic_outcomes": [
+    "existing regressions and public acceptance tests",
+    "external cancellation contract including concurrency and injected rollback",
+    "scope and immutable version-one migration",
+    "added regression tests",
+    "observed full suite after final edit"
+  ],
+  "efficiency_outcomes": [
+    "elapsed time",
+    "model/tool calls and edit/write counts",
+    "changed source files and changed lines",
+    "stale-tag and syntax errors",
+    "prompt/output/cache tokens",
+    "all-attempt estimated cost"
+  ],
+  "decision_rule": "Seed 91802. Single-arm calibration: smoke simple_prompt and multifile_order_cancellation, then two fresh pilot repetitions of both (six total cells, three coding attempts). Freeze current source, model, reasoning, schemas, prompts, fixture and grader before calls. Maximum six launches, $12 standard-equivalent between-run cost threshold (one-run overshoot possible), 3000 active seconds; per-task timeout 900 seconds. Stop on smoke, protocol or activation failure; preserve failed attempts and register repairs as a new campaign. Offline: reference solution passes all gates, no-op fails, deliberately broken atomicity/replay/inventory/validation/reporting/CLI variants fail, protected files and final verification are enforced. Baseline-ready requires all three coding attempts to pass every gate and use the existing tagged edit interface. Workload usefulness: at least two change at least six source files and at least one uses 20+ tool operations; report duration, failure/recovery, changed lines and actual edit calls without forcing extra calls. If too shallow, expand the workload under a new fixture version. No edit-tool alternatives, default changes, speed comparison or general long-task claim in this calibration."
+}

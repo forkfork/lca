@@ -1,32 +1,82 @@
 from __future__ import annotations
 
-from dataclasses import replace
+import json
 
-from .models import Order, OrderEvent, OrderStatus
+from .database import Database
+from .errors import ConflictError
+from .models import Order, OrderEvent, OrderLine, OrderStatus
 
 
 class OrderRepository:
-    def __init__(self, orders: list[Order] | None = None):
-        self._orders = {order.order_id: order for order in orders or []}
-        self._events: list[OrderEvent] = []
+    def __init__(self, orders: list[Order] | None = None, *, database: str = ":memory:", fault=None):
+        self.db = Database(database, fault)
+        with self.transaction():
+            for order in orders or []:
+                self.add(order)
+
+    @property
+    def connection(self):
+        return self.db.connection
+
+    def transaction(self):
+        return self.db.transaction()
+
+    def close(self) -> None:
+        self.db.close()
+
+    def add(self, order: Order) -> None:
+        if self.get(order.order_id) is not None:
+            raise ConflictError("order already exists")
+        self.connection.execute("INSERT INTO orders VALUES (?,?,?,?,?,?,?)", (
+            order.order_id, order.customer_id, order.total_cents, order.status.value,
+            order.version, order.currency, order.shipping_cents,
+        ))
+        self.connection.executemany("INSERT INTO order_lines VALUES (?,?,?,?,?)", (
+            (order.order_id, position, line.sku, line.quantity, line.unit_price_cents)
+            for position, line in enumerate(order.lines)
+        ))
+        self.db.checkpoint("order_added")
+
+    def _decode(self, row) -> Order:
+        lines = tuple(OrderLine(r["sku"], r["quantity"], r["unit_price_cents"])
+                      for r in self.connection.execute(
+                          "SELECT * FROM order_lines WHERE order_id=? ORDER BY position", (row["order_id"],)))
+        return Order(row["order_id"], row["customer_id"], row["total_cents"],
+                     OrderStatus(row["status"]), row["version"], row["currency"],
+                     lines, row["shipping_cents"])
 
     def get(self, order_id: str) -> Order | None:
-        return self._orders.get(order_id)
+        row = self.connection.execute("SELECT * FROM orders WHERE order_id=?", (order_id,)).fetchone()
+        return self._decode(row) if row else None
 
     def list_for_customer(self, customer_id: str) -> list[Order]:
-        return [
-            order for order in self._orders.values()
-            if order.customer_id == customer_id
-        ]
+        return [self._decode(row) for row in self.connection.execute(
+            "SELECT * FROM orders WHERE customer_id=? ORDER BY order_id", (customer_id,))]
 
-    def set_status(self, order_id: str, status: OrderStatus) -> Order:
-        current = self._orders[order_id]
-        updated = replace(current, status=status)
-        self._orders[order_id] = updated
-        return updated
+    def all(self) -> list[Order]:
+        return [self._decode(row) for row in self.connection.execute("SELECT * FROM orders ORDER BY order_id")]
+
+    def set_status(self, order_id: str, status: OrderStatus, expected_version: int | None = None) -> Order:
+        current = self.get(order_id)
+        if current is None:
+            raise KeyError(order_id)
+        version = current.version if expected_version is None else expected_version
+        changed = self.connection.execute(
+            "UPDATE orders SET status=?,version=version+1 WHERE order_id=? AND version=?",
+            (status.value, order_id, version),
+        ).rowcount
+        if not changed:
+            raise ConflictError("order version changed")
+        self.db.checkpoint("order_status")
+        return self.get(order_id)
 
     def append_event(self, event: OrderEvent) -> None:
-        self._events.append(event)
+        self.connection.execute("INSERT INTO events(order_id,kind,request_id,payload) VALUES (?,?,?,?)",
+                                (event.order_id, event.kind, event.request_id, json.dumps(event.payload, sort_keys=True)))
+        self.db.checkpoint("event_appended")
 
     def events_for(self, order_id: str) -> list[OrderEvent]:
-        return [event for event in self._events if event.order_id == order_id]
+        return [OrderEvent(row["order_id"], row["kind"], row["request_id"],
+                           json.loads(row["payload"]), row["sequence"])
+                for row in self.connection.execute(
+                    "SELECT * FROM events WHERE order_id=? ORDER BY sequence", (order_id,))]

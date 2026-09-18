@@ -66,6 +66,21 @@ python3 evals/run.py auth_api --judge codex
 Use `--credentials`, `--model`, and `--reasoning` to pin the system under test.
 Results are written under `evals/results/`, which is ignored by git.
 
+### Substantial multi-file editing fixture
+
+`multifile_order_cancellation` version 2 is a 23-file SQLite order application
+with inventory, payments, shipping, returns, an outbox, reporting, API and CLI.
+The task adds durable single and atomic batch cancellation while preserving the
+existing workflows. It includes 30 public tests (two initially failing feature
+examples) and 22 external hidden test methods. The known-good reference and hidden
+tests are outside the fixture and are not copied into the agent workspace.
+
+Three current Astra/high tagged-edit baselines passed; see the
+[baseline results and limitations](../research/decisions/2026-09-18-order-cancellation-baseline.md)
+and `theories/order_cancellation_v2_calibration.json`. Version-1 results describe a
+different, much smaller workload and must not be pooled with version 2. Register
+a fresh paired campaign before comparing editing tools on this fixture.
+
 ## Testing research theories
 
 A theory is an executable controlled experiment in `evals/theories/`. It must state:

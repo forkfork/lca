@@ -1,222 +1,83 @@
+"""Version-2 behavioral grading. Tool sequence is measured, never a quality gate."""
 from __future__ import annotations
 
 import difflib
 import json
+import os
+from pathlib import Path
+import re
 import subprocess
 import sys
-from pathlib import Path
+import tempfile
 
 from grader_support import successful_test_evidence
 
 
-workspace = Path(sys.argv[1])
-trajectory = json.loads(Path(sys.argv[2]).read_text())
-fixture = Path(__file__).with_name("fixture")
-
-
-def run_python(source: str) -> tuple[bool, str]:
-    completed = subprocess.run(
-        [sys.executable, "-c", source], cwd=workspace, text=True,
-        capture_output=True, timeout=30,
-    )
-    return completed.returncode == 0, (completed.stdout + completed.stderr)[-6000:]
-
-
-public = subprocess.run(
-    [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"],
-    cwd=workspace, text=True, capture_output=True, timeout=30,
-)
-hidden_ok, hidden_output = run_python(r'''import json
-from orders import (
-    ConflictError, NotFoundError, Order, OrderAPI, OrderRepository, OrderService,
-    OrderStatus,
-)
-
-repo = OrderRepository([
-    Order("a", "customer", 1000),
-    Order("b", "customer", 2000),
-    Order("shipped", "customer", 3000, OrderStatus.SHIPPED),
-])
-service = OrderService(repo)
-api = OrderAPI(service)
-
-# Direct service behavior and normalized idempotency.
-cancelled = service.cancel_order("a", "  request-1  ")
-assert cancelled.status.value == "cancelled"
-events = repo.events_for("a")
-assert len(events) == 1 and events[0].kind == "cancelled"
-assert events[0].request_id == "request-1"
-assert service.cancel_order("a", "request-1") == cancelled
-assert len(repo.events_for("a")) == 1
-
-# The same request ID belongs to an order, not a global namespace.
-assert service.cancel_order("b", "request-1").status.value == "cancelled"
-assert len(repo.events_for("b")) == 1
-
-try:
-    service.cancel_order("a", "another-request")
-except ConflictError:
-    pass
-else:
-    raise AssertionError("different retry cancelled an already-cancelled order")
-
-try:
-    service.cancel_order("shipped", "ship-cancel")
-except ConflictError:
-    pass
-else:
-    raise AssertionError("shipped order was cancelled")
-assert repo.events_for("shipped") == []
-
-try:
-    service.cancel_order("missing", "missing-cancel")
-except NotFoundError:
-    pass
-else:
-    raise AssertionError("missing order did not raise NotFoundError")
-
-# Invalid IDs are rejected before mutation.
-before = list(repo.events_for("shipped"))
-for bad in (None, "", "   ", 42, "x" * 65):
+def grade(workspace, trajectory):
+    workspace=Path(workspace)
+    fixture=Path(__file__).with_name('fixture')
+    env=dict(os.environ, ORDER_WORKSPACE=str(workspace.resolve()), PYTHONDONTWRITEBYTECODE='1')
+    def run(command):
+        try:
+            # -B disables writes, but still accepts an existing .pyc. A fresh
+            # cache prefix ensures every probe executes the candidate SOURCE.
+            with tempfile.TemporaryDirectory(prefix='order-grader-cache-') as cache:
+                result=subprocess.run(command,cwd=workspace,env=dict(env, PYTHONPYCACHEPREFIX=cache),
+                                      text=True,capture_output=True,timeout=90)
+            return result.returncode==0,(result.stdout+result.stderr)[-16000:]
+        except subprocess.TimeoutExpired:
+            return False,'Independent grader timed out after 90 seconds'
+    public_ok,public_output=run([sys.executable,'-B','-m','unittest','discover','-s','tests','-v'])
+    hidden_ok,hidden_output=run([sys.executable,'-B',str(Path(__file__).with_name('hidden_tests.py').resolve())])
+    def files(root):
+        return {p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*')
+                if p.is_file() and not {'__pycache__','.pytest_cache','.lca','.git'}.intersection(p.relative_to(root).parts)}
+    original,actual=files(fixture),files(workspace)
+    changed=sorted(name for name,body in original.items() if actual.get(name)!=body)
+    added=sorted(set(actual)-set(original))
+    scope=bool(changed) and all(name.startswith('orders/') and name.endswith('.py') and name in actual for name in changed)
+    scope=scope and all(name.startswith(('orders/','tests/')) and name.endswith('.py') for name in added)
+    # Keep migrations append-only, including their SQL, regardless of formatting.
+    import ast
+    def migration_one(text):
+        tree=ast.parse(text)
+        for node in tree.body:
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='MIGRATIONS' for t in node.targets):
+                return ast.literal_eval(node.value)[0]
+        raise ValueError('missing MIGRATIONS')
     try:
-        service.cancel_order("shipped", bad)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError(f"accepted invalid request ID: {bad!r}")
-assert repo.events_for("shipped") == before
+        migration_preserved=migration_one(original['orders/migrations.py'].decode())==migration_one(actual['orders/migrations.py'].decode())
+    except (KeyError,ValueError,SyntaxError,TypeError): migration_preserved=False
+    events=[e for e in trajectory.get('events',[]) if e.get('result')]
+    mutations=[i for i,e in enumerate(events) if e.get('name') in {'edit','multi_edit','write','file_change','mutation'} and not e['result'].get('is_error')]
+    last_mutation=max(mutations,default=-1)
+    starts={}
+    verified=False
+    for i,e in enumerate(events):
+        if e.get('name')=='job_start':
+            job=e['result'].get('job',{});starts[job.get('id')]=(i,e.get('args',{}).get('command',''))
+        if i<=last_mutation: continue
+        if e.get('name') in {'run','shell','command_execution'} and successful_test_evidence(e):
+            verified=True
+        if e.get('name') in {'job_wait','job_output'}:
+            start,command=starts.get(e.get('args',{}).get('id'),(-1,''))
+            content=e['result'].get('content','')
+            if start>last_mutation and 'status: exited' in content and 'exit_code: 0' in content:
+                verified |= successful_test_evidence({'args':{'command':command},'result':e['result']})
+    changed_lines=sum(sum(line.startswith(('- ','+ ')) for line in difflib.ndiff(
+        original[n].decode(errors='replace').splitlines(),actual.get(n,b'').decode(errors='replace').splitlines())) for n in changed)
+    gates={'public_regressions_and_examples':public_ok,'hidden_cancellation_contract':hidden_ok,
+           'scope_preserved':bool(scope),'added_regression_tests':any(n.startswith('tests/test_') and n.endswith('.py') for n in added),'version_one_migration_preserved':migration_preserved,
+           'observed_full_verification_after_final_edit':bool(verified and mutations)}
+    return {'passed':all(gates.values()),'score':100*sum(gates.values())/len(gates),'hard_gates':gates,
+            'evidence':{'fixture_version':2,'artifact_correct':public_ok and hidden_ok,'changed_files':changed,'added_files':added,
+                        'changed_lines':changed_lines,'mutation_calls':len(mutations),
+                        'edit_calls':sum(e.get('name')=='edit' for e in events),
+                        'multi_edit_calls':sum(e.get('name')=='multi_edit' for e in events),
+                        'write_calls':sum(e.get('name')=='write' for e in events),
+                        'failed_mutations':sum(e.get('name') in {'edit','multi_edit','write'} and bool(e['result'].get('is_error')) for e in events),
+                        'public_test_output':public_output,'hidden_test_output':hidden_output}}
 
-# API status/error mapping and exact existing response shape.
-fresh_repo = OrderRepository([
-    Order("api", "customer", 400),
-    Order("api-shipped", "customer", 500, OrderStatus.SHIPPED),
-])
-fresh_api = OrderAPI(OrderService(fresh_repo))
-response = fresh_api.handle("POST", "/orders/api/cancel", json.dumps({"request_id": "api-1"}))
-assert response.status == 200 and response.body == {
-    "order_id": "api", "customer_id": "customer", "total_cents": 400,
-    "status": "cancelled",
-}
-assert fresh_api.handle("POST", "/orders/api/cancel", '{bad json').status == 400
-assert fresh_api.handle("POST", "/orders/api/cancel", '{}').status == 400
-assert fresh_api.handle("POST", "/orders/missing/cancel", '{"request_id":"x"}').status == 404
-conflict = fresh_api.handle(
-    "POST", "/orders/api-shipped/cancel", '{"request_id":"x"}'
-)
-assert conflict.status == 409 and conflict.body["error"] == "conflict"
 
-# Existing shipping and queries remain usable after the feature addition.
-legacy_repo = OrderRepository([Order("legacy", "legacy-customer", 900)])
-legacy_service = OrderService(legacy_repo)
-assert legacy_service.get_order("legacy").status is OrderStatus.PENDING
-assert legacy_service.list_orders("legacy-customer")[0].order_id == "legacy"
-assert legacy_service.ship_order("legacy").status is OrderStatus.SHIPPED
-assert [event.kind for event in legacy_repo.events_for("legacy")] == ["shipped"]
-''')
-
-ignored = {"__pycache__", ".pytest_cache"}
-fixture_files = {
-    path.relative_to(fixture).as_posix(): path.read_bytes()
-    for path in fixture.rglob("*") if path.is_file() and not ignored.intersection(path.parts)
-}
-workspace_files = {
-    path.relative_to(workspace).as_posix(): path.read_bytes()
-    for path in workspace.rglob("*") if path.is_file() and not ignored.intersection(path.parts)
-}
-changed = sorted(name for name, body in fixture_files.items() if workspace_files.get(name) != body)
-added = sorted(name for name in workspace_files if name not in fixture_files)
-allowed = {
-    "orders/__init__.py", "orders/api.py", "orders/models.py",
-    "orders/repository.py", "orders/service.py",
-}
-scope_ok = bool(changed) and set(changed).issubset(allowed) and not added
-layering_ok = (
-    "orders/service.py" in changed
-    and "orders/api.py" in changed
-    and bool({"orders/models.py", "orders/repository.py"}.intersection(changed))
-)
-
-changed_lines = 0
-for name in changed:
-    before = fixture_files[name].decode("utf-8", "replace").splitlines()
-    after = workspace_files[name].decode("utf-8", "replace").splitlines()
-    changed_lines += sum(line.startswith(("- ", "+ ")) for line in difflib.ndiff(before, after))
-
-events = trajectory.get("events", [])
-completed = [(index, event) for index, event in enumerate(events) if event.get("result")]
-successful_mutations = [
-    (index, event) for index, event in completed
-    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
-    and not event["result"].get("is_error")
-]
-first_mutation = successful_mutations[0][0] if successful_mutations else None
-green_after_edit = any(
-    index > first_mutation
-    and event.get("name") in ("run", "shell", "command_execution")
-    and successful_test_evidence(event)
-    for index, event in completed
-) if first_mutation is not None else False
-reads_before_edit = {
-    event.get("args", {}).get("path") for index, event in completed
-    if first_mutation is not None and index < first_mutation and event.get("name") == "read"
-}
-for index, event in completed:
-    if first_mutation is None or index >= first_mutation:
-        continue
-    content = str(event.get("result", {}).get("content", ""))
-    for path, marker in (
-        ("orders/models.py", "class OrderStatus"),
-        ("orders/repository.py", "class OrderRepository"),
-        ("orders/service.py", "class OrderService"),
-        ("orders/api.py", "class OrderAPI"),
-    ):
-        if marker in content:
-            reads_before_edit.add(path)
-architecture_inspected = len({
-    "orders/models.py", "orders/repository.py", "orders/service.py", "orders/api.py",
-}.intersection(reads_before_edit)) >= 3
-
-hard_gates = {
-    "public_tests": public.returncode == 0,
-    "hidden_idempotency_api_and_compatibility": hidden_ok,
-    "scope_control": scope_ok,
-    "coherent_layers_changed": layering_ok,
-    "architecture_inspected_before_edit": architecture_inspected,
-    "successful_verification_after_edit": green_after_edit,
-}
-dimensions = {
-    "behavior": 55 if public.returncode == 0 and hidden_ok else 0,
-    "architecture": 15 if layering_ok and architecture_inspected else 0,
-    "scope": 10 if scope_ok else 0,
-    "verification": 15 if green_after_edit else 0,
-    "communication": 5 if trajectory.get("final", "").strip() else 0,
-}
-
-print(json.dumps({
-    "score": sum(dimensions.values()),
-    "passed": all(hard_gates.values()),
-    "dimensions": dimensions,
-    "hard_gates": hard_gates,
-    "evidence": {
-        "changed_files": changed,
-        "added_files": added,
-        "changed_lines": changed_lines,
-        "architecture_reads_before_edit": sorted(path for path in reads_before_edit if path),
-        "relevant_source_reads_count": len(reads_before_edit),
-        "mutation_calls": len(successful_mutations),
-        "edit_calls": sum(event.get("name") == "edit" for _, event in successful_mutations),
-        "multi_edit_calls": sum(event.get("name") == "multi_edit" for _, event in successful_mutations),
-        "write_calls": sum(event.get("name") == "write" for _, event in successful_mutations),
-        "failed_mutations": sum(
-            event.get("name") in ("edit", "multi_edit", "write")
-            and bool(event.get("result", {}).get("is_error"))
-            for event in events
-        ),
-        "verification_runs": sum(
-            event.get("name") in ("run", "shell", "command_execution")
-            for _, event in completed
-        ),
-        "public_test_output": (public.stdout + public.stderr)[-6000:],
-        "hidden_test_output": hidden_output,
-    },
-}))
+if __name__=='__main__':
+    print(json.dumps(grade(Path(sys.argv[1]),json.loads(Path(sys.argv[2]).read_text()))))

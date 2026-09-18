@@ -1,14 +1,13 @@
 from __future__ import annotations
+import re
 
 
 def successful_test_evidence(event: dict) -> bool:
-    command = str(event.get("args", {}).get("command", "")).lower()
-    if not any(term in command for term in ("unittest", "pytest", "test")):
+    command = str(event.get('args', {}).get('command', ''))
+    # Require the documented full-suite invocation, not a command containing 'test'.
+    if not re.search(r'\bpython[\d.]*\s+(?:-B\s+)?-m\s+unittest\s+discover\s+-s\s+tests\b', command):
         return False
-    result = event.get("result", {})
-    if not result.get("is_error"):
-        return True
-    # Codex often appends Git inspection to an otherwise-green compound command in
-    # the non-Git eval workspace. Preserve the successful test subcommand evidence.
-    content = str(result.get("content", ""))
-    return "Ran " in content and "\nOK\n" in content and "FAILED" not in content
+    content = str(event.get('result', {}).get('content', ''))
+    return bool(re.search(r'Ran\s+[1-9]\d*\s+tests?\b', content)
+                and re.search(r'^OK\s*$', content, re.M)
+                and not re.search(r'^FAILED\b', content, re.M))
