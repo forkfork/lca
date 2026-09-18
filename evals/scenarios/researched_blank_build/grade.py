@@ -12,7 +12,7 @@ final = trajectory.get("final", "").strip()
 lower_final = final.lower()
 events = [event for event in trajectory.get("events", []) if event.get("result")]
 inventory = [event for event in events if event.get("name") in {"ls", "find", "grep"}]
-mutations = [event for event in events if event.get("name") in {"edit", "multi_edit", "write"}]
+mutations = [event for event in events if event.get("name") in {"apply_patch", "edit", "multi_edit", "write"}]
 runs = [event for event in events if event.get("name") == "run"]
 messages = "\n".join(str(message.get("text", "")) for message in trajectory.get("messages", []))
 

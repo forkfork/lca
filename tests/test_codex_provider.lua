@@ -64,7 +64,8 @@ test("native request body declares function tools", function()
 		by_type[tool.type] = tool
 	end
 	assert(by_name.read and by_name.read.parameters.required[1] == "path", "read schema missing required path")
-	assert(by_name.edit and by_name.edit.parameters.properties.content.type == "string", "edit schema missing content")
+	assert(by_name.apply_patch and by_name.apply_patch.parameters.properties.diff.type == "string", "patch schema missing diff")
+ assert(not by_name.edit and not by_name.multi_edit, "retired edit tool advertised")
 	assert(by_type.web_search, "missing hosted web search tool")
 end)
 

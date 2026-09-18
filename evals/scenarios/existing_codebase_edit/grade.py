@@ -105,11 +105,11 @@ for name in changed:
 action_events = [event for event in trajectory.get("events", []) if event.get("result")]
 mutation_starts = [
     event for event in action_events
-    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
+    if event.get("name") in ("apply_patch", "edit", "multi_edit", "write", "file_change", "mutation")
 ]
 failed_mutations = [
     event for event in trajectory.get("events", [])
-    if event.get("name") in ("edit", "multi_edit", "write")
+    if event.get("name") in ("apply_patch", "edit", "multi_edit", "write")
     and event.get("result", {}).get("is_error")
 ]
 existing_paths = set(fixture_files)

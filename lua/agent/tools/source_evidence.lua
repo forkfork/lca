@@ -107,7 +107,7 @@ function evidence.enrich_grep(raw_output, cwd)
 	if #order == 0 then return raw_output, match_count end
 
 	local output = {
-		"[grep source evidence: matching ranges are freshly tagged and may be used directly by edit]",
+		"[grep source evidence: use source text as patch context; omit line numbers and display tags]",
 	}
 	local budget = { bytes = #output[1] + 1 }
 	local range_count = 0

@@ -64,14 +64,12 @@ local function write_call(path, content)
 end
 
 local function edit_call(path, start_line, old_text, content)
-	local read = require("agent.tools.read")
-	local lines = read.split_lines(old_text)
-	local end_line = start_line + #lines - 1
-	return tool_call("edit", require("agent.util.json").encode({
-		path = path, start_line = start_line, end_line = end_line,
-		start_tag = read.line_tag(start_line, lines[1]),
-		end_tag = read.line_tag(end_line, lines[#lines]), content = content,
-	}))
+ local diff = { '@@' }
+ for line in (old_text .. '\n'):gmatch('(.-)\n') do diff[#diff + 1] = '-' .. line end
+ for line in (content .. '\n'):gmatch('(.-)\n') do diff[#diff + 1] = '+' .. line end
+ return tool_call('apply_patch', require('agent.util.json').encode({
+  type = 'update_file', path = path, diff = table.concat(diff, '\n'),
+ }))
 end
 
 local function run_test(name, responses, checks)

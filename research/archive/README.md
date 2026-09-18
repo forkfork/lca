@@ -13,7 +13,8 @@ and metric readers remain intact. No historical evidence was rewritten.
 Historical experiment switches now fail explicitly in the eval runner before
 any model call; they do not silently run the baseline. Old saved sessions ignore
 retired fields and rebuild their cached system prompt. Normal tool batching,
-read budgets, mutation ordering, tagged edits, and compaction remain active.
+read budgets, mutation ordering and compaction remain active. Tagged editing was subsequently
+retired as described below.
 
 For recovery, extract the archive into a **separate scratch directory**, never
 over the live checkout. The snapshot includes unrelated in-progress changes;
@@ -68,3 +69,10 @@ lean/minimal prompt transforms. The companion manifest records verified hashes.
 Normal tagged edits and multi-hunk editing remain supported. Historical eval
 registrations and results remain intact; retired profiles fail before work begins.
 Restore selectively into a separate scratch directory.
+
+## Tagged edit tool
+
+[tagged-edit-20260918](tagged-edit-20260918/README.md) preserves the old tool,
+schemas, batching implementation, regression tests and comparison adapters.
+The user requested promotion of the V4A patch function after the fixed-tests
+screen. Historical theories require their frozen source checkout.

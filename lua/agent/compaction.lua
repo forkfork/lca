@@ -206,7 +206,7 @@ local function file_ops_from_message(message, ops)
 			if path and path ~= "" then
 				if call.name == "read" then
 					ops.read[path] = true
-				elseif call.name == "edit" or call.name == "multi_edit" or call.name == "write" then
+				elseif call.name == "apply_patch" or call.name == "edit" or call.name == "multi_edit" or call.name == "write" then
 					ops.modified[path] = true
 				end
 			end
@@ -216,7 +216,7 @@ local function file_ops_from_message(message, ops)
 		if path and path ~= "" then
 			if message.tool_name == "read" then
 				ops.read[path] = true
-			elseif message.tool_name == "edit" or message.tool_name == "multi_edit" or message.tool_name == "write" then
+			elseif message.tool_name == "apply_patch" or message.tool_name == "edit" or message.tool_name == "multi_edit" or message.tool_name == "write" then
 				ops.modified[path] = true
 			end
 		end

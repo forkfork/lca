@@ -60,6 +60,30 @@ class CrossAgentGraderEquivalenceTests(unittest.TestCase):
         self.assertEqual(lca["evidence"]["verification_runs"], codex["evidence"]["verification_runs"])
         self.assertEqual(lca["evidence"]["mutation_calls"], codex["evidence"]["mutation_calls"])
 
+    def test_patch_mutations_are_counted_like_legacy_edits(self):
+        for scenario in ('existing_codebase_edit', 'repeated_text_edit'):
+            with self.subTest(scenario=scenario):
+                before = grade(scenario, [action('edit')])
+                after = grade(scenario, [action('apply_patch')])
+                self.assertEqual(before['hard_gates'], after['hard_gates'])
+                self.assertEqual(after['evidence']['mutation_calls'], 1)
+
+    def test_large_patch_hunk_cannot_bypass_surgical_edit_gate(self):
+        event = action('apply_patch')
+        event['args'].update(type='update_file', path='runtime/policy.py',
+                             diff='@@\n' + '\n'.join('-line' for _ in range(11)) + '\n+replacement')
+        result = grade('multi_location_edit', [event])
+        self.assertFalse(result['hard_gates']['surgical_edits'])
+        self.assertEqual(result['evidence']['max_hunk_span'], 11)
+
+    def test_patch_context_does_not_count_as_edited_span(self):
+        event = action('apply_patch')
+        event['args'].update(type='update_file', path='runtime/policy.py',
+                             diff='@@\n' + ' context\n' * 20 + '-old\n+new')
+        result = grade('multi_location_edit', [event])
+        self.assertTrue(result['hard_gates']['surgical_edits'])
+        self.assertEqual(result['evidence']['max_hunk_span'], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,8 +12,8 @@ local function call(name,args)
 end
 package.loaded['agent.providers']={load=function() return {complete=function()
  steps=steps+1
- if steps==1 then return call('edit',{path=file,start_line=1,end_line=1,
-  start_tag=read.line_tag(1,initial),end_tag=read.line_tag(1,initial),content=literal}) end
+ if steps==1 then return call('apply_patch',{type='update_file',path=file,
+  diff='@@\n-'..initial..'\n+'..literal:gsub('\n','\n+')}) end
  if steps==2 then
   local f=assert(io.open(file));assert(f:read('*a')==literal);f:close()
   return call('write',{path=file,content=literal..'\nPreserved.\n'})
@@ -28,10 +28,10 @@ local count=0
 local result=require('agent.core').run_session(session,nil,function(event)
  if event.phase=='finish' then
   count=count+1;assert(not event.result.is_error,event.result.content)
-  assert(event.name=='edit' or event.name=='write')
+  assert(event.name=='apply_patch' or event.name=='write')
  end
 end)
 assert(result.text=='Documentation updated.' and steps==3 and count==2)
 local f=assert(io.open(file));assert(f:read('*a')==literal..'\nPreserved.\n');f:close()
 os.remove(file)
-print('Native edit/write preserve literal XML without dispatching embedded calls: PASS')
+print('Native patch/write preserve literal XML without dispatching embedded calls: PASS')

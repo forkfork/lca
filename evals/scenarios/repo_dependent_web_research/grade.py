@@ -16,7 +16,7 @@ inspection = [
 ]
 mutations = [
     event for event in events
-    if event.get("name") in {"edit", "multi_edit", "write"}
+    if event.get("name") in {"apply_patch", "edit", "multi_edit", "write"}
 ]
 word_count = len(re.findall(r"\b[\w./-]+\b", final))
 repo_constraints = {

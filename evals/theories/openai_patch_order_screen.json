@@ -1,0 +1,50 @@
+{
+  "id": "openai_patch_order_screen",
+  "study_kind": "screen",
+  "title": "Native OpenAI apply_patch versus tagged edit on order cancellation v2",
+  "hypothesis": "Replacing tagged-range edit with native Responses apply_patch and its contextual multi-hunk diff interface reduces end-to-end cancellation implementation time while retaining independent correctness. This tests the complete editing interface, including necessary instructions and SDK parser overhead; it does not isolate model training.",
+  "falsified_if": "Any correctness or activation gate fails, or coding latency improves by less than 10%, or estimated coding cost regresses by more than 20%. A failed gate drops this implementation; a passing screen buys fresh broader validation only.",
+  "source_ids": [],
+  "local_evidence": "The v2 baseline cell-0001 in evals/results/order-cancellation-v2-20260918-v1 has 33 tool operations, 9 model calls, 12 edit calls, 173137ms, and no failed edits. Matching raw transcript.log LLM CALL #4 and captured provider requests show tagged endpoint arguments (e.g. call_vMy3Lg3TIqCMPbfNx6QnY9QT on orders/models.py, start/end line 11). Cells0003/0004 independently pass with 34/37 tools and 13/10 edits. This is an interface-efficiency hypothesis, not a claim that these successful edits were wasteful. Those eval-local logs are the matching raw records; /tmp/lca/logs contains interactive sessions, not these isolated workers. Official native contract: https://developers.openai.com/api/docs/guides/tools-apply-patch ; pure V4A parser vendored unchanged from openai-agents 0.22.3.",
+  "control_variant": "current_tagged",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "multifile_order_cancellation"
+  ],
+  "variants": [
+    {
+      "id": "current_tagged",
+      "edit_tool_profile": "tagged",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only"
+    },
+    {
+      "id": "openai_patch",
+      "edit_tool_profile": "openai_patch",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only"
+    }
+  ],
+  "deterministic_outcomes": [
+    "all public/hidden/scope/added-regression-test/final-verification gates",
+    "native schema and prompt transformation on every actual outgoing request",
+    "correct native operation/result replay and completed/failed status",
+    "existing source changed through assigned interface; no source write or shell mutation bypass"
+  ],
+  "efficiency_outcomes": [
+    "elapsed_ms (primary coding outcome)",
+    "model/tool calls and edit/patch/write counts",
+    "input/output/cache tokens and standard-equivalent API cost for every attempt",
+    "failed mutations and retries",
+    "changed source files and lines, added test lines",
+    "parser runtime included in elapsed time"
+  ],
+  "decision_rule": "Seed 91803; exactly four cells, two arms x simple_prompt and multifile_order_cancellation v2, one run each, randomized adjacent-pair arm order. Astra/high normal history, current prompt with only four edit instructions substituted in treatment, same tagged read/grep and unchanged write/run/job tools, local_only in both. Native {type:apply_patch} replaces only the edit function declaration; operation schema is native create_file/update_file/delete_file, no freeform Begin Patch wrapper. LCA syntax checks retained. Shared protocol code is identical in both arms. Freeze engine/source/fixture/grader content before calls and copy source/evidence outside task workspaces. Offline tests must pass first, including known-good and deliberately broken grader artifacts and native protocol/parser negative tests. Maximum four launches, $6 standard-equivalent between-run cost threshold (one-run overshoot possible), 1500 active seconds, existing 900s coding timeout. Stop on task/activation/protocol failure; preserve failed attempts and resource usage. No shell commands beyond the documented full unittest command (optional -B), no writes outside new tests/test_* files; independently audit raw commands. Advance only if every cell passes correctness/activation, no unavailable usage, coding elapsed_ms <=90% of fresh control and estimated coding cost <=120% of control; simple control must stay tool-free. Otherwise drop this implementation and archive it externally. Never adopt a default from this four-cell screen; no broad editing-quality or model-training claim. Any repair requires a new registration, with prior attempts retained."
+}

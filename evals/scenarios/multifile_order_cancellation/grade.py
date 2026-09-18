@@ -49,7 +49,7 @@ def grade(workspace, trajectory):
         migration_preserved=migration_one(original['orders/migrations.py'].decode())==migration_one(actual['orders/migrations.py'].decode())
     except (KeyError,ValueError,SyntaxError,TypeError): migration_preserved=False
     events=[e for e in trajectory.get('events',[]) if e.get('result')]
-    mutations=[i for i,e in enumerate(events) if e.get('name') in {'edit','multi_edit','write','file_change','mutation'} and not e['result'].get('is_error')]
+    mutations=[i for i,e in enumerate(events) if e.get('name') in {'apply_patch','edit','multi_edit','write','file_change','mutation'} and not e['result'].get('is_error')]
     last_mutation=max(mutations,default=-1)
     starts={}
     verified=False
@@ -75,7 +75,7 @@ def grade(workspace, trajectory):
                         'edit_calls':sum(e.get('name')=='edit' for e in events),
                         'multi_edit_calls':sum(e.get('name')=='multi_edit' for e in events),
                         'write_calls':sum(e.get('name')=='write' for e in events),
-                        'failed_mutations':sum(e.get('name') in {'edit','multi_edit','write'} and bool(e['result'].get('is_error')) for e in events),
+                        'failed_mutations':sum(e.get('name') in {'apply_patch','edit','multi_edit','write'} and bool(e['result'].get('is_error')) for e in events),
                         'public_test_output':public_output,'hidden_test_output':hidden_output}}
 
 

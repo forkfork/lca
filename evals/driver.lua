@@ -1,7 +1,7 @@
 #!/usr/bin/env lua
 
 local function usage()
-	io.stderr:write("usage: lua evals/driver.lua --root DIR --prompt-file FILE --credentials FILE --output FILE --transcript FILE [--model gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna] [--reasoning EFFORT] [--tool-scope all|web_only|none] [--multi-edit-enabled true|false] [--system-prompt-profile current|pre-harness-quality] [--system-prompt-append-file FILE] [--edit-tool-profile tagged] [--read-only-batch-cap N] [--grep-evidence true|false] [--stale-edit-evidence true|false] [--completion-audit true|false] [--blank-workspace-inventory-guard true|false] [--seed-context-file FILE] [--intra-turn-compaction true|false] [--context-compaction-threshold N] [--context-hard-limit N] [--compaction-keep-recent-tokens N] [--context-pressure-after-first-tool N] [--recovery-mutation-file FILE]\n")
+	io.stderr:write("usage: lua evals/driver.lua --root DIR --prompt-file FILE --credentials FILE --output FILE --transcript FILE [--model gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna] [--reasoning EFFORT] [--tool-scope all|web_only|none] [--system-prompt-profile current|pre-harness-quality] [--system-prompt-append-file FILE] [--edit-tool-profile apply_patch] [--read-only-batch-cap N] [--grep-evidence true|false] [--completion-audit true|false] [--blank-workspace-inventory-guard true|false] [--seed-context-file FILE] [--intra-turn-compaction true|false] [--context-compaction-threshold N] [--context-hard-limit N] [--compaction-keep-recent-tokens N] [--context-pressure-after-first-tool N] [--recovery-mutation-file FILE]\n")
 	os.exit(2)
 end
 
@@ -20,7 +20,7 @@ if not options.root or not options["prompt-file"] or not options.credentials
 end
 
 -- Reject historical treatments before reading fixtures or making model calls.
-for _, key in ipairs({ "delegate-readonly-enabled", "delegate-readonly-profile", "tool-dag-enabled", "readonly-fork-join-enabled" }) do
+for _, key in ipairs({ "delegate-readonly-enabled", "delegate-readonly-profile", "tool-dag-enabled", "readonly-fork-join-enabled", "multi-edit-enabled", "stale-edit-evidence" }) do
 	if options[key] ~= nil then error("retired experiment option: " .. key .. "; see research/archive/README.md") end
 end
 local retired_prompt_profiles = {
@@ -30,8 +30,8 @@ local retired_prompt_profiles = {
 if retired_prompt_profiles[options["system-prompt-profile"]] then
 	error("retired experiment option: system-prompt-profile=" .. options["system-prompt-profile"] .. "; see research/archive/README.md")
 end
-if options["edit-tool-profile"] == "exact" then
-	error("retired experiment option: edit-tool-profile=exact; native tools require tagged edits")
+if options["edit-tool-profile"] and options["edit-tool-profile"] ~= "apply_patch" then
+	error("retired experiment option: edit-tool-profile=" .. options["edit-tool-profile"] .. "; use the frozen research checkout")
 end
 
 package.path = options.root .. "/lua/?.lua;" .. options.root .. "/lua/?/init.lua;"
@@ -99,11 +99,6 @@ local function optional_bool(value)
 	error("expected true or false, got: " .. tostring(value))
 end
 
-local multi_edit_option = optional_bool(options["multi-edit-enabled"])
-if multi_edit_option ~= nil then
-	registry.set_multi_edit_enabled(multi_edit_option)
-end
-
 local session = session_module.create({
 	credentials_path = options.credentials,
 	model = options.model,
@@ -111,7 +106,6 @@ local session = session_module.create({
 	tool_scope = tool_scope,
 	read_only_batch_cap = options["read-only-batch-cap"],
 	grep_evidence = optional_bool(options["grep-evidence"]),
-	stale_edit_evidence = optional_bool(options["stale-edit-evidence"]),
 	intra_turn_compaction = optional_bool(options["intra-turn-compaction"]),
 	context_compaction_threshold = options["context-compaction-threshold"],
 	context_hard_limit = options["context-hard-limit"],
@@ -163,15 +157,12 @@ local function pre_harness_quality_prompt(full)
 end
 
 local prompt_profile = options["system-prompt-profile"] or "current"
-local edit_tool_profile = options["edit-tool-profile"] or "tagged"
+local edit_tool_profile = options["edit-tool-profile"] or "apply_patch"
 local full_system_prompt = session:get_system_prompt()
 if prompt_profile == "pre-harness-quality" then
 	session.system_prompt = pre_harness_quality_prompt(full_system_prompt)
 elseif prompt_profile ~= "current" then
 	error("unknown system prompt profile: " .. tostring(prompt_profile))
-end
-if edit_tool_profile ~= "tagged" then
-	error("unknown edit tool profile: " .. tostring(edit_tool_profile))
 end
 if options["system-prompt-append-file"] then
 	session.system_prompt = (session.system_prompt or full_system_prompt)
@@ -346,9 +337,7 @@ write_file(options.output, json.encode({
 	tool_scope = session.tool_scope,
 	system_prompt_profile = prompt_profile,
 	edit_tool_profile = edit_tool_profile,
-	multi_edit_enabled = registry.multi_edit_enabled(),
 	grep_evidence = session.grep_evidence,
-	stale_edit_evidence = session.stale_edit_evidence,
 	stale_mutation_applied = stale_mutation and stale_mutation.applied or false,
 	system_prompt_chars = #(session.system_prompt or ""),
 	native_tool_calling = session.native_tool_calling,

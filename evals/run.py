@@ -269,7 +269,8 @@ def transcript_metrics(path: Path) -> dict[str, int]:
 
 def trajectory_metrics(path: Path, transcript: Path | None = None, model: str | None = None) -> dict[str, int | float | str]:
     trajectory = json.loads(path.read_text())
-    usage = trajectory.get("usage", []) + trajectory.get("checkpoint_usage", [])
+    # Lua encodes empty tables as objects, including failures before usage.
+    usage = (trajectory.get("usage") or []) + (trajectory.get("checkpoint_usage") or [])
     hosted_search_ids = {
         str(activity.get("id") or activity.get("output_index"))
         for activity in trajectory.get("model_activities", [])
@@ -281,7 +282,7 @@ def trajectory_metrics(path: Path, transcript: Path | None = None, model: str | 
         event for event in trajectory.get("events", [])
         if isinstance(event, dict)
         and event.get("result") is not None
-        and event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
+        and event.get("name") in ("apply_patch", "edit", "multi_edit", "write", "file_change", "mutation")
     ]
     delegate_records = [
         event.get("result", {}).get("delegate", {})
@@ -408,7 +409,7 @@ def grader_metrics(result: dict) -> dict[str, int]:
     evidence = result.get("evidence", {})
     metrics = {}
     for name in (
-        "changed_lines", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
+        "changed_lines", "patch_calls", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
         "verification_runs", "existing_file_writes_count", "failed_verification_runs",
         "successful_verification_runs_after_failure", "recovery_mutations_after_failure",
         "relevant_source_reads_count",
@@ -469,10 +470,10 @@ def validate_active_variant(variant: dict) -> None:
     if variant.get("engine", "lca") != "lca":
         return
     retired = {"delegate_readonly_enabled", "delegate_readonly_profile",
-               "tool_dag_enabled", "readonly_fork_join_enabled"}
+               "tool_dag_enabled", "readonly_fork_join_enabled", "multi_edit_enabled", "stale_edit_evidence"}
     keys = sorted(retired.intersection(variant))
-    if variant.get("edit_tool_profile") == "exact":
-        keys.append("edit_tool_profile=exact")
+    if "edit_tool_profile" in variant and variant["edit_tool_profile"] != "apply_patch":
+        keys.append("edit_tool_profile=" + str(variant["edit_tool_profile"]))
     if keys:
         raise ValueError("retired experiment option(s): " + ", ".join(keys)
                          + "; see research/archive/README.md")
@@ -571,16 +572,12 @@ def run_once(
     if engine == "lca" and variant.get("operational_context"):
         command.extend(["--operational-context", variant["operational_context"],
                         "--operational-scenario", config.get("operational_scenario", "simple_prompt")])
-    if engine == "lca" and "multi_edit_enabled" in variant:
-        command.extend(["--multi-edit-enabled", str(variant["multi_edit_enabled"]).lower()])
     if engine == "lca" and "edit_tool_profile" in variant:
         command.extend(["--edit-tool-profile", variant["edit_tool_profile"]])
     if engine == "lca" and "read_only_batch_cap" in variant:
         command.extend(["--read-only-batch-cap", str(variant["read_only_batch_cap"])])
     if engine == "lca" and "grep_evidence" in variant:
         command.extend(["--grep-evidence", str(variant["grep_evidence"]).lower()])
-    if engine == "lca" and "stale_edit_evidence" in variant:
-        command.extend(["--stale-edit-evidence", str(variant["stale_edit_evidence"]).lower()])
     if engine == "lca" and "completion_audit" in variant:
         command.extend(["--completion-audit", str(variant["completion_audit"]).lower()])
     if engine == "lca" and "blank_workspace_inventory_guard" in variant:
@@ -693,7 +690,7 @@ def summarize(results: list[dict]) -> dict:
         "dependency_prefixes", "usage_unavailable_calls",
         "stale_tag_failures", "exact_no_match_failures",
         "intra_turn_compactions", "context_hard_limit_stops",
-        "changed_lines", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
+        "changed_lines", "patch_calls", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
         "verification_runs", "existing_file_writes_count", "failed_verification_runs",
         "successful_verification_runs_after_failure", "recovery_mutations_after_failure",
         "relevant_source_reads_count",
@@ -824,7 +821,7 @@ def main() -> int:
                     "dag_nodes", "dag_waves", "dag_skipped_nodes", "readonly_fork_join_calls", "readonly_fork_join_batches",
                     "estimated_input_cost_usd", "estimated_api_cost_usd", "estimated_delegate_cost_usd", "estimated_total_api_cost_usd",
                     "provider_response_chars", "provider_response_bytes", "max_native_tool_calls",
-                    "usage_unavailable_calls", "changed_lines", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
+                    "usage_unavailable_calls", "changed_lines", "patch_calls", "edit_calls", "multi_edit_calls", "write_calls", "failed_mutations",
                     "verification_runs", "existing_file_writes_count", "failed_verification_runs",
                     "successful_verification_runs_after_failure", "recovery_mutations_after_failure",
                     "relevant_source_reads_count",

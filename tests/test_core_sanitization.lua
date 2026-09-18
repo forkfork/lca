@@ -486,9 +486,8 @@ test("later read cannot invalidate an earlier mutation in one response", functio
 			end
 		end
 		return table.concat({
-			'<tool_call name="edit">',
-			'{"path":"' .. target .. '","start_line":1,"start_tag":"' .. tag .. '","end_line":1,"end_tag":"' .. tag .. '"}',
-			"new",
+			'<tool_call name="apply_patch">',
+            require('agent.util.json').encode({type='update_file', path=target, diff='@@\n-old\n+new'}),
 			"</tool_call>",
 			'<tool_call name="read">',
 			'{"path":"' .. target .. '"}',

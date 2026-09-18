@@ -42,8 +42,8 @@ after = workspace_files.get("pipelines/rules.py", b"").decode("utf-8", "replace"
 changed_lines = sum(line.startswith(("- ", "+ ")) for line in difflib.ndiff(before, after))
 events = trajectory.get("events", [])
 starts = [e for e in events if e.get("result")]
-mutations = [e for e in starts if e.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
-failed = [e for e in events if e.get("name") in ("edit", "multi_edit", "write") and e.get("result", {}).get("is_error")]
+mutations = [e for e in starts if e.get("name") in ("apply_patch", "edit", "multi_edit", "write", "file_change", "mutation")]
+failed = [e for e in events if e.get("name") in ("apply_patch", "edit", "multi_edit", "write") and e.get("result", {}).get("is_error")]
 existing_writes = [e for e in mutations if e.get("name") == "write" and e.get("args", {}).get("path") in fixture_files]
 verification = [
     e for e in starts if e.get("name") in ("run", "shell", "command_execution")

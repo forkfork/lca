@@ -180,7 +180,7 @@ test("tool is advertised through native schema and guidance", function()
 	assert(prompt:find("Avoid generic plan steps", 1, true), "missing generic-plan guard")
 	assert(prompt:find("concrete changes and how to verify them", 1, true), "missing verification guidance")
 	assert(not prompt:find("journey", 1, true), "retired journey guidance remains")
-	assert(prompt:find("Do not call read and edit/write for the same file in parallel", 1, true), "missing dependency guidance")
+	assert(prompt:find("Do not call read and apply_patch/write for the same file in parallel", 1, true), "missing dependency guidance")
 end)
 test("native prompt requests evidence-dense project orientation", function()
 	local prompt = registry.native_system_prompt()
@@ -192,25 +192,21 @@ test("native prompt requests evidence-dense project orientation", function()
 	assert(not prompt:find("Rill", 1, true), "orientation guidance must not name the eval fixture")
 end)
 
-test("multi-edit can be hidden for controlled evals", function()
-	registry.set_multi_edit_enabled(true)
-	assert_eq(registry.is_valid("multi_edit"), true)
-	local found = false
-	for _, spec in ipairs(registry.native_tools()) do
-		if spec.name == "multi_edit" then found = true end
-	end
-	assert_eq(found, true, "native schema should advertise multi_edit")
-	assert(registry.native_system_prompt():find("use multi_edit", 1, true), "missing native multi-edit guidance")
-
-	registry.set_multi_edit_enabled(false)
-	assert_eq(registry.is_valid("multi_edit"), false)
-	found = false
-	for _, spec in ipairs(registry.native_tools()) do
-		if spec.name == "multi_edit" then found = true end
-	end
-	assert_eq(found, false, "control eval should hide multi_edit")
-	assert(not registry.native_system_prompt():find("use multi_edit", 1, true), "control prompt should hide multi-edit guidance")
-	registry.set_multi_edit_enabled(true)
+test("production advertises patch and cannot re-enable tagged editing", function()
+ assert_eq(registry.is_valid('apply_patch'), true)
+ assert_eq(registry.is_valid('edit'), false)
+ assert_eq(registry.is_valid('multi_edit'), false)
+ assert(registry.set_multi_edit_enabled == nil and registry.multi_edit_enabled == nil)
+ local found = false
+ for _, spec in ipairs(registry.native_tools()) do
+  assert(spec.name ~= 'edit' and spec.name ~= 'multi_edit')
+  if spec.name == 'apply_patch' then
+   found = true
+   assert_eq(spec.parameters.properties.diff.type, 'string')
+  end
+ end
+ assert(found)
+ assert(registry.native_system_prompt():find('multiple contextual hunks', 1, true))
 end)
 
 if failed > 0 then

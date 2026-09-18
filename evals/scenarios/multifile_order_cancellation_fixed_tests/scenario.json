@@ -1,0 +1,9 @@
+{
+  "id": "multifile_order_cancellation_fixed_tests",
+  "title": "Order cancellation with fixed supplied tests",
+  "prompt": "Implement durable single and batch order cancellation as specified in README.md. The complete regression and cancellation acceptance tests are already supplied. Modify only existing Python source files under orders/. Do not create, modify, or delete tests, test data, README.md, or other files. Do not write additional tests or alternative verification scripts. Use the available source-editing tools for source changes. Run python3 -m unittest discover -s tests -v after your final changes.",
+  "timeout_seconds": 900,
+  "grader": "grade.py",
+  "judge": false,
+  "fixture_version": "2-fixed-tests-1"
+}

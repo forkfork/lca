@@ -81,8 +81,9 @@ eval "$(luarocks --lua-version=5.5 --local path --bin)"
 
 ### From a checkout
 
-For the code in this checkout rather than the published rock, install Python 3
-and the prerequisites above, then:
+Patch interpretation runs entirely in Lua; it needs no Python interpreter or SDK.
+For a checkout, install Python 3 for the build/test scripts and the prerequisites
+above, then:
 
 ```bash
 make local
@@ -295,5 +296,17 @@ BSD 2-Clause, with MIT-licensed terminal UI modules. See `LICENSE`.
 
 The tagged read/edit tool design is inspired by Salvatore Sanfilippo (@antirez),
 especially [Alternatives for the EDIT tool of LLM agents](https://antirez.com/news/166).
-LCA adapts the idea with start/end tags for edit ranges and bounded relocation
-when both endpoints uniquely match after a line shift.
+That implementation, tests, and experiment adapters are preserved in
+[the tagged-edit archive](research/archive/tagged-edit-20260918/README.md).
+
+Production uses `apply_patch`, a JSON function accepting `type`, `path`, and
+`diff`: `update_file` applies V4A contextual hunks, `create_file` accepts plus
+lines, and `delete_file` removes the target. Combine changes to one file into
+one operation; all hunks and syntax checks finish before update writes begin.
+Read/grep tags remain display labels and must not appear in patch content.
+Context matching replaces explicit tag validation, so include enough unchanged
+context to distinguish repeated text. This is the tested function adapter, not
+Responses' native `apply_patch` tool or the freeform Begin/End Patch interface.
+
+The Lua parser is ported from OpenAI Agents SDK 0.22.3 under the MIT license; see
+[PATCH_PARSER.md](PATCH_PARSER.md) for provenance and equivalence tests.

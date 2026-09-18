@@ -13,6 +13,7 @@ local SHELL_TOOLS = {
 }
 
 local FILE_MUTATION_TOOLS = {
+	apply_patch = true,
 	edit = true,
 	multi_edit = true,
 	write = true,
@@ -30,6 +31,7 @@ local JOB_CONTROL_TOOLS = {
 }
 
 local START_EVENT_TOOLS = {
+	apply_patch = true,
 	edit = true,
 	multi_edit = true,
 	find = true,
@@ -115,68 +117,6 @@ local function dependent_batch_result(path)
 	}
 end
 
-local function edit_range(tc)
-	if tc.name ~= "edit" then
-		return nil
-	end
-	local args = tc.args or {}
-	if not args.start_line or not args.start_tag or not args.end_tag then
-		return nil
-	end
-	local start_line = math.floor(tonumber(args.start_line) or 0)
-	local end_line = math.floor(tonumber(args.end_line) or start_line)
-	if start_line < 1 or end_line < start_line then
-		return nil
-	end
-	return start_line, end_line
-end
-
-local function safe_tagged_edit_group(items)
-	for _, item in ipairs(items) do
-		local start_line, end_line = edit_range(item.tc)
-		if not start_line then
-			return false
-		end
-		item.start_line = start_line
-		item.end_line = end_line
-	end
-
-	table.sort(items, function(a, b)
-		if a.start_line == b.start_line then
-			return a.end_line > b.end_line
-		end
-		return a.start_line < b.start_line
-	end)
-
-	local previous_end = 0
-	for _, item in ipairs(items) do
-		if item.start_line <= previous_end then
-			return false
-		end
-		previous_end = item.end_line
-	end
-
-	return true
-end
-
-local function collect_edit_groups(other_batch, context)
-	local groups = {}
-	for _, item in ipairs(other_batch) do
-		local target = file_mutation_target(item.tc, context)
-		if target and item.tc.name == "edit" then
-			groups[target] = groups[target] or {}
-			groups[target][#groups[target] + 1] = item
-		end
-	end
-
-	local safe_groups = {}
-	for target, items in pairs(groups) do
-		if #items > 1 and safe_tagged_edit_group(items) then
-			safe_groups[target] = items
-		end
-	end
-	return safe_groups
-end
 
 local function collect_read_targets(other_batch, context)
 	local targets = {}
@@ -360,7 +300,7 @@ local function skipped_run_after_failed_mutation_result()
 	return {
 		is_error = true,
 		ui_state = "deferred",
-		content = "Skipped run because an earlier edit/write in this batch failed. Re-read or fix the failed mutation before running verification.",
+		content = "Skipped run because an earlier file mutation in this batch failed. Re-read or fix the failed mutation before running verification.",
 		summary = "skipped after failed mutation",
 	}
 end
@@ -486,8 +426,6 @@ local function execute_flat_batch(tool_calls, context, on_tool)
 
 	local mutated_targets = {}
 	local read_targets = collect_read_targets(other_batch, context)
-	local edit_groups = collect_edit_groups(other_batch, context)
-	local completed_group_targets = {}
 	local read_batch_bytes = 0
 	local max_read_batch_bytes = tonumber(context.session and context.session.read_batch_bytes)
 		or MAX_READ_BATCH_BYTES
@@ -500,54 +438,12 @@ local function execute_flat_batch(tool_calls, context, on_tool)
 		local tc = item.tc
 		local mutation_target = file_mutation_target(tc, context)
 		local result
-		local result_emitted = false
-		local edit_group = mutation_target and edit_groups[mutation_target]
 		if tc.name == "run" and mutation_failed then
 			result = skipped_run_after_failed_mutation_result()
 		elseif JOB_CONTROL_TOOLS[tc.name] and pending_job_start then
 			result = pending_job_id_result()
 		elseif mutation_target and read_targets[mutation_target] then
 			result = dependent_batch_result(mutation_target)
-		elseif edit_group and not completed_group_targets[mutation_target] and not mutated_targets[mutation_target] then
-			table.sort(edit_group, function(a, b)
-				if a.start_line == b.start_line then
-					return a.end_line > b.end_line
-				end
-				return a.start_line > b.start_line
-			end)
-			local any_success = false
-			for _, group_item in ipairs(edit_group) do
-				if is_cancelled() then break end
-				emit_start(on_tool, group_item.tc, group_item.index)
-				local group_result = execute_tool(group_item.tc, group_item.index, context, on_tool)
-				if group_result then
-					group_result.harness_policy = {
-						name = "non_overlapping_same_file_edits",
-						strategy = "descending_source_position",
-						rationale = "preserve original tagged source coordinates when earlier edits change line counts",
-						group_size = #edit_group,
-						model_index = group_item.index,
-					}
-				end
-				results[group_item.index] = group_result
-				if group_result and not group_result.is_error then
-					any_success = true
-				elseif FILE_MUTATION_TOOLS[group_item.tc.name] then
-					mutation_failed = true
-				end
-				if on_tool then
-					on_tool({ type = "tool", call_id = event_call_id(group_item.tc, group_item.index), model_index = group_item.index, name = group_item.tc.name, args = group_item.tc.args, result = group_result })
-				end
-			end
-			result_emitted = true
-			completed_group_targets[mutation_target] = true
-			if any_success then
-				mutated_targets[mutation_target] = true
-			end
-			result = results[item.index]
-		elseif edit_group and completed_group_targets[mutation_target] then
-			result = results[item.index]
-			result_emitted = true
 		elseif mutation_target and mutated_targets[mutation_target] then
 			result = stale_batch_result(mutation_target)
 		elseif tc.name == "read" and read_batch_bytes >= max_read_batch_bytes then
@@ -572,7 +468,7 @@ local function execute_flat_batch(tool_calls, context, on_tool)
 			end
 		end
 		results[item.index] = result
-		if on_tool and not result_emitted then
+		if on_tool then
 			on_tool({ type = "tool", call_id = event_call_id(tc, item.index), model_index = item.index, name = tc.name, args = tc.args, result = result })
 		end
 	end

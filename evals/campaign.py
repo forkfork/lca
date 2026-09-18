@@ -19,7 +19,7 @@ from analyze_state_pilot import audit_state_only
 
 ROOT = Path(__file__).resolve().parent.parent
 # Only interventions for which this runner has an activation contract are admitted.
-VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope", "operational_context", "obligation_view", "job_results"}
+VARIANT_KEYS = {"id", "model", "reasoning", "context_mode", "experience_mode", "experience_bundle", "lesson_policy", "system_prompt_profile", "tool_scope", "operational_context", "obligation_view", "job_results", "edit_tool_profile"}
 
 
 def read(path):
@@ -83,6 +83,9 @@ def plan(theory, smoke, repetitions, seed, max_runs, max_cost, max_seconds):
                 raise ValueError("unsupported audited prompt/context combination")
         if "tool_scope" in variant and (variant["tool_scope"] not in {"all", "local_only"} or variant.get("context_mode", "normal") != "normal"):
             raise ValueError("unsupported audited tool scope")
+        if "edit_tool_profile" in variant:
+            if variant["edit_tool_profile"] not in {"apply_patch"} or variant.get("context_mode", "normal") != "normal" or variant.get("system_prompt_profile", "current") != "current":
+                raise ValueError("unsupported edit interface")
         if "job_results" in variant and variant["job_results"] not in {"compact", "full_command"}:
             raise ValueError("unsupported job result format")
         if "obligation_view" in variant:

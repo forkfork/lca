@@ -1,6 +1,6 @@
 local ls = require("agent.tools.ls")
 local read = require("agent.tools.read")
-local edit = require("agent.tools.edit")
+local patch = require("agent.tools.apply_patch")
 local find_tool = require("agent.tools.find")
 local grep = require("agent.tools.grep")
 local job_output = require("agent.tools.job_output")
@@ -16,8 +16,7 @@ local mcp = require("agent.mcp")
 local registry = {}
 
 local tools = {
-	edit = edit,
-	multi_edit = edit,
+	apply_patch = patch,
 	find = find_tool,
 	grep = grep,
 	job_output = job_output,
@@ -33,18 +32,7 @@ local tools = {
 }
 
 local mcp_tools = {}
-local multi_edit_enabled = false
-
-function registry.set_multi_edit_enabled(enabled)
-	multi_edit_enabled = enabled ~= false
-end
-
-function registry.multi_edit_enabled()
-	return multi_edit_enabled
-end
-
 function registry.get(name)
-	if name == "multi_edit" and not multi_edit_enabled then return nil end
 	return tools[name]
 end
 
@@ -63,8 +51,7 @@ function registry.is_valid(name)
 end
 
 function registry.names()
-	local names = { "ls", "read", "find", "grep", "edit", "write", "run", "job_start", "job_status", "job_output", "job_stop", "job_wait", "update_plan" }
-	if multi_edit_enabled then table.insert(names, 6, "multi_edit") end
+	local names = { "ls", "read", "find", "grep", "apply_patch", "write", "run", "job_start", "job_status", "job_output", "job_stop", "job_wait", "update_plan" }
 	for _, t in ipairs(mcp_tools) do
 		names[#names + 1] = "mcp__" .. t._server .. "__" .. t.name
 	end
@@ -88,7 +75,7 @@ end
 
 local native_tool_specs = {
 	ls = { "List directory entries.", object_schema({ path = { type = "string", description = "Directory path; defaults to the working directory." } }) },
-	read = { "Read a focused text-file slice with line numbers and stale-edit tags.", object_schema({
+	read = { "Read a focused text-file slice with line numbers and display tags.", object_schema({
 		path = { type = "string" }, offset = { type = "integer", minimum = 1 }, limit = { type = "integer", minimum = 1, maximum = 300 },
 	}, { "path" }) },
 	find = { "List files recursively.", object_schema({
@@ -97,18 +84,10 @@ local native_tool_specs = {
 	grep = { "Search file contents and return bounded tagged source context around matches. Matching ranges can be edited directly without a follow-up read.", object_schema({
 		pattern = { type = "string" }, path = { type = "string" }, glob = { type = "string" },
 	}, { "pattern" }) },
-	edit = { "Replace a tagged line range. Inspect it with read or grep first and copy its line numbers and four-character tags exactly.", object_schema({
-		path = { type = "string" }, start_line = { type = "integer", minimum = 1 }, start_tag = { type = "string" },
-		end_line = { type = "integer", minimum = 1 }, end_tag = { type = "string" }, content = { type = "string", description = "Literal replacement text; empty deletes the range." },
-	}, { "path", "start_line", "start_tag", "end_line", "end_tag", "content" }) },
-	multi_edit = { "Atomically replace multiple non-overlapping tagged ranges in one file. All tags are checked against one snapshot and no hunk is written if any hunk is stale, invalid, overlapping, or introduces a syntax error.", object_schema({
-		path = { type = "string" },
-		edits = { type = "array", minItems = 1, maxItems = 20, items = object_schema({
-			start_line = { type = "integer", minimum = 1 }, start_tag = { type = "string" },
-			end_line = { type = "integer", minimum = 1 }, end_tag = { type = "string" },
-			content = { type = "string", description = "Literal replacement text; empty deletes the range." },
-		}, { "start_line", "start_tag", "end_line", "end_tag", "content" }) },
-	}, { "path", "edits" }) },
+	apply_patch = { "Apply an OpenAI V4A contextual diff. Use update_file for existing files (diff with @@ hunks, space context, - removals, + additions); create_file uses + lines; delete_file needs only path. Do not include Begin/End Patch wrappers or read/grep display labels. Multiple hunks in one file are applied together and checked for syntax before writing.", object_schema({
+        type = { type = "string", enum = { "create_file", "update_file", "delete_file" } },
+        path = { type = "string" }, diff = { type = "string" },
+    }, { "type", "path" }) },
 	write = { "Create or overwrite a file, creating parent directories when needed.", object_schema({
 		path = { type = "string" }, content = { type = "string", description = "Complete literal file content." },
 	}, { "path", "content" }) },
@@ -169,24 +148,21 @@ You have native tools for inspecting files, editing code, running commands, mana
 - For project-orientation questions, inspect authoritative documentation, package metadata, the repository tree, and representative source in one parallel batch when possible. Do not run tests or builds merely to describe a project.
 - Give a concise, decision-useful orientation: identity and purpose, the main user workflow, important architectural boundaries, and current implementation reality. Distinguish documented intent from inspected code, including concrete stubs and documented components absent from the tree when supported by evidence. End with exactly three useful starting files and why each matters.
 - Prefer targeted find/grep/read calls. Do not re-read content already returned unless it may have changed.
-- For edits, inspect the target with read or tagged grep evidence first, then use its exact line numbers and four-character tags. Make the smallest coherent change and run focused verification.
-- Batch independent inspection calls when useful. Do not call read and edit/write for the same file in parallel.
+- For edits, inspect the target with read or grep first, then use apply_patch with contextual diff hunks. Read/grep line numbers and four-character tags are display labels: omit them from patch content. Make the smallest coherent change and run focused verification.
+- Batch independent inspection calls when useful. Do not call read and apply_patch/write for the same file in parallel.
 - Use run for bounded commands and job_start for servers, watchers, or long-running commands.
 - For work with several genuinely dependent phases, gather one bounded initial inspection batch, then create one short execution plan with concrete changes and how to verify them. Avoid generic plan steps such as “inspect repository structure.” Skip plans for trivial requests.
 - For small, fully specified builds, proceed directly from inspection to implementation and verification, even when several files are involved. When a plan is useful and the first edits are already determined, issue the plan and edits in the same response.
 - Minimize model round trips without guessing across dependencies. In each response, call every independent tool whose arguments are already known.
 - When implementation and test-file contents are already determined, write them in the same response, then verify after both writes finish.
 - Call update_plan at most once. The harness closes that checklist when you give the final answer, so never rewrite it merely to advance statuses or mark completion.
-- After inspection, use multi_edit when two or more non-overlapping replacements in one file are already known; use edit for one replacement. Never use multi_edit for dependent or overlapping changes.
-- Group known import and body replacements against the same inspected file version. An earlier insertion can shift later line numbers: do not submit a later edit using tags from before that insertion. Batch independent replacements together; re-read before a dependent edit.
+- After inspection, combine known non-overlapping changes in one file into one apply_patch operation with multiple contextual hunks.
+- Group known import and body replacements against the same inspected file version. Use unchanged context to locate each hunk; re-read before a dependent edit when its context is uncertain.
 - Once edits succeed, combine known focused checks into one run command using && when later checks do not need model judgment.
 - Do not split plan updates, edits, or redundant verification into separate model turns merely to narrate progress. Start a new tool round only when its arguments depend on results from the previous round.
 - Preserve existing project patterns and user changes. Avoid unrelated refactors and destructive git operations.
 - Never claim a file was read, changed, or tested unless the corresponding tool result established it. Acknowledge tool failures and use the actual error to recover or explain the blocker.
 ]]
-	if not multi_edit_enabled then
-		prompt = prompt:gsub("%- After inspection, use multi_edit.-\n", "- After inspection, batch non-overlapping tagged edits whose replacements are all known.\n")
-	end
 	return prompt
 end
 

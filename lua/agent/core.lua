@@ -53,6 +53,7 @@ local READ_ONLY_TOOLS = {
 }
 
 local FILE_MUTATION_TOOLS = {
+	apply_patch = true,
 	edit = true,
 	multi_edit = true,
 	write = true,
@@ -827,7 +828,7 @@ function core.run_session(session, on_token, on_tool, on_thinking, on_wait, cont
 				session:record_usage(response._usage, #session.messages)
 			end
 
-			local MUTATING_TOOLS = { edit = true, multi_edit = true, write = true, run = true }
+			local MUTATING_TOOLS = { apply_patch = true, edit = true, multi_edit = true, write = true, run = true }
 
 			local tool_started_ns = {}
 			local function batch_on_tool(event)

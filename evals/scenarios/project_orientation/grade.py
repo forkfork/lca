@@ -33,7 +33,7 @@ delegated_paths = [
 ]
 inspected_paths = set(str(path) for path in reads + delegated_paths if path)
 commands = [event for event in events if event.get("name") in ("run", "shell", "command_execution")]
-mutations = [event for event in events if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
+mutations = [event for event in events if event.get("name") in ("apply_patch", "edit", "multi_edit", "write", "file_change", "mutation")]
 observed_output = "\n".join(result_text(event) for event in events)
 
 # Grade content made visible to the agent, independently of whether it used LCA read

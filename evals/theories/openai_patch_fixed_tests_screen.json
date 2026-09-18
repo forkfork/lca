@@ -1,0 +1,51 @@
+{
+  "id": "openai_patch_fixed_tests_screen",
+  "study_kind": "screen",
+  "title": "Tagged versus OpenAI patch adapter with identical supplied cancellation tests",
+  "hypothesis": "The earlier adapter screen generated 2088 extra test-writing tokens, 94.4% of its net output increase. Holding all test-writing work fixed may reveal a source-editing efficiency benefit from contextual multi-hunk patches. This fresh screen tests whether the adapter achieves at least 10% lower end-to-end coding latency with all correctness gates and no more than 20% higher estimated cost. It cannot establish why the earlier model chose larger tests.",
+  "falsified_if": "Any correctness or activation gate fails, or coding latency improves by less than 10%, or estimated coding cost regresses by more than 20%. A failed gate drops this implementation; a passing screen buys fresh broader validation only.",
+  "source_ids": [],
+  "local_evidence": "User-requested diagnostic after the first screen. Preserved campaign-v2/cell-0002 and cell-0003 under /home/tim/.local/state/lca/research/openai-patch-order-20260918 contain raw transcript.log and provider requests. Per-item output attribution in posthoc-output-attribution.json reconciles exactly to reported usage: source calls 2298 versus 2478 tokens; test calls 3993 versus 6081; total 7596 versus 9809. Tagged wrote 272 test lines, patch 392, while both used nine model calls and passed all gates. Native apply_patch was rejected by the configured endpoint; this trial retains the same working function adapter and unmodified SDK 0.22.3 parser, not native/freeform transport. The new fixture derives unchanged production code from multifile_order_cancellation v2 and supplies the 22 human-authored cancellation probes, plus the 30 existing tests, to both arms.",
+  "control_variant": "current_tagged",
+  "minimum_runs_per_cell": 1,
+  "scenarios": [
+    "simple_prompt",
+    "multifile_order_cancellation_fixed_tests"
+  ],
+  "variants": [
+    {
+      "id": "current_tagged",
+      "edit_tool_profile": "tagged",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only"
+    },
+    {
+      "id": "openai_patch_fixed_tests",
+      "edit_tool_profile": "openai_patch_fixed_tests",
+      "model": "gpt-6-astra",
+      "reasoning": "high",
+      "context_mode": "normal",
+      "system_prompt_profile": "current",
+      "tool_scope": "local_only"
+    }
+  ],
+  "deterministic_outcomes": [
+    "all 52 supplied tests pass",
+    "external execution of the 22 cancellation contract probes (also visible to the model; not held out)",
+    "only existing orders/*.py files changed; all tests, test data and README remain identical; no added files",
+    "version-one migration preserved and observed full verification after final mutation",
+    "actual request schema/prompt/model/reasoning activation, patch replay and no editing bypass"
+  ],
+  "efficiency_outcomes": [
+    "elapsed_ms primary",
+    "model/tool calls and source-edit operations",
+    "per-item source-edit output tokens, all output/input/cached tokens, mutation argument bytes",
+    "standard-equivalent estimated cost for every attempted run",
+    "failed mutations and verification retries",
+    "zero test-writing operations and unchanged supplied test hashes"
+  ],
+  "decision_rule": "Seed 91805. Fresh screen: exactly four cells, two arms x simple_prompt and multifile_order_cancellation_fixed_tests, one run each, randomized adjacent-pair arm order. Model gpt-6-astra/high, normal history, current prompt, local_only, unchanged tagged read/grep/write/run/job tools. Treatment restores only the previously measured apply_patch function adapter, with the same V4A parser and four necessary editing-instruction substitutions; control is current tagged edit. Both receive identical fixed production source, 52 supplied tests and explicit source-only instructions. No changes/additions/deletions to tests or other files; only existing orders/*.py may change. Shell commands limited explicitly in README to python3 -m unittest discover -s tests -v (optional -B); no source writes or shell mutation bypasses. No requirement to add tests. External probes repeat the now-visible contract, so call this independent execution, not unseen-test generalization. Freeze source/fixture/grader/schemas/prompts before calls and preserve raw evidence and complete source externally. Offline reference must pass both tool receipt forms; no-op, lost atomicity, added/changed/deleted tests and edits after verification must fail their gates. Maximum four launches, $6 between-run standard-equivalent threshold (one-run overshoot possible), 1500 active seconds, existing 900s coding timeout. Stop on task/protocol/activation failure; preserve all attempts and unavailable usage; repairs require a new registration. Advance only if all four cells pass correctness/activation, simple controls are tool-free, no unavailable usage, coding elapsed <=90% of fresh tagged control and estimated coding cost <=120% of control. Otherwise drop active runtime switches and preserve implementation externally. A positive screen permits fresh broader validation only, never adoption. Report per-item output attribution to verify removal of test writing. Do not pool with old workload results or reinterpret the old registered decision. This isolates one proposed explanation; it does not identify whether prior test expansion was tool-induced or ordinary sampling variation."
+}

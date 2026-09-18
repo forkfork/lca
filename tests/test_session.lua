@@ -52,8 +52,8 @@ run_test("new Codex sessions default to Astra with native tools", function()
 	assert_eq(default.native_tool_calling, true)
 	assert_eq(default.grep_evidence, true)
 	assert_eq(session_module.create({ grep_evidence = false }).grep_evidence, false)
-	assert_eq(default.stale_edit_evidence, true)
-	assert_eq(session_module.create({ stale_edit_evidence = false }).stale_edit_evidence, false)
+	assert_eq(default.stale_edit_evidence, nil)
+	assert_eq(session_module.create({ stale_edit_evidence = false }).stale_edit_evidence, nil)
 end)
 
 run_test("Bedrock sessions default to Astra and preserve explicit model choices", function()
@@ -425,7 +425,7 @@ run_test("old saved system prompt is rebuilt after prompt version changes", func
 		"model": "gpt-5.5",
 		"messages": [],
 		"system_prompt": "old prompt without new tools",
-		"system_prompt_version": 1
+		"system_prompt_version": 30
 	}]])
 
 	local loaded_session = session_module.create({})
@@ -442,6 +442,8 @@ run_test("old saved system prompt is rebuilt after prompt version changes", func
 	if not rebuilt:find("update_plan", 1, true) then
 		error("rebuilt prompt does not include update_plan")
 	end
+	assert(rebuilt:find("apply_patch", 1, true), "resumed session must use patch instructions")
+	assert(not rebuilt:find("exact line numbers and four-character tags", 1, true))
 	assert_eq(loaded_session.system_prompt_version, session_module.SYSTEM_PROMPT_VERSION)
 end)
 

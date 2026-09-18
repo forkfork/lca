@@ -333,4 +333,7 @@ function edit.execute(args, context)
 	}
 end
 
+-- Shared pre-write policy for eval editing interfaces.
+edit.check_candidate = introduced_lint_error
+
 return edit

@@ -9,7 +9,7 @@ local DEFAULT_SESSION_FILE = ".lca-session.json"
 local SESSION_ARCHIVE_DIR = ".lca-sessions"
 local DEFAULT_MODEL = config.default_model()
 local USAGE_HISTORY_LIMIT = 50
-local SYSTEM_PROMPT_VERSION = 30
+local SYSTEM_PROMPT_VERSION = 31
 
 local function fnv1a32(text)
 	local hash = 2166136261
@@ -107,7 +107,6 @@ function session.create(options)
 			read_only_batch_cap = tonumber(options.read_only_batch_cap),
 			read_batch_bytes = tonumber(options.read_batch_bytes),
 			grep_evidence = options.grep_evidence ~= false,
-			stale_edit_evidence = options.stale_edit_evidence ~= false,
 			intra_turn_compaction = options.intra_turn_compaction,
 			context_compaction_threshold = tonumber(options.context_compaction_threshold),
 			context_hard_limit = tonumber(options.context_hard_limit),
@@ -392,7 +391,7 @@ function session:serialize()
 		plan = self.plan,
 		pending_inputs = self.pending_inputs,
 		test_command = self.test_command,
-		continuation_options = { tool_scope=self.tool_scope, grep_evidence=self.grep_evidence, stale_edit_evidence=self.stale_edit_evidence, intra_turn_compaction=self.intra_turn_compaction, context_compaction_threshold=self.context_compaction_threshold, context_hard_limit=self.context_hard_limit, compaction_keep_recent_tokens=self.compaction_keep_recent_tokens },
+		continuation_options = { tool_scope=self.tool_scope, grep_evidence=self.grep_evidence, intra_turn_compaction=self.intra_turn_compaction, context_compaction_threshold=self.context_compaction_threshold, context_hard_limit=self.context_hard_limit, compaction_keep_recent_tokens=self.compaction_keep_recent_tokens },
 		last_usage = self.last_usage,
 		usage_history = self.usage_history,
 		last_turn_ast_summary = self.last_turn_ast_summary,

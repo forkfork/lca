@@ -40,8 +40,8 @@ after = body.splitlines()
 changed_lines = sum(line.startswith(("- ", "+ ")) for line in difflib.ndiff(before, after))
 events = trajectory.get("events", [])
 starts = [e for e in events if e.get("result")]
-mutations = [e for e in starts if e.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")]
-failed = [e for e in events if e.get("name") in ("edit", "multi_edit", "write") and e.get("result", {}).get("is_error")]
+mutations = [e for e in starts if e.get("name") in ("apply_patch", "edit", "multi_edit", "write", "file_change", "mutation")]
+failed = [e for e in events if e.get("name") in ("apply_patch", "edit", "multi_edit", "write") and e.get("result", {}).get("is_error")]
 first_failed_mutation = next((index for index, event in enumerate(starts) if event in failed), len(starts))
 source_reads_after_stale = sum(
     event.get("name") == "read" and str(event.get("args", {}).get("path", "")).endswith("runtime/settings.py")

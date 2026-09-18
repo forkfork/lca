@@ -55,17 +55,10 @@ local function assert_lines(path, expected)
 end
 
 local function edit_call(path, start_line, end_line, lines, replacement)
-	return {
-		name = "edit",
-		args = {
-			path = path,
-			start_line = start_line,
-			start_tag = read_tool.line_tag(start_line, lines[start_line]),
-			end_line = end_line,
-			end_tag = read_tool.line_tag(end_line, lines[end_line]),
-			_raw_content = replacement,
-		},
-	}
+ local diff = { '@@' }
+ for i = start_line, end_line do diff[#diff + 1] = '-' .. lines[i] end
+ for line in (replacement .. '\n'):gmatch('(.-)\n') do diff[#diff + 1] = '+' .. line end
+ return { name = 'apply_patch', args = { type = 'update_file', path = path, diff = table.concat(diff, '\n') } }
 end
 
 local tmp_dir = os.tmpname() .. "_lca_parallel_tests"
@@ -108,47 +101,22 @@ run_test("batched grep matches direct grep for dash patterns and errors", functi
 	end
 end)
 
-run_test("allows non-overlapping same-file edits in one batch", function()
-	local path = tmp_dir .. "/same.txt"
-	write_file(path, "one\ntwo\nthree\n")
-	local lines = split_lines(read_file(path))
-
-	local calls = {
-		edit_call(path, 1, 1, lines, "one\ninserted"),
-		edit_call(path, 3, 3, lines, "THREE"),
-	}
-	local results = parallel.execute_batch(calls, { cwd = tmp_dir })
-
-	assert_eq(results[1].is_error, false, "first edit should succeed")
-	assert_eq(results[2].is_error, false, "second edit should succeed")
-	assert_eq(results[1].harness_policy.strategy, "descending_source_position")
-	assert_contains(results[1].harness_policy.rationale, "preserve original tagged source coordinates")
-	assert_eq(results[1].harness_policy.group_size, 2)
-	assert_lines(path, { "one", "inserted", "two", "THREE" })
-end)
-
-run_test("emits one result event per grouped same-file edit", function()
-	local path = tmp_dir .. "/same-events.txt"
-	write_file(path, "one\ntwo\nthree\n")
-	local lines = split_lines(read_file(path))
-	local events = {}
-
-	local calls = {
-		edit_call(path, 1, 1, lines, "ONE"),
-		edit_call(path, 3, 3, lines, "THREE"),
-	}
-	local results = parallel.execute_batch(calls, { cwd = tmp_dir }, function(event)
-		if event.phase ~= "start" then
-			events[#events + 1] = event
-		end
-	end)
-
-	assert_eq(results[1].is_error, false, "first edit should succeed")
-	assert_eq(results[2].is_error, false, "second edit should succeed")
-	assert_eq(#events, 2, "each grouped edit should emit exactly one result event")
-	assert_eq(events[1].name, "edit")
-	assert_eq(events[2].name, "edit")
-	assert_lines(path, { "ONE", "two", "THREE" })
+run_test("defers separate same-file patches even when ranges do not overlap", function()
+ local path = tmp_dir .. '/same.txt'
+ write_file(path, 'one\ntwo\nthree\n')
+ local lines = split_lines(read_file(path))
+ local events = {}
+ local results = parallel.execute_batch({
+  edit_call(path, 1, 1, lines, 'ONE'), edit_call(path, 3, 3, lines, 'THREE'),
+ }, { cwd = tmp_dir }, function(event)
+  if event.phase ~= 'start' then events[#events + 1] = event end
+ end)
+ assert_eq(results[1].is_error, false)
+ assert_eq(results[2].is_error, true)
+ assert_eq(#events, 2)
+ assert_eq(events[1].name, 'apply_patch')
+ assert_eq(events[2].name, 'apply_patch')
+ assert_lines(path, { 'ONE', 'two', 'three' })
 end)
 
 run_test("blocks same-batch read and edit of one file", function()
@@ -236,15 +204,7 @@ run_test("allows same-file mutation after failed previous mutation", function()
 
 	local calls = {
 		{
-			name = "edit",
-			args = {
-				path = path,
-				start_line = 1,
-				start_tag = "BAD!",
-				end_line = 1,
-				end_tag = read_tool.line_tag(1, lines[1]),
-				_raw_content = "ALPHA",
-			},
+			name = "apply_patch", args = { path = path, type = "update_file", diff = "@@\n-missing\n+ALPHA" },
 		},
 		edit_call(path, 2, 2, lines, "BETA"),
 	}
@@ -263,15 +223,7 @@ run_test("skips later run after failed edit", function()
 
 	local calls = {
 		{
-			name = "edit",
-			args = {
-				path = path,
-				start_line = 1,
-				start_tag = "BAD!",
-				end_line = 1,
-				end_tag = read_tool.line_tag(1, lines[1]),
-				_raw_content = "ALPHA",
-			},
+			name = "apply_patch", args = { path = path, type = "update_file", diff = "@@\n-missing\n+ALPHA" },
 		},
 		{ name = "run", args = { command = "touch " .. shell.quote(marker) } },
 	}
@@ -281,7 +233,7 @@ run_test("skips later run after failed edit", function()
 	assert_eq(results[2].is_error, true, "run should be skipped")
 	assert_eq(results[2].summary, "skipped after failed mutation")
 	assert_eq(results[2].ui_state, "deferred")
-	assert_contains(results[2].content, "earlier edit/write")
+	assert_contains(results[2].content, "earlier file mutation")
 	local f = io.open(marker, "r")
 	if f then
 		f:close()
@@ -367,31 +319,19 @@ run_test("allows mutations to different files in one batch", function()
 	assert_lines(path_b, { "B1", "b2" })
 end)
 
-run_test("treats multi-edit as one atomic file mutation", function()
-	registry.set_multi_edit_enabled(true)
-	local path = tmp_dir .. "/atomic.txt"
-	write_file(path, "one\ntwo\nthree\n")
-	local lines = split_lines(read_file(path))
-	local events = {}
-	local results = parallel.execute_batch({ {
-		name = "multi_edit",
-		args = {
-			path = path,
-			edits = {
-				{ start_line = 1, start_tag = read_tool.line_tag(1, lines[1]), end_line = 1, end_tag = read_tool.line_tag(1, lines[1]), content = "ONE" },
-				{ start_line = 3, start_tag = read_tool.line_tag(3, lines[3]), end_line = 3, end_tag = read_tool.line_tag(3, lines[3]), content = "THREE" },
-			},
-		},
-	} }, { cwd = tmp_dir }, function(event)
-		events[#events + 1] = event
-	end)
-	assert_eq(results[1].is_error, false)
-	assert_eq(results[1].summary, "2 hunks applied")
-	assert_eq(#events, 2, "multi-edit should emit one start and one result")
-	assert_eq(events[1].phase, "start")
-	assert_eq(events[2].name, "multi_edit")
-	assert_lines(path, { "ONE", "two", "THREE" })
-	registry.set_multi_edit_enabled(false)
+run_test("treats multiple patch hunks as one file mutation", function()
+ local path = tmp_dir .. '/atomic.txt'
+ write_file(path, 'one\ntwo\nthree\n')
+ local events = {}
+ local results = parallel.execute_batch({ {
+  name = 'apply_patch', args = { type = 'update_file', path = path,
+   diff = '@@\n-one\n+ONE\n two\n@@\n-three\n+THREE' },
+ } }, { cwd = tmp_dir }, function(event) events[#events + 1] = event end)
+ assert_eq(results[1].is_error, false)
+ assert_eq(#events, 2)
+ assert_eq(events[1].phase, 'start')
+ assert_eq(events[2].name, 'apply_patch')
+ assert_lines(path, { 'ONE', 'two', 'THREE' })
 end)
 
 run_test("emits start events only for potentially slow tools", function()

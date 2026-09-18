@@ -15,7 +15,7 @@ commands = [
 ]
 mutations = [
     event for event in events
-    if event.get("name") in {"edit", "multi_edit", "write"}
+    if event.get("name") in {"apply_patch", "edit", "multi_edit", "write"}
     and not event["result"].get("is_error")
 ]
 workspace_text = "\n".join(

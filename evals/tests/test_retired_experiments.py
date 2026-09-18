@@ -12,9 +12,11 @@ import run
 class RetiredExperimentTests(unittest.TestCase):
     def test_retired_variants_fail_before_workspace_or_model_calls(self):
         variants = [{key: value} for key in (
-            "delegate_readonly_enabled", "tool_dag_enabled", "readonly_fork_join_enabled"
+            "delegate_readonly_enabled", "tool_dag_enabled", "readonly_fork_join_enabled",
+            "multi_edit_enabled", "stale_edit_evidence"
         ) for value in (True, False)]
         variants += [{"delegate_readonly_profile": "compact_luna"}, {"edit_tool_profile": "exact"},
+                     {"edit_tool_profile": "tagged"}, {"edit_tool_profile": "openai_patch_fixed_tests"},
                      {"system_prompt_profile": "planning-clarity"}, {"system_prompt_profile": "workflow-lite"},
                      *({"system_prompt_profile": p} for p in ("repo-facts", "lean", "minimal")), {"engine": "wire_probe"}]
         for variant in variants:
@@ -25,7 +27,7 @@ class RetiredExperimentTests(unittest.TestCase):
                 mkdir.assert_not_called()
 
     def test_current_variants_and_historical_manifests_remain_readable(self):
-        run.validate_active_variant({"id": "current", "edit_tool_profile": "tagged"})
+        run.validate_active_variant({"id": "current", "edit_tool_profile": "apply_patch"})
         self.assertIn("read_only_tool_dependency_dag", run.load_theories())
 
     def test_lua_driver_rejects_retired_switches_before_reading_inputs(self):
@@ -34,7 +36,12 @@ class RetiredExperimentTests(unittest.TestCase):
                               ("delegate-readonly-profile", "compact_luna"),
                               ("tool-dag-enabled", "false"),
                               ("readonly-fork-join-enabled", "true"),
+                              ("multi-edit-enabled", "true"),
+                              ("multi-edit-enabled", "false"),
+                              ("stale-edit-evidence", "false"),
                               ("edit-tool-profile", "exact"),
+                              ("edit-tool-profile", "tagged"),
+                              ("edit-tool-profile", "openai_patch_fixed_tests"),
                               ("system-prompt-profile", "planning-clarity"),
                               ("system-prompt-profile", "workflow-lite"),
                               ("system-prompt-profile", "repo-facts"),

@@ -2,7 +2,7 @@ local json = require("agent.util.json")
 local crypto = require("agent.crypto")
 
 local state = {}
-local FILE_TOOLS = { edit = true, multi_edit = true, write = true }
+local FILE_TOOLS = { apply_patch = true, edit = true, multi_edit = true, write = true }
 
 local function canonical(value)
 	if type(value) ~= "table" then return json.encode(value) end

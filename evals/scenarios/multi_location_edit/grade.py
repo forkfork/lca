@@ -53,7 +53,7 @@ events = trajectory.get("events", [])
 completed = [event for event in events if event.get("result")]
 mutations = [
     event for event in completed
-    if event.get("name") in ("edit", "multi_edit", "write", "file_change", "mutation")
+    if event.get("name") in ("apply_patch", "edit", "multi_edit", "write", "file_change", "mutation")
 ]
 failed = [event for event in mutations if event.get("result", {}).get("is_error")]
 verification = [
@@ -70,6 +70,17 @@ existing_writes = [
 max_hunk_span = 0
 for event in mutations:
     args = event.get("args", {})
+    if event.get("name") == "apply_patch":
+        # Count removed source lines, excluding unchanged locating context.
+        span = 0
+        for line in str(args.get("diff", "")).splitlines():
+            if line.startswith("@@"):
+                max_hunk_span = max(max_hunk_span, span)
+                span = 0
+            elif line.startswith("-"):
+                span += 1
+        max_hunk_span = max(max_hunk_span, span)
+        continue
     hunks = args.get("edits") if event.get("name") == "multi_edit" else [args]
     if not isinstance(hunks, list):
         continue

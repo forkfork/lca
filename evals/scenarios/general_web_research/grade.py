@@ -16,7 +16,7 @@ local_tools = [
 ]
 mutations = [
     event for event in events
-    if event.get("name") in {"edit", "multi_edit", "write"}
+    if event.get("name") in {"apply_patch", "edit", "multi_edit", "write"}
 ]
 urls = set(re.findall(r"https?://[^\s)>]+", final))
 word_count = len(re.findall(r"\b[\w./-]+\b", final))

@@ -14,6 +14,20 @@ import run  # noqa: E402
 
 
 class EvalMetricsTests(unittest.TestCase):
+    def test_empty_lua_usage_after_transport_rejection_is_reportable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trajectory.json"
+            path.write_text(json.dumps({
+                "usage": {}, "checkpoint_usage": {}, "events": {},
+                "model_activities": {}, "llm_calls": 1,
+            }))
+            log = Path(directory) / "transcript.log"
+            log.write_text("prompt cache usage unavailable reason=missing_usage_event")
+            metrics = run.trajectory_metrics(path, log, "gpt-6-astra")
+            self.assertEqual(metrics["usage_unavailable_calls"], 1)
+            self.assertEqual(metrics["llm_calls"], 1)
+            self.assertEqual(metrics["prompt_tokens"], 0)
+
     def test_astra_long_context_pricing_is_per_request(self):
         for prompts, expected in [([272_000, 272_000], 5.45), ([272_001], 5.44752)]:
             trajectory = {"events": [], "usage": [

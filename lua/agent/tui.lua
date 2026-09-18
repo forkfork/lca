@@ -250,8 +250,8 @@ function State:_stream(text, kind, tool, duration, meta)
 	return stream
 end
 
-local FILE_TOOLS = { read = true, edit = true, multi_edit = true, write = true }
-local FILE_MUTATION_TOOLS = { edit = true, multi_edit = true, write = true }
+local FILE_TOOLS = { apply_patch = true, read = true, edit = true, multi_edit = true, write = true }
+local FILE_MUTATION_TOOLS = { apply_patch = true, edit = true, multi_edit = true, write = true }
 
 local function tool_personality(name)
 	if name == "read" then return "skim" end
